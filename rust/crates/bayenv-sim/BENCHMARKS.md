@@ -57,6 +57,10 @@ were *slower* than 4 (atomic refcount on one cache line).
 | real 20k | 1 | 2,919 | 0.58 M | 0.58 M | 1,234 MB | 1,213 MB | | |
 | real 20k | 14 | 2,919 | 4.59 M | 4.49 M (noise) | 2,634 MB | 1,533 MB | 108 MB | 24.6 MB |
 
+After the single-thread work (interleaved dynamics, dense phase A, interleaved vertices), same protocol, back to back
+with the pre-memory-work binary (load 7-11): **14 x real 2k 7.80 -> 9.05 M agent-steps/s (+16 %), 14 x real 20k
+4.58 -> 5.20 M (+14 %)**; per-env memory 95 -> 9.8 MB (2k) and 108 -> 24.6 MB (20k).
+
 Scaling (real 2k): 1 / 2 / 4 / 8 / 14 envs = 1.0 / 2.0 / 3.8 / 7.8 / 10.2x: linear up to 8 envs, then the 4 efficiency
 cores. Real 20k reaches 7.7x at 14 envs (larger per-env working set). Per-env memory = (RSS(14) - RSS(1)) / 13; the
 shared world + population is ~1.2 GB. Live heap of one more env (examples/env_mem): 90 -> 5.3 MB at creation.
