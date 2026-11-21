@@ -44,7 +44,9 @@ pub struct RouteQuery<'a> {
     /// edges never used
     pub avoid: &'a [u32],
     /// (edge, extra seconds); a later entry for the same edge replaces an earlier one (Map.set); 0 / NaN = none
-    /// (a negative value that makes a cycle's cost negative never terminates, as in the JS)
+    /// Negative values (incl. -inf) are clamped to 0, i.e. ignored (`debug_assert!` in debug builds): with them the
+    /// JS search can loop forever on a negative-cost cycle, so no input can hang here. NaN = none, +inf = edge usable
+    /// only at infinite cost (as in the JS: terminates, every comparison against inf is false).
     pub penalty: &'a [(u32, f64)],
 }
 impl RouteQuery<'_> {
@@ -88,6 +90,13 @@ fn hypot2(a: f64, b: f64) -> f64 {
     if mx == 0.0 { return 0.0; }
     let r = mn / mx;
     (1.0 + r * r).sqrt() * mx
+}
+
+/// The live-penalty guard: negative -> 0 (see [`RouteQuery::penalty`]); NaN and +inf unchanged.
+#[inline]
+fn clamp_penalty(p: f64) -> f64 {
+    debug_assert!(!(p < 0.0), "negative route penalty {p} (clamped to 0)");
+    if p < 0.0 { 0.0 } else { p }
 }
 
 /// Immutable search graph (internal Morton node numbering), shared by every router / thread built from it.
@@ -208,11 +217,11 @@ impl SearchState {
             if self.qgen == 0 { self.marks.fill(EdgeMark::default()); self.qgen = 1; }
             let qg = self.qgen;
             for &e in q.avoid { if let Some(m) = self.marks.get_mut(e as usize) { m.avoid = qg; } }
-            for &(e, p) in q.penalty { if let Some(m) = self.marks.get_mut(e as usize) { m.pen = qg; m.p = p; } }
+            for &(e, p) in q.penalty { if let Some(m) = self.marks.get_mut(e as usize) { m.pen = qg; m.p = clamp_penalty(p); } }
         }
         let (s, t) = (g.new_of[start] as usize, g.new_of[goal] as usize);
         if g.unreachable(s, t) { self.last_pops = 0; return false; }
-        let fast = !self.exact_only && g.finite && q.penalty.iter().all(|&(_, p)| p.is_nan() || (p.is_finite() && p.abs() < 1e12));
+        let fast = !self.exact_only && g.finite && q.penalty.iter().all(|&(_, p)| { let p = clamp_penalty(p); p.is_nan() || (p.is_finite() && p < 1e12) });
         if fast {
             let r = match (ua, up) {
                 (false, false) => self.search::<true, false, false>(g, s, t, out),
