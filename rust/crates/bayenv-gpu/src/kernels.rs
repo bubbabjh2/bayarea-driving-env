@@ -28,6 +28,8 @@ pub const SOURCES: &[(&str, &str)] = &[
 
 pub fn raw(name: &str) -> &'static str {
     let n = name.trim_end_matches(".wgsl");
+    // diagnostics (kernel experiments): BAYENV_KDIR/<name>.wgsl replaces a source
+    if let Ok(d) = std::env::var("BAYENV_KDIR") { if let Ok(t) = std::fs::read_to_string(std::path::Path::new(&d).join(format!("{n}.wgsl"))) { return Box::leak(t.into_boxed_str()); } }
     SOURCES.iter().chain(HOST_SOURCES).find(|(k, _)| *k == n).map(|(_, s)| *s).unwrap_or_else(|| panic!("no kernel source {name}"))
 }
 
@@ -165,7 +167,9 @@ pub fn patch(src: &str) -> String {
     let text = host_raw("patches");
     let origs = sections(text, "//#orig ");
     let mut out = src.to_string();
+    let skip = std::env::var("BAYENV_NOPATCH").unwrap_or_default();   // diagnostics: comma list of patches to leave out
     for (name, body) in sections(text, "//#patch ") {
+        if skip.split(',').any(|x| x == name) { continue; }
         let Some((a, b)) = find_fn(&out, name) else { continue };
         let orig = &origs.iter().find(|(n, _)| *n == name).unwrap_or_else(|| panic!("patch {name}: no //#orig")).1;
         let norm = |x: &str| x.split_whitespace().collect::<Vec<_>>().join(" ");

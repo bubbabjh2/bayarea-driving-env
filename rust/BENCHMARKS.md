@@ -79,6 +79,14 @@ Flags: `GpuOptions` (`set_flag`, env `BAYENV_GPU_OPTS` in the examples).
 | + scans at 4096 per workgroup with the count clears folded in (`kernels/scan4k.wgsl`; counts into accumulators zeroed by the scan; 12 -> 6 dispatches) + no workgroup-memory zero fill (`zero_init_workgroup` off: naga's fill of a 16 KB array cost 0.3 ms per workgroup; every kernel writes its workgroup variables first) | 0.85 (0.815) | 3.92 (3.70) | bit-identical | `fast_scan` on, `zero_init_workgroup` off |
 | + binary polyline segment search (`kernels/patches.wgsl`: `yAlongEdge`, `arcPointJ`, `connPointJ` linear scans -> binary search; used by the grade obs, physics grade, connector poses; precondition non-decreasing cumulative distances, checked on the world at creation) | 0.68 (0.66) | 3.57 (3.41) | bit-identical | `fast_search`, on |
 | + contact rounds stop once every contact is resolved (resolve_fused: resolve 0.058 -> 0.044 ms at 10k, 0.23 -> 0.13 ms at 100k) | 0.66 (0.63) | 3.55 (3.41) | bit-identical | part of `fused_resolve` |
+| + one-entry `hopMap` memo (`patches.wgsl`; mapLane is called per lane with the same hop) | 0.64 (0.62) | 3.50 (3.40) | bit-identical | part of `fast_search` |
+| final, same session: all off (JS structure) vs defaults, min of 3 | 1.12 -> 0.64 | 4.60 -> 3.50 | bit-identical | 2,500 cars: 0.84 -> 0.46 |
+
+Tried and left out: workgroup sizes 32 / 64 / 256 for the sorted kernels (128 is best or equal); sorted order for
+junction.perceive / integrate after the search patches (neutral); fusing more small dispatches (an empty dispatch
+costs ~1.2 µs: 30 extra = +0.035 ms per step at 10k, so the 27 dispatches are ~5 % of the step).
+Equivalence vs the JS GPU (Chrome, `rust/oracle/js/js_state.bin`, 10k cars, 200 steps) is unchanged: 6,838 cars
+bit-identical, same edge / state / flags for all 9,983, max |Δs| 0.029 m, |Δspeed| 0.032 m/s, pose 0.030 m.
 
 Contacts per step: ~6 at 10k, ~520 at 100k, none left to the serial pass. Run-to-run the unmodified host is
 itself not bit-reproducible beyond ~200 steps (atomic orders: hash ranks, pair table, event order): after 1,000
