@@ -12,6 +12,8 @@ pub struct Gpu {
     pub adapter_info: wgpu::AdapterInfo,
     pub limits: wgpu::Limits,
     pub buffers: HashMap<String, Arc<wgpu::Buffer>>,
+    /// persistent MAP_READ staging buffers per source buffer (read_into)
+    staging: std::sync::Mutex<HashMap<String, wgpu::Buffer>>,
 }
 
 pub const STORAGE: wgpu::BufferUsages = wgpu::BufferUsages::STORAGE.union(wgpu::BufferUsages::COPY_DST).union(wgpu::BufferUsages::COPY_SRC);
@@ -43,7 +45,7 @@ impl Gpu {
             memory_hints: wgpu::MemoryHints::Performance, ..Default::default()
         })).map_err(|e| format!("request_device: {e}"))?;
         device.on_uncaptured_error(Arc::new(|e| eprintln!("wgpu error: {e}")));
-        Ok(Gpu { adapter_info: adapter.get_info(), device, queue, limits, buffers: HashMap::new() })
+        Ok(Gpu { adapter_info: adapter.get_info(), device, queue, limits, buffers: HashMap::new(), staging: Default::default() })
     }
     pub fn adapter_name(&self) -> String { format!("{} ({:?})", self.adapter_info.name, self.adapter_info.backend) }
 
@@ -112,5 +114,26 @@ impl Gpu {
         self.device.poll(wgpu::PollType::wait_indefinitely()).expect("poll");
         let v = rb.slice(..).get_mapped_range().expect("range").to_vec();
         rb.unmap(); rb.destroy(); v
+    }
+
+    /// Read `out.len()` bytes at `offset` of a named buffer into `out` through a persistent staging buffer
+    /// (no per-call allocation; only the requested range is copied).
+    pub fn read_into(&self, name: &str, offset: u64, out: &mut [u8]) {
+        let size = ((out.len() as u64) + 3) / 4 * 4; if size == 0 { return; }
+        let mut st = self.staging.lock().unwrap();
+        let need_new = st.get(name).map_or(true, |b| b.size() < size);
+        if need_new {
+            let b = self.device.create_buffer(&wgpu::BufferDescriptor { label: Some("staging"), size: size.max(self.buffers[name].size().min(size * 2)), usage: wgpu::BufferUsages::MAP_READ | wgpu::BufferUsages::COPY_DST, mapped_at_creation: false });
+            st.insert(name.to_string(), b);
+        }
+        let rb = &st[name];
+        let mut enc = self.device.create_command_encoder(&Default::default());
+        enc.copy_buffer_to_buffer(&self.buffers[name], offset, rb, 0, size);
+        self.queue.submit([enc.finish()]);
+        let sl = rb.slice(..size);
+        sl.map_async(wgpu::MapMode::Read, |r| r.expect("map"));
+        self.device.poll(wgpu::PollType::wait_indefinitely()).expect("poll");
+        { let m = sl.get_mapped_range().expect("range"); out.copy_from_slice(&m[..out.len()]); }
+        rb.unmap();
     }
 }

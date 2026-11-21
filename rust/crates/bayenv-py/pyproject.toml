@@ -1,0 +1,19 @@
+[build-system]
+requires = ["maturin>=1.5,<2"]
+build-backend = "maturin"
+
+[project]
+name = "bayenv"
+version = "0.1.0"
+description = "Bay Area driving environment: native GPU (wgpu) and CPU sims for Python"
+requires-python = ">=3.9"
+dependencies = ["numpy>=1.21"]
+license = { text = "MIT" }
+
+[project.optional-dependencies]
+gym = ["gymnasium>=0.29"]
+
+[tool.maturin]
+module-name = "bayenv._bayenv"
+python-source = "python"
+features = ["pyo3/extension-module"]

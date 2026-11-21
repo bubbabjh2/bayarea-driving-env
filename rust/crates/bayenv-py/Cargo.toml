@@ -7,12 +7,13 @@ license.workspace = true
 repository.workspace = true
 
 [lib]
-name = "bayenv"
+name = "_bayenv"
 crate-type = ["cdylib"]
 
 [dependencies]
 bayenv-world.workspace = true
 bayenv-sim.workspace = true
 bayenv-gpu.workspace = true
-pyo3 = { workspace = true, features = ["extension-module", "abi3-py39"] }
+pyo3 = { workspace = true, features = ["abi3-py39"] }
 numpy.workspace = true
+bytemuck.workspace = true

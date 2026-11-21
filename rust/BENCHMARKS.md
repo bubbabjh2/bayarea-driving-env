@@ -40,3 +40,23 @@ Checks: committed data (0 stop lines patched) and a perturbed controls copy (eve
 `stopAt` keys removed, `stopLinesFrom` removed: 64,241 patched), both JS vs Rust byte-identical.
 Memory: per-junction connector points converted to f32 inside the parallel stage, the previous round's set dropped before
 each rebuild, JSON trees dropped during the build (2.34 GB -> 1.83 GB peak).
+
+## GPU host (bayenv_gpu) and world load
+
+Real world, scatter n cars (seed 11), constant gas 0.3, obs v2; 100 warm-up steps, 400 timed steps in batches of 20
+(`cargo run --release -p bayenv-gpu --example bench -- ../data 10000,100000 400 v2 20`; `BAYENV_CAP=auto` = capacity n).
+Apple M4 Max, Metal. JS: `node test/gpu/run.mjs test/gpu/bench.html` (Chrome, same machine, same day).
+
+| step | 10k cars | 100k cars | notes |
+|---|---|---|---|
+| JS bench.html (pipelined, capacity 131072) | 1.49 ms | 4.62 ms | GPU timestamps: 1.57 / 4.61 ms per step |
+| JS awaited runSteps(20) | 1.65 ms | 4.97 ms | `rust/tools/oracle/gpu_run.html` |
+| Rust first version (capacity 131072) | 1.60 ms | 4.91 ms | GPU-bound; host overhead ~0.2 ms/batch |
+| + indirect contact-resolve rounds (36 dispatches sized by the contact count instead of contactCap) | 1.41 ms | 4.81 ms | bit-identical state (compared after 200 steps) |
+| + capacity = n cars (Python default) | 1.12 ms | 4.66 ms | bit-identical to capacity 131072 for the first n slots |
+| Python step(20) | 1.11 ms | 4.63 ms | GIL released during the submit |
+| Python act + step(1) + observe(out=) | 1.63 ms | 5.78 ms | persistent staging buffers, only used rows copied |
+
+World load (`World::load`, warm page cache): 60 ms (graph 43 ms, controls 8 ms, lane geometry from the mmap'd bake 2 ms).
+Without `data/junctions.bin`: 6.5 s cold (lane geometry + junctions built in Rust and baked to `data/build/rust/`), then
+60 ms; JS loader ~75-90 s.

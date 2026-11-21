@@ -71,7 +71,7 @@ impl World {
         let junctions = if o.junctions {
             match JunctionSet::load(&dir) {
                 Ok(j) if j.mouth_s.len() == 2 * graph.edge_count => Some(j),
-                _ => Some(crate::junctions::build_junctions(&lanes, &lane_graph, None).into_set()),
+                _ => Some(junctions_from_bake_or_build(&dir, &bake_path.with_file_name("junctions.bake"), &lanes, &lane_graph)?),
             }
         } else { None };
         if let Some(j) = &junctions { for e in 0..graph.edge_count { graph.s_exit[e] = j.mouth_s[2 * e]; graph.s_stop[e] = j.mouth_s[2 * e + 1]; graph.gore[e] = j.gore_s[e]; } }
@@ -116,3 +116,41 @@ pub fn write_lanes_bake(path: &Path, key: u64, lg: &LaneGeometry) -> io::Result<
 
 /// The bake key for a data dir (inputs of the lane geometry).
 pub fn lanes_bake_key(dir: &Path) -> io::Result<u64> { files_key(&[&dir.join("roads.bin"), &dir.join("roads-local.bin")]) }
+
+/// No (matching) `data/junctions.bin`: build the junctions as `npm run build:junctions` does (crosswalk legs from
+/// controls.json + crosswalks.json; the same bytes as the file) and keep them in a bake keyed by those inputs.
+/// (The JS loader's in-memory fallback builds without crosswalk legs; this builds what the file would contain.)
+fn junctions_from_bake_or_build(dir: &Path, path: &Path, lanes: &LaneGeometry, g: &LaneGraph) -> io::Result<JunctionSet> {
+    let key = files_key(&[&dir.join("roads.bin"), &dir.join("roads-local.bin"), &dir.join("controls.json"), &dir.join("crosswalks.json")])?;
+    const S: [&str; 15] = crate::junctions::JUNCTION_SECTIONS;
+    if let Ok(b) = Bake::open(path, false) { if b.key == key && b.has("j.mouthS") {
+        let f = |k: &str| b.get::<f32>(&format!("j.{k}")); let u = |k: &str| b.get::<u32>(&format!("j.{k}"));
+        return Ok(JunctionSet { mouth_s: f(S[0])?, gore_s: f(S[1])?, j_node: u(S[2])?, j_first_m: u(S[3])?, j_count_m: u(S[4])?, j_first_c: u(S[5])?, j_count_c: u(S[6])?,
+            j_first_h: u(S[7])?, j_count_h: u(S[8])?, m_info: u(S[9])?, m_f: f(S[10])?, pts: f(S[11])?, conf: u(S[12])?, conf_s: f(S[13])?, hull: f(S[14])?, crossing_fix: None });
+    } }
+    let legs = crosswalk_legs_from_files(dir, g);
+    let j = crate::junctions::build_junctions(lanes, g, Some(&legs));
+    let mut w = BakeWriter::default();
+    w.put("j.mouthS", &j.mouth_s).put("j.goreS", &j.gore_s).put("j.jNode", &j.j_node).put("j.jFirstM", &j.j_first_m).put("j.jCountM", &j.j_count_m)
+        .put("j.jFirstC", &j.j_first_c).put("j.jCountC", &j.j_count_c).put("j.jFirstH", &j.j_first_h).put("j.jCountH", &j.j_count_h).put("j.mInfo", &j.m_info)
+        .put("j.mF", &j.m_f).put("j.pts", &j.pts).put("j.conf", &j.conf).put("j.confS", &j.conf_s).put("j.hull", &j.hull);
+    let _ = w.write(path, key);
+    Ok(j.into_set())
+}
+
+/// `crosswalkLegs(LG, controls.json controls, crosswalks.json points)` as tools/build_junctions.mjs feeds it.
+pub fn crosswalk_legs_from_files(dir: &Path, g: &LaneGraph) -> crate::junctions::CrosswalkLegs {
+    use crate::jsjson;
+    use crate::junctions_build::{crosswalk_legs, ControlLegs};
+    let read = |p: PathBuf| std::fs::read_to_string(&p).ok().and_then(|t| jsjson::parse(&t).ok());
+    let ctl_doc = read(dir.join("controls.json")); let cw_doc = read(dir.join("crosswalks.json"));
+    let controls: Option<Vec<ControlLegs>> = ctl_doc.as_ref().and_then(|d| d.get("controls")).and_then(|c| c.as_arr()).map(|cs| cs.iter().map(|c| ControlLegs {
+        node: c.get("node").and_then(|v| v.as_f64()).unwrap_or(f64::NAN),
+        ty: c.get("type").and_then(|v| v.as_str()).unwrap_or("").to_string(),
+        all_way: c.get("allWay").map_or(false, |v| v.truthy()),
+        approach_edges: c.get("approaches").and_then(|a| a.as_arr()).map(|a| a.iter().filter_map(|ap| ap.get("edge").and_then(|v| v.as_f64())).filter(|&e| e >= 0.0).map(|e| e as u32).collect()).unwrap_or_default(),
+    }).collect());
+    let points: Option<Vec<[f64; 2]>> = cw_doc.as_ref().and_then(|d| d.get("points")).and_then(|p| p.as_arr())
+        .map(|ps| ps.iter().map(|p| { let a = p.as_arr().unwrap(); [a[0].as_f64().unwrap_or(f64::NAN), a.get(1).and_then(|v| v.as_f64()).unwrap_or(f64::NAN)] }).collect());
+    crosswalk_legs(g, controls.as_deref(), points.as_deref())
+}

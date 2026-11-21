@@ -16,6 +16,7 @@ rust/
     bayenv-py/               PyO3 module `bayenv`: CPU and GPU sims behind one API, numpy zero-copy, batched steps
   tools/oracle/              node scripts that dump JS reference arrays for comparison
   oracle/                    (gitignored) dumps written by tools/oracle
+  README.md                  build, Python usage, equivalence results, benchmarks
 ```
 
 Dependency graph: `bayenv-world` <- `bayenv-sim`, `bayenv-gpu` <- `bayenv-py`. External (private) crates depend
@@ -38,7 +39,7 @@ w.controls         // Option<TrafficControls>: plans (cycle, offset, phases, ap_
 w.stations         // Vec<Station>;  w.contact_pairs: Option<ContactPairs>;  w.dem: Option<Dem> (LoadOptions.dem)
 w.node_grid        // NodeGrid::nearest(&graph, x, z, filter)
 bayenv_world::jsmath   // V8-exact Math.* (hypot, atan2, sin, cos, exp, log, round, min, max, ...): use for bit-exact ports
-bayenv_world::hops::hop_map, nav::maneuvers   // (ports in progress)
+bayenv_world::hops::hop_map, nav::{maneuvers, Router, ManeuverTable}   // geom hops, guidance, A* (route.js)
 ```
 
 Index conventions = JS: main-tier edges `0..main_edge_count`, local edges after; nodes per `merged_node_maps`.
