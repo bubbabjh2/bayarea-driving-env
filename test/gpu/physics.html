@@ -1,0 +1,149 @@
+<!doctype html>
+<html><head><meta charset="utf-8"><title>GPU physics vs src/sim/physics</title>
+<style>body{font:13px/1.4 ui-monospace,Menlo,monospace;margin:16px;background:#111;color:#ddd}</style></head>
+<body><h3>WGSL physics (physics.wgsl, collidefns.wgsl) vs src/sim/physics (JS)</h3><pre id="out"></pre>
+<script type="module">
+// Same scenarios as test/sim/physics.test.js (longitudinal, lateral, lane change, swerve, sliding)
+// for every vehicle type, run step by step (dt 0.05 s, 10 ms sub-steps) through the GPU port and
+// the JS module with identical controls; plus 4000 random box pairs through obbContact +
+// resolveContact. Reports per-scenario max |diff| and the headline metrics from both sides.
+import { VEHICLE_PARAMS, stepDynamics, createState, obbContact, resolveContact } from '../../src/sim/physics/index.js';
+import { initGPU, loadKernelSource } from '../../src/gpu/device.js';
+import { physicsDefines } from '../../src/gpu/gpuSim.js';
+const out = document.getElementById('out');
+const log = (s) => { console.log(s); out.textContent += s + '\n'; };
+const res = { ok: false };
+try {
+  const gpu = await initGPU();
+  const dt = 0.05;
+  // ---- scenarios: {type, locked, init, steps, ctrl(k) -> [steerRate, gas, brake], name}
+  const S = [];
+  for (let t = 0; t < 4; t++) {
+    const nm = VEHICLE_PARAMS[t].name;
+    S.push({ name: `${nm} full gas 0-100`, type: t, init: {}, steps: t >= 2 ? 800 : 300, ctrl: () => [0, 1, 0] });
+    S.push({ name: `${nm} full brake from 100`, type: t, init: { u: 27.78 }, steps: 200, ctrl: () => [0, 0, 1] });
+    S.push({ name: `${nm} coastdown from 30 m/s`, type: t, init: { u: 30 }, steps: 400, ctrl: () => [0, 0, 0] });
+    S.push({ name: `${nm} lane change at 100`, type: t, init: { u: 27.78, lat: 1.85 }, steps: 160, ctrl: (k) => [k < 20 ? 0.6 : k < 40 ? -0.6 : k < 50 ? 0.3 : 0, 0.4, 0] });
+    S.push({ name: `${nm} full-lock swerve at 120`, type: t, init: { u: 33.3 }, steps: 80, ctrl: (k) => [k < 20 ? 1 : 0, 0, 0] });
+    S.push({ name: `${nm} step steer at 20 m/s`, type: t, init: { u: 20 }, steps: 160, ctrl: (k) => [k < 6 ? 1 : 0, 0.3, 0] });
+    S.push({ name: `${nm} locked slide`, type: t, init: { u: 25, v: 4, r: 0.4 }, steps: 120, locked: true, ctrl: () => [0, 0, 1] });
+  }
+  const NS = S.length, maxSteps = Math.max(...S.map((s) => s.steps));
+  const scen = new Float32Array(NS * 12), ctrl = new Float32Array(NS * maxSteps * 3);
+  S.forEach((s, k) => {
+    const st = createState(s.init);
+    scen.set([s.type, s.locked ? 1 : 0, s.steps, st.u, st.v, st.r, st.steer, st.ax, st.hr, st.lat, st.s, 0], k * 12);
+    for (let j = 0; j < s.steps; j++) ctrl.set(s.ctrl(j), (k * maxSteps + j) * 3);
+  });
+  // ---- random contact pairs
+  let seed = 7; const rnd = () => { seed = (seed * 1664525 + 1013904223) >>> 0; return seed / 4294967296; };
+  const NP = 4000, pin = new Float32Array(NP * 20);
+  const pairs = [];
+  for (let k = 0; k < NP; k++) {
+    const mk = (x, z) => ({ x, z, yaw: rnd() * 6.283 - 3.14, vx: (rnd() - 0.5) * 50, vz: (rnd() - 0.5) * 50, w: (rnd() - 0.5) * 2, hl: 2 + rnd() * 4, hw: 0.9 + rnd() * 0.4, invMass: rnd() < 0.1 ? 0 : 1 / (1200 + rnd() * 14000), invInertia: 0 });
+    const A = mk(0, 0), B = mk((rnd() - 0.5) * 8, (rnd() - 0.5) * 5);
+    for (const b of [A, B]) b.invInertia = b.invMass ? 1 / ((1 / b.invMass) * ((2 * b.hl) ** 2 + (2 * b.hw) ** 2) / 12) : 0;
+    pairs.push([A, B]);
+    pin.set([A.x, A.z, A.yaw, A.vx, A.vz, A.w, A.hl, A.hw, A.invMass, A.invInertia, B.x, B.z, B.yaw, B.vx, B.vz, B.w, B.hl, B.hw, B.invMass, B.invInertia], k * 20);
+  }
+  // ---- GPU
+  const MODE = new URLSearchParams(location.search).get('mode') === 'rate' ? 'rate' : 'position';   // layout v9 steering
+  res.mode = MODE;
+  const defs = physicsDefines();
+  const code = Object.entries(defs).map(([k, v]) => `const ${k} = ${v};`).join('\n') + `
+struct PShim { physDt: f32, steerMode: u32 };
+const P = PShim(0.01, ${MODE === 'rate' ? 0 : 1}u);
+fn wrapAngle(a: f32) -> f32 { var x = a; if (x > 3.14159265) { x = x - 6.2831853; } if (x < -3.14159265) { x = x + 6.2831853; } return x; }
+${await loadKernelSource('physics')}
+${await loadKernelSource('collidefns')}
+@group(0) @binding(0) var<storage, read> scen: array<f32>;
+@group(0) @binding(1) var<storage, read> ctrl: array<f32>;
+@group(0) @binding(2) var<storage, read_write> outS: array<f32>;
+@group(0) @binding(3) var<storage, read> pin: array<f32>;
+@group(0) @binding(4) var<storage, read_write> pout: array<f32>;
+const NSTEP: u32 = ${maxSteps}u;
+@compute @workgroup_size(32)
+fn dyn(@builtin(global_invocation_id) g: vec3u) {
+  let k = g.x; if (k >= ${NS}u) { return; }
+  let b = k * 12u;
+  let t = u32(scen[b]); let locked = scen[b + 1u] > 0.5; let n = u32(scen[b + 2u]);
+  var st: DynState; st.u = scen[b + 3u]; st.v = scen[b + 4u]; st.r = scen[b + 5u]; st.steer = scen[b + 6u]; st.ax = scen[b + 7u]; st.hr = scen[b + 8u]; st.lat = scen[b + 9u]; st.s = scen[b + 10u]; st.sl = st.steer;
+  var fuel = 0.0;
+  for (var j = 0u; j < n; j = j + 1u) {
+    let c = (k * NSTEP + j) * 3u;
+    st = stepDynamics(st, ctrl[c], ctrl[c + 1u], ctrl[c + 2u], t, ${dt}, 0.0, locked);
+    fuel = fuel + st.fuelL;
+    let o = (k * NSTEP + j) * 8u;
+    outS[o] = st.u; outS[o + 1u] = st.v; outS[o + 2u] = st.r; outS[o + 3u] = st.steer; outS[o + 4u] = st.hr; outS[o + 5u] = st.lat; outS[o + 6u] = st.s; outS[o + 7u] = fuel;
+  }
+}
+fn rb(o: u32) -> Body { var b: Body; b.x = pin[o]; b.z = pin[o + 1u]; b.yaw = pin[o + 2u]; b.vx = pin[o + 3u]; b.vz = pin[o + 4u]; b.w = pin[o + 5u]; b.hl = pin[o + 6u]; b.hw = pin[o + 7u]; b.invMass = pin[o + 8u]; b.invInertia = pin[o + 9u]; return b; }
+@compute @workgroup_size(64)
+fn coll(@builtin(global_invocation_id) g: vec3u) {
+  let k = g.x; if (k >= ${NP}u) { return; }
+  var A = rb(k * 20u); var B = rb(k * 20u + 10u);
+  let c = obbContact(A, B);
+  let o = k * 16u;
+  pout[o] = select(0.0, 1.0, c.ok);
+  if (!c.ok) { return; }
+  pout[o + 1u] = c.depth; pout[o + 2u] = c.nx; pout[o + 3u] = c.nz; pout[o + 4u] = c.px; pout[o + 5u] = c.pz;
+  let r = resolveContact(&A, &B, c, 0.2, 0.5);
+  pout[o + 6u] = r.jn; pout[o + 7u] = r.dvA; pout[o + 8u] = r.dvB; pout[o + 9u] = r.closing;
+  pout[o + 10u] = A.vx; pout[o + 11u] = A.vz; pout[o + 12u] = A.w; pout[o + 13u] = B.vx; pout[o + 14u] = B.vz; pout[o + 15u] = B.w;
+}`;
+  const kd = await gpu.kernel('dyn', code, { entryPoint: 'dyn' }), kc = await gpu.kernel('coll', code, { entryPoint: 'coll' });
+  const bs = gpu.storage('t.scen', scen.byteLength, scen), bc = gpu.storage('t.ctrl', ctrl.byteLength, ctrl);
+  const bo = gpu.storage('t.out', NS * maxSteps * 32), bp = gpu.storage('t.pin', pin.byteLength, pin), bq = gpu.storage('t.pout', NP * 64);
+  const reg = { scen: bs, ctrl: bc, outS: bo, pin: bp, pout: bq };
+  const enc = gpu.device.createCommandEncoder(), p = enc.beginComputePass();
+  p.setPipeline(kd.pipeline); p.setBindGroup(0, gpu.bindGroup(kd, reg)); p.dispatchWorkgroups(Math.ceil(NS / 32));
+  p.setPipeline(kc.pipeline); p.setBindGroup(0, gpu.bindGroup(kc, reg)); p.dispatchWorkgroups(Math.ceil(NP / 64));
+  p.end(); gpu.device.queue.submit([enc.finish()]);
+  const G = new Float32Array(await gpu.read(bo)), C = new Float32Array(await gpu.read(bq));
+  // ---- compare dynamics
+  res.scenarios = [];
+  let worst = 0;
+  S.forEach((s, k) => {
+    const st = createState(s.init), P = VEHICLE_PARAMS[s.type];
+    let fuel = 0, maxD = { u: 0, v: 0, r: 0, steer: 0, hr: 0, lat: 0, s: 0, fuel: 0 };
+    let t100 = { js: null, gpu: null }, stop = { js: null, gpu: null }, maxAy = { js: 0, gpu: 0 };
+    for (let j = 0; j < s.steps; j++) {
+      const [sr, gas, br] = s.ctrl(j);
+      st.fuelL = 0;
+      stepDynamics(st, sr, gas, br, P, dt, 0, !!s.locked, undefined, MODE);
+      fuel += st.fuelL;
+      const o = (k * maxSteps + j) * 8;
+      const gv = { u: G[o], v: G[o + 1], r: G[o + 2], steer: G[o + 3], hr: G[o + 4], lat: G[o + 5], s: G[o + 6], fuel: G[o + 7] };
+      const jv = { u: st.u, v: st.v, r: st.r, steer: st.steer, hr: st.hr, lat: st.lat, s: st.s, fuel };
+      for (const key of Object.keys(maxD)) maxD[key] = Math.max(maxD[key], Math.abs(gv[key] - jv[key]));
+      if (t100.js == null && jv.u >= 27.78) t100.js = (j + 1) * dt; if (t100.gpu == null && gv.u >= 27.78) t100.gpu = (j + 1) * dt;
+      if (stop.js == null && s.init.u && jv.u < 0.01) stop.js = jv.s; if (stop.gpu == null && s.init.u && gv.u < 0.01) stop.gpu = gv.s;
+      maxAy.js = Math.max(maxAy.js, Math.abs(jv.u * jv.r)); maxAy.gpu = Math.max(maxAy.gpu, Math.abs(gv.u * gv.r));
+    }
+    const rel = Math.max(maxD.u / 30, maxD.lat / 5, maxD.s / 500, maxD.hr / 1, maxD.fuel / 0.1);
+    worst = Math.max(worst, rel);
+    const row = { name: s.name, maxAbsDiff: Object.fromEntries(Object.entries(maxD).map(([a, b]) => [a, +b.toExponential(2)])) };
+    if (/0-100/.test(s.name)) row.t0to100 = t100;
+    if (/brake/.test(s.name)) row.stopDistance = stop;
+    if (/lane|swerve|steer/.test(s.name)) row.maxLatAccel = { js: +maxAy.js.toFixed(3), gpu: +maxAy.gpu.toFixed(3) };
+    if (/coast/.test(s.name)) row.fuelL = { js: +fuel.toFixed(5), gpu: +G[(k * maxSteps + s.steps - 1) * 8 + 7].toFixed(5) };
+    res.scenarios.push(row); log(JSON.stringify(row));
+  });
+  // ---- compare contacts
+  let both = 0, okMis = 0, maxC = 0, maxDv = 0;
+  pairs.forEach(([A, B], k) => {
+    const c = obbContact(A, B, {}), o = k * 16, gOk = C[o] > 0.5;
+    if (!!c !== gOk) { okMis++; return; }
+    if (!c) return;
+    both++;
+    maxC = Math.max(maxC, Math.abs(c.depth - C[o + 1]), Math.abs(c.nx - C[o + 2]), Math.abs(c.nz - C[o + 3]), Math.abs(c.px - C[o + 4]) / 10, Math.abs(c.pz - C[o + 5]) / 10);
+    const r = resolveContact(A, B, c, 0.2, 0.5, {});
+    maxDv = Math.max(maxDv, Math.abs(r.dvA - C[o + 7]), Math.abs(r.dvB - C[o + 8]), Math.abs(A.vx - C[o + 10]), Math.abs(B.vz - C[o + 14]));
+  });
+  res.contacts = { pairs: NP, overlapping: both, overlapDecisionMismatch: okMis, maxContactDiff: +maxC.toExponential(2), maxVelocityDiff: +maxDv.toExponential(2) };
+  log('contacts ' + JSON.stringify(res.contacts));
+  res.worstRelative = +worst.toExponential(2);
+  res.ok = worst < 0.01 && okMis <= 2 && maxDv < 0.05;
+} catch (e) { res.error = String(e.stack || e); log(res.error); }
+window.__result = res; window.__done = true; document.title = res.ok ? 'PASS' : 'FAIL';
+</script></body></html>

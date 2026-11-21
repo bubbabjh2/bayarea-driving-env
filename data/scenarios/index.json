@@ -1,0 +1,134 @@
+[
+ {
+  "name": "curve-s1",
+  "family": "curve",
+  "tiles": 1,
+  "notes": [
+   "radius 198 m, sweep 140 deg, tertiary 50 km/h, grade 2.8 %"
+  ]
+ },
+ {
+  "name": "diverge-s1",
+  "family": "diverge",
+  "tiles": 1,
+  "notes": [
+   "4-lane mainline, added exit lane, exit share 44 %"
+  ]
+ },
+ {
+  "name": "grid-s1",
+  "family": "grid",
+  "tiles": 1,
+  "notes": [
+   "5 x 5 grid, 162 m blocks, arterial every 3, 82 trips"
+  ]
+ },
+ {
+  "name": "hill-s1",
+  "family": "hill",
+  "tiles": 1,
+  "notes": [
+   "crest + bend behind it, max grade 3.4 %, height 12.4 m"
+  ]
+ },
+ {
+  "name": "interchange-s1",
+  "family": "interchange",
+  "tiles": 1,
+  "notes": [
+   "3-lane freeway, stop terminals, arterial deck 7 m"
+  ]
+ },
+ {
+  "name": "junction-s1",
+  "family": "junction",
+  "tiles": 1,
+  "notes": [
+   "cross allway mixed; major secondary x1, minor secondary, skew -7 deg"
+  ]
+ },
+ {
+  "name": "lanes-s1",
+  "family": "lanes",
+  "tiles": 1,
+  "notes": [
+   "2 -> 3 lanes (motorway)"
+  ]
+ },
+ {
+  "name": "merge-s1",
+  "family": "merge",
+  "tiles": 1,
+  "notes": [
+   "4-lane mainline, gore merge (no added lane)"
+  ]
+ },
+ {
+  "name": "obstacle-s1",
+  "family": "obstacle",
+  "tiles": 1,
+  "notes": [
+   "2 stopped car(s), 1 lane(s) two-way"
+  ]
+ },
+ {
+  "name": "overpass-s1",
+  "family": "overpass",
+  "tiles": 1,
+  "notes": [
+   "primary over motorway, 6 % approaches, ramp 117 m"
+  ]
+ },
+ {
+  "name": "pack-mixed-s3",
+  "family": "pack",
+  "tiles": 64,
+  "notes": []
+ },
+ {
+  "name": "rampmeter-s1",
+  "family": "rampmeter",
+  "tiles": 1,
+  "notes": [
+   "4-lane mainline, metered ramp"
+  ]
+ },
+ {
+  "name": "roundabout-s1",
+  "family": "roundabout",
+  "tiles": 1,
+  "notes": [
+   "radius 30 m, 4 legs"
+  ]
+ },
+ {
+  "name": "sbend-s1",
+  "family": "sbend",
+  "tiles": 1,
+  "notes": [
+   "radius 50 m, sweep 39 deg, tangent 37 m, 35 km/h"
+  ]
+ },
+ {
+  "name": "straight-s1",
+  "family": "straight",
+  "tiles": 1,
+  "notes": []
+ },
+ {
+  "name": "urban-s1",
+  "family": "urban",
+  "tiles": 1,
+  "notes": [
+   "6 x 5 grid, 110 m blocks, all signals, 295 trips"
+  ]
+ },
+ {
+  "name": "weave-s1",
+  "family": "weave",
+  "tiles": 1,
+  "notes": [
+   "2+1 lane weave, 306 m"
+  ]
+ }
+]

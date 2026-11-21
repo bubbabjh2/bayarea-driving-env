@@ -1,0 +1,277 @@
+{
+ "format": "bay-roads-bin/1",
+ "tier": "main",
+ "classes": [
+  "motorway",
+  "motorway_link",
+  "trunk",
+  "trunk_link",
+  "primary",
+  "primary_link",
+  "secondary",
+  "secondary_link"
+ ],
+ "classIds": {
+  "motorway": 0,
+  "motorway_link": 1,
+  "trunk": 2,
+  "trunk_link": 3,
+  "primary": 4,
+  "primary_link": 5,
+  "secondary": 6,
+  "secondary_link": 7,
+  "tertiary": 8,
+  "tertiary_link": 9,
+  "unclassified": 10,
+  "residential": 11,
+  "living_street": 12
+ },
+ "generated": "2026-10-20T16:14:14Z",
+ "source": "OpenStreetMap via Overpass API (ODbL)",
+ "projection": {
+  "type": "equirectangular",
+  "lat0": 37.55,
+  "lon0": -122.15,
+  "earthRadius": 6371008.8,
+  "metersPerDegLon": 88157.883,
+  "metersPerDegLat": 111195.0802,
+  "axes": "x = east (m), y = up (m, elevation baked in), z = south (m), north = -z",
+  "rightOfTravel": "for direction (dx,dz) the right-hand perpendicular is (-dz, dx)"
+ },
+ "laneWidth": 3.7,
+ "laneDefaults": {
+  "oneway": {
+   "motorway": 4,
+   "motorway_link": 1,
+   "trunk": 3,
+   "trunk_link": 1,
+   "primary": 2,
+   "primary_link": 1,
+   "secondary": 2,
+   "secondary_link": 1
+  },
+  "twowayPerDirection": {
+   "motorway": 2,
+   "motorway_link": 1,
+   "trunk": 2,
+   "trunk_link": 1,
+   "primary": 1,
+   "primary_link": 1,
+   "secondary": 1,
+   "secondary_link": 1
+  }
+ },
+ "defaultSpeedKph": {
+  "motorway": 105,
+  "motorway_link": 65,
+  "trunk": 90,
+  "trunk_link": 55,
+  "primary": 65,
+  "primary_link": 45,
+  "secondary": 55,
+  "secondary_link": 40
+ },
+ "elevation": {
+  "model": "terrain/1",
+  "previous": {
+   "model": "structures/2",
+   "deckPerLayer": 7,
+   "waterDeckMin": 20,
+   "crossingClearance": 7,
+   "minClearance": 4.5,
+   "maxGrade": {
+    "fw": 0.05,
+    "link": 0.06,
+    "art": 0.06,
+    "loc": 0.08
+   }
+  },
+  "ground": "USGS 3DEP bare earth: 1 m lidar DEM (CA_SanFrancisco_B23) in San Francisco, 1/3 arc-second seamless DEM elsewhere; NAVD88 m (data/dem/SOURCE.txt)",
+  "doc": "docs/elevation.md",
+  "tool": "tools/elevation/build_heights.mjs",
+  "params": {
+   "floor": 0.5,
+   "disk": 4,
+   "step": 4,
+   "sigma": 4,
+   "sigma13": 8,
+   "sigmaFw": 12,
+   "maxFw": 0.08,
+   "maxFwLink": 0.12,
+   "lateral": 2.5,
+   "dpTol": 0.12,
+   "minGap": 5,
+   "clearance": 6,
+   "oldMin": 4.5,
+   "rampFw": 0.05,
+   "rampArt": 0.06,
+   "rampLoc": 0.08,
+   "waterDeck": 19.9
+  },
+  "shapePoints": 31486,
+  "builtFrom": "structures/2 flat-ground build (y_old = structure offsets)"
+ },
+ "laneWidthByClass": {
+  "motorway": 3.7,
+  "motorway_link": 3.7,
+  "trunk": 3.7,
+  "trunk_link": 3.6,
+  "primary": 3.6,
+  "primary_link": 3.5,
+  "secondary": 3.5,
+  "secondary_link": 3.4
+ },
+ "laneModel": {
+  "throughLanes": true,
+  "classMaxPerDirection": {
+   "motorway": 6,
+   "motorway_link": 3,
+   "trunk": 4,
+   "trunk_link": 2,
+   "primary": 4,
+   "primary_link": 2,
+   "secondary": 3,
+   "secondary_link": 2
+  },
+  "minRunMeters": {
+   "fw": 400,
+   "link": 300,
+   "art": 300,
+   "loc": 200
+  },
+  "accelLaneMeters": 300,
+  "taperMeters": 90
+ },
+ "bbox": {
+  "minX": -36144.02,
+  "maxX": 30855.08,
+  "minZ": -46701.87,
+  "maxZ": 33358.06
+ },
+ "nodeCount": 125290,
+ "edgeCount": 51011,
+ "file": "roads.bin",
+ "byteLength": 4964208,
+ "endianness": "little",
+ "sections": {
+  "nodeXYZ": {
+   "byteOffset": 0,
+   "byteLength": 1503480,
+   "type": "Float32",
+   "length": 375870,
+   "stride": 3,
+   "count": 125290
+  },
+  "edges": {
+   "byteOffset": 1503480,
+   "byteLength": 1632352,
+   "type": "Uint32",
+   "length": 408088,
+   "stride": 8,
+   "count": 51011
+  },
+  "poly": {
+   "byteOffset": 3135832,
+   "byteLength": 839248,
+   "type": "Uint32",
+   "length": 209812,
+   "stride": 1,
+   "count": 209812
+  },
+  "edgeLength": {
+   "byteOffset": 3975080,
+   "byteLength": 204044,
+   "type": "Float32",
+   "length": 51011,
+   "stride": 1,
+   "count": 51011
+  },
+  "csrOffsets": {
+   "byteOffset": 4179124,
+   "byteLength": 375220,
+   "type": "Uint32",
+   "length": 93805,
+   "stride": 1,
+   "count": 93805
+  },
+  "csrEdges": {
+   "byteOffset": 4554344,
+   "byteLength": 204044,
+   "type": "Uint32",
+   "length": 51011,
+   "stride": 1,
+   "count": 51011
+  },
+  "edgeLaneWidth": {
+   "byteOffset": 4758388,
+   "byteLength": 204044,
+   "type": "Float32",
+   "length": 51011,
+   "stride": 1,
+   "count": 51011
+  },
+  "bannedHops": {
+   "byteOffset": 4962432,
+   "byteLength": 1776,
+   "type": "Uint32",
+   "length": 444,
+   "stride": 3,
+   "count": 148
+  }
+ },
+ "edgeStride": 8,
+ "edgeFields": [
+  "firstNode",
+  "nodeCount",
+  "lanesFwd",
+  "lanesBack",
+  "classId",
+  "speedCmps",
+  "flags",
+  "twin"
+ ],
+ "edgeFieldDoc": {
+  "firstNode": "offset into poly[] of this edge's first node index (travel order)",
+  "nodeCount": "number of node indices in poly[] for this edge (>=2); from=poly[firstNode], to=poly[firstNode+nodeCount-1]",
+  "lanesFwd": "lanes in this edge's travel direction",
+  "lanesBack": "lanes in the opposite direction (0 if oneway)",
+  "classId": "index into meta.classIds / classesAll",
+  "speedCmps": "speed limit in cm/s (divide by 100 for m/s); class default if FLAG_SPEED_DEFAULT",
+  "flags": "bit set, see flagBits",
+  "twin": "edge id of the opposite direction of the same road, or 0xFFFFFFFF"
+ },
+ "flagBits": {
+  "ONEWAY": 1,
+  "BRIDGE": 2,
+  "TUNNEL": 4,
+  "LANES_FALLBACK": 8,
+  "SPEED_DEFAULT": 16,
+  "LINK": 32,
+  "LANES_CLAMPED": 64,
+  "LANES_SMOOTHED": 128,
+  "AUX_LANE": 256,
+  "LANE_DROP": 512
+ },
+ "classesAll": [
+  "motorway",
+  "motorway_link",
+  "trunk",
+  "trunk_link",
+  "primary",
+  "primary_link",
+  "secondary",
+  "secondary_link",
+  "tertiary",
+  "tertiary_link",
+  "unclassified",
+  "residential",
+  "living_street"
+ ],
+ "noTwin": 4294967295,
+ "laneOffsetFormula": "offset_k = ((lanesBack - lanesFwd)/2 + k + 0.5) * laneWidth, metres to the RIGHT of travel, k=0 is the leftmost lane",
+ "csrDoc": "outgoing edges of node n are csrEdges[csrOffsets[n] .. csrOffsets[n+1]); each is an edge id whose from-node is n",
+ "linkNodesDoc": null,
+ "json": "roads.json",
+ "stations": "stations.meta.json",
+ "heightsGenerated": "2026-10-25T00:49:26.047Z"
+}

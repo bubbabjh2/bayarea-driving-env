@@ -1,0 +1,93 @@
+{
+ "doc": "sha256 of the original project's world data (2026-10-24 build). Keys: data/<file>; flat/<file> = the flat-ground (structures/2) OSM build that tools/elevation/build_heights.mjs takes as input. Check with node tools/osm/verify.mjs. *.meta.json files are not listed (they carry build timestamps).",
+ "files": {
+  "water.json": {
+   "sha256": "22bb6c165ba89eac3adf0d8042a3a536458c72993cd220fb2dfe35fc1c110f32",
+   "bytes": 135441
+  },
+  "crosswalks.json": {
+   "sha256": "c7b7285e2613a3b5894dbc64c2e87fd43d549680a9b35264918e0e5a321e08f8",
+   "bytes": 1505240
+  },
+  "crossings.json": {
+   "sha256": "f9f6cc8371566c74712bba452443cd0e85bc5178138c819a703e50a38a797882",
+   "bytes": 726907
+  },
+  "roads.bin": {
+   "sha256": "1a3dc075dc6bf7ffe6b5025dcda1cabffdab508cd9d342db4eb697d39f215ea1",
+   "bytes": 4964208
+  },
+  "roads.json": {
+   "sha256": "66ca6f5e90c876cb9cbf249896ed3f176494f7b49f44595b59f2a60ce4019e13",
+   "bytes": 27447366
+  },
+  "roads-local.bin": {
+   "sha256": "af3bf8fc84d2df1a9e22634ffb60dd4c0be5e0a3640f540e05250f17bac46b52",
+   "bytes": 20237276
+  },
+  "roads-local.json": {
+   "sha256": "c3a53e8f8cfe87814384003a24316bbbf9343d5bc50122e6a88bb986d037f694",
+   "bytes": 119437355
+  },
+  "stations.bin": {
+   "sha256": "74dad6a36302ba071313a9581a6e233fdfa2774a794fe5668d2d99d6c19eb8ad",
+   "bytes": 7000
+  },
+  "stations.json": {
+   "sha256": "9778c7f1443ff27bb5701497340c9f1eaed36fdd9f10c8ae544fd4e200e7f2ac",
+   "bytes": 31831
+  },
+  "controls.bin": {
+   "sha256": "c4147186888f814e49c7c6b76afe1bff379bd6e274e1956a091d62bc6306297f",
+   "bytes": 1889684
+  },
+  "controls.json": {
+   "sha256": "c04a7aa8845d32576196fb924b09755e5d345fd9fd67018a90c5e20d16ce2714",
+   "bytes": 16610762
+  },
+  "junctions.bin": {
+   "sha256": "d87b4f3000eb1843621277a58734f1a6396e0463b36c2401ab209b1325a4459b",
+   "bytes": 197991888
+  },
+  "lines.bin": {
+   "sha256": "4591b29ccebc45c8a48560e0909063ce091049dbb4bc185ac6791f8c655b51d6",
+   "bytes": 25088940
+  },
+  "lines-geom.bin": {
+   "sha256": "d07f0684b85d50bce470931a17aa6436f0e96c7eb895fafacbdbf702a43bc7ef",
+   "bytes": 62772912
+  },
+  "flat/roads.bin": {
+   "sha256": "c71787cee2de2ac592a7ee92c1352053fe9a34379038dba1cc519391f7ba8c5f",
+   "bytes": 4417324
+  },
+  "flat/roads.json": {
+   "sha256": "3d2ae3881cbbdb7ea1309531130ae90b63534c26e5ed17a2b533044a9a4c3594",
+   "bytes": 25487425
+  },
+  "flat/roads-local.bin": {
+   "sha256": "dfe88e9d0be3acbfe3b1a7249146d5bb4674a0b428592b58e68ec3b47c94a084",
+   "bytes": 16527940
+  },
+  "flat/roads-local.json": {
+   "sha256": "e7c8498c248b0f7eb2fd607bfe08ac752e2753725895a169a11279b2bdbb74ae",
+   "bytes": 106897399
+  },
+  "flat/stations.bin": {
+   "sha256": "f733c3fa3754299970db131ff5f7f86009f7beb7d1bf9d6775d7caae1920c9b9",
+   "bytes": 7000
+  },
+  "flat/stations.json": {
+   "sha256": "7f14e8ac32f0474d9e908bdac9855c49deed8195f536fb2d28efa08d0bd65a1f",
+   "bytes": 31489
+  },
+  "flat/controls.bin": {
+   "sha256": "d09f452b418f63b5d6f5bed37e3ac89720a7a34611d536658fcf01d6b24ffa50",
+   "bytes": 1889684
+  },
+  "flat/controls.json": {
+   "sha256": "35d0d84c2bd6d7b31343b669525b17e8804986e53775323e86165b84b1059920",
+   "bytes": 16479059
+  }
+ }
+}

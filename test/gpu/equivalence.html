@@ -1,0 +1,74 @@
+<!doctype html><html><head><meta charset="utf-8"><title>gpu equivalence</title></head><body><pre id="out"></pre>
+<script type="module">
+// CPU reference (src/sim/sim.js) vs GPU (src/gpu/gpuSim.js) from the same state, both driven by the same external
+// actions (constant per slot: steer 0, gas, brake from the slot index), on the synthetic graph:
+//   1. warm the CPU sim up with those actions (opts.defaultAction per slot via a driverFactory), stop spawning
+//   2. exportState -> GPUSim.importSnapshot, flag every car F_POLICY, upload the same per-slot actions
+//   3. advance both and compare state / edge / s / lat / speed / pose at checkpoints
+// Query: ?n=1500&steps=1000&warm=1200&seed=3
+import { Simulation } from '../../src/sim/sim.js';
+import { buildGraph } from '../../src/sim/roadGraph.js';
+import { makeSynthGraph } from '../../src/sim/synthGraph.js';
+import { synthAxis } from '../../src/sim/population.js';
+import { exportState } from '../../src/sim/state.js';
+import { GPUSim } from '../../src/gpu/gpuSim.js';
+import { initGPU } from '../../src/gpu/device.js';
+import * as L from '../../src/gpu/layout.js';
+const out = document.getElementById('out');
+const log = (...a) => { const s = a.join(' '); console.log(s); out.textContent += s + '\n'; };
+const q = new URLSearchParams(location.search);
+const N = +(q.get('n') || 1500), STEPS = +(q.get('steps') || 1000), WARM = +(q.get('warm') || 1200), SEED = +(q.get('seed') || 3);
+const actionOf = (slot) => ({ steer: 0, gas: 0.15 + 0.1 * (slot % 4), brake: slot % 13 === 0 ? 0.2 : 0 });
+const pct = (arr, p) => { if (!arr.length) return 0; const a = Float64Array.from(arr).sort(); return a[Math.min(a.length - 1, Math.floor(p * a.length))]; };
+function compare(cpu, st) {
+  const vs = cpu.vs; let n = 0, stateMis = 0, edgeMis = 0;
+  const ds = [], dv = [], dp = [], dl = [];
+  for (let i = 0; i < vs.high; i++) {
+    const cs = vs.state[i], gs = st.veh.get(i, 'state');
+    if (!(cs === 1 || cs === 2) && !(gs === 1 || gs === 2)) continue;
+    n++;
+    if (cs !== gs) { stateMis++; continue; }
+    if (vs.edge[i] !== st.veh.get(i, 'edge')) { edgeMis++; continue; }
+    dl.push(Math.abs(vs.lat[i] - st.veh.get(i, 'lat'))); ds.push(Math.abs(vs.s[i] - st.veh.get(i, 's')));
+    dv.push(Math.abs(vs.speed[i] - st.veh.get(i, 'speed'))); dp.push(Math.hypot(vs.x[i] - st.pose[i * 4], vs.z[i] - st.pose[i * 4 + 2]));
+  }
+  const within = ds.filter((x, k) => x < 0.5 && dv[k] < 0.1).length;
+  const mean = (a) => a.reduce((x, y) => x + y, 0) / Math.max(1, a.length);
+  return { compared: n, stateMis, edgeMis, within05m: n ? +(within / n).toFixed(4) : 1, sP99: +pct(ds, 0.99).toFixed(4), sMean: +mean(ds).toFixed(5),
+    latMean: +mean(dl).toFixed(5), vMean: +mean(dv).toFixed(5), posMean: +mean(dp).toFixed(5), posMax: +Math.max(0, ...dp).toFixed(3) };
+}
+const result = { ok: false, n: N, steps: STEPS, warm: WARM };
+try {
+  const graph = buildGraph(makeSynthGraph({ blocks: 30, cross: 6, bridges: 3 }));
+  const gpu = await initGPU(); result.adapter = gpu.adapterName;
+  const cpu = new Simulation(graph, {
+    seed: SEED, startTime: 7.5 * 3600, population: { n: N, seed: SEED, axis: synthAxis(graph), long: { minM: 5000, maxM: 20000 } },
+    accident: { ratePerKm: 0 }, collisionInterval: 1e9, tripLog: false, fuel: false, dt: 0.05,
+    driverFactory: (g, from, to, pose, extra) => { const a = actionOf(extra.slot); return { step: () => a }; },
+  });
+  for (let k = 0; k < WARM; k++) cpu.step();
+  cpu.tripPtr = cpu.trips.length; cpu.pendingSpawns = [];
+  log(`warm-up: ${cpu.vs.count} vehicles at ${cpu.clock}`);
+  const cap = Math.max(1024, 1 << Math.ceil(Math.log2(cpu.vs.capacity)));
+  const gs = await GPUSim.create(graph, { gpu, capacity: cap, dt: 0.05, obs: 'none', features: { laneChanges: false, accidents: false, fuel: false, collisions: true, yield: true, zipFix: false },
+    leaderLookahead: cpu.opts.leaderLookahead, mergeLookahead: cpu.opts.mergeLookahead });
+  gs.importSnapshot(exportState(cpu), cpu.commuters);
+  const A = new Float32Array(cap * 3);
+  for (let i = 0; i < cap; i++) { const a = actionOf(i); A[3 * i] = a.steer; A[3 * i + 1] = a.gas; A[3 * i + 2] = a.brake; }
+  gs.setActions(A);
+  for (let i = 0; i < cpu.vs.high; i++) if (cpu.vs.state[i] === 1) gs.op(L.OP.SET_FLAGS, i, L.FLAG.POLICY);
+  const cps = [1, 10, 100, 500, 1000, 2000].filter((x) => x <= STEPS); if (!cps.includes(STEPS)) cps.push(STEPS);
+  result.det = []; let done = 0;
+  for (const cp of cps) {
+    const k = cp - done;
+    for (let s = 0; s < k; s++) cpu.step();
+    for (let s = 0; s < k; s += 200) await gs.runSteps(Math.min(200, k - s), { readback: false });
+    done = cp;
+    const c = compare(cpu, await gs.readState()); c.step = cp; result.det.push(c);
+    log(`step ${cp}: ${JSON.stringify(c)}`);
+  }
+  const last = result.det[result.det.length - 1], first = result.det[0];
+  result.ok = first.within05m > 0.99 && last.within05m > 0.9;
+} catch (e) { result.error = String(e.message || e); result.stack = e.stack; log('ERROR', e.stack || e); }
+window.__result = result; document.title = result.ok ? 'PASS' : 'FAIL';
+</script></body></html>

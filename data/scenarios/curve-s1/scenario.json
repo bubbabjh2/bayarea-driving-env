@@ -1,0 +1,88 @@
+{
+ "format": "bay-scenario/1",
+ "name": "curve-s1",
+ "family": "curve",
+ "seed": 1,
+ "params": {
+  "radius": 198,
+  "sweep": 2.4506635489172064,
+  "dir": -1,
+  "lanes": 2,
+  "grade": 0.027830381533131002,
+  "rate": 12,
+  "win": 600
+ },
+ "notes": [
+  "radius 198 m, sweep 140 deg, tertiary 50 km/h, grade 2.8 %"
+ ],
+ "bbox": {
+  "minX": -400,
+  "maxX": 197.97233428325015,
+  "minZ": -605.4909362223966,
+  "maxZ": 0
+ },
+ "nodeCount": 62,
+ "edgeCount": 6,
+ "mainEdgeCount": 0,
+ "nodeNames": {
+  "start": 42,
+  "end": 52
+ },
+ "trips": [
+  {
+   "count": 120,
+   "depart": [
+    25200,
+    25800
+   ],
+   "via": [],
+   "from": 42,
+   "to": 52
+  },
+  {
+   "count": 120,
+   "depart": [
+    25200,
+    25800
+   ],
+   "via": [],
+   "from": 52,
+   "to": 42
+  }
+ ],
+ "obstacles": [],
+ "tiles": [
+  {
+   "name": "curve-s1",
+   "family": "curve",
+   "seed": 1,
+   "params": {
+    "radius": 198,
+    "sweep": 2.4506635489172064,
+    "dir": -1,
+    "lanes": 2,
+    "grade": 0.027830381533131002,
+    "rate": 12,
+    "win": 600
+   },
+   "notes": [
+    "radius 198 m, sweep 140 deg, tertiary 50 km/h, grade 2.8 %"
+   ],
+   "offset": [
+    0,
+    0
+   ],
+   "view": {
+    "x": 63.088094089785294,
+    "z": -175.2947729803189,
+    "span": 435.6
+   },
+   "bbox": {
+    "minX": -400,
+    "maxX": 197.97233428325015,
+    "minZ": -605.4909362223966,
+    "maxZ": 0
+   }
+  }
+ ]
+}

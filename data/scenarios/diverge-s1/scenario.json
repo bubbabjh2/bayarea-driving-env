@@ -1,0 +1,85 @@
+{
+ "format": "bay-scenario/1",
+ "name": "diverge-s1",
+ "family": "diverge",
+ "seed": 1,
+ "params": {
+  "lanes": 4,
+  "exitLane": true,
+  "rate": 29,
+  "exitShare": 0.4367547417525202,
+  "win": 600
+ },
+ "notes": [
+  "4-lane mainline, added exit lane, exit share 44 %"
+ ],
+ "bbox": {
+  "minX": -1500,
+  "maxX": 1500,
+  "minZ": 0,
+  "maxZ": 150
+ },
+ "nodeCount": 90,
+ "edgeCount": 5,
+ "mainEdgeCount": 5,
+ "nodeNames": {
+  "start": 0,
+  "end": 2,
+  "exit": 78
+ },
+ "trips": [
+  {
+   "count": 218,
+   "depart": [
+    25200,
+    25800
+   ],
+   "via": [],
+   "from": 0,
+   "to": 2
+  },
+  {
+   "count": 169,
+   "depart": [
+    25200,
+    25800
+   ],
+   "via": [],
+   "from": 0,
+   "to": 78
+  }
+ ],
+ "obstacles": [],
+ "tiles": [
+  {
+   "name": "diverge-s1",
+   "family": "diverge",
+   "seed": 1,
+   "params": {
+    "lanes": 4,
+    "exitLane": true,
+    "rate": 29,
+    "exitShare": 0.4367547417525202,
+    "win": 600
+   },
+   "notes": [
+    "4-lane mainline, added exit lane, exit share 44 %"
+   ],
+   "offset": [
+    0,
+    0
+   ],
+   "view": {
+    "x": 50,
+    "z": 20,
+    "span": 650
+   },
+   "bbox": {
+    "minX": -1500,
+    "maxX": 1500,
+    "minZ": 0,
+    "maxZ": 150
+   }
+  }
+ ]
+}

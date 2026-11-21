@@ -1,0 +1,184 @@
+{
+ "format": "bay-scenario/1",
+ "name": "roundabout-s1",
+ "family": "roundabout",
+ "seed": 1,
+ "params": {
+  "radius": 30,
+  "legs": 4,
+  "rate": 4,
+  "win": 600
+ },
+ "notes": [
+  "radius 30 m, 4 legs"
+ ],
+ "bbox": {
+  "minX": -430,
+  "maxX": 430,
+  "minZ": -430,
+  "maxZ": 430
+ },
+ "nodeCount": 96,
+ "edgeCount": 12,
+ "mainEdgeCount": 0,
+ "nodeNames": {
+  "leg0": 56,
+  "leg1": 66,
+  "leg2": 76,
+  "leg3": 86
+ },
+ "trips": [
+  {
+   "count": 13,
+   "depart": [
+    25200,
+    25800
+   ],
+   "via": [],
+   "from": 56,
+   "to": 66
+  },
+  {
+   "count": 13,
+   "depart": [
+    25200,
+    25800
+   ],
+   "via": [],
+   "from": 56,
+   "to": 76
+  },
+  {
+   "count": 13,
+   "depart": [
+    25200,
+    25800
+   ],
+   "via": [],
+   "from": 56,
+   "to": 86
+  },
+  {
+   "count": 13,
+   "depart": [
+    25200,
+    25800
+   ],
+   "via": [],
+   "from": 66,
+   "to": 56
+  },
+  {
+   "count": 13,
+   "depart": [
+    25200,
+    25800
+   ],
+   "via": [],
+   "from": 66,
+   "to": 76
+  },
+  {
+   "count": 13,
+   "depart": [
+    25200,
+    25800
+   ],
+   "via": [],
+   "from": 66,
+   "to": 86
+  },
+  {
+   "count": 13,
+   "depart": [
+    25200,
+    25800
+   ],
+   "via": [],
+   "from": 76,
+   "to": 56
+  },
+  {
+   "count": 13,
+   "depart": [
+    25200,
+    25800
+   ],
+   "via": [],
+   "from": 76,
+   "to": 66
+  },
+  {
+   "count": 13,
+   "depart": [
+    25200,
+    25800
+   ],
+   "via": [],
+   "from": 76,
+   "to": 86
+  },
+  {
+   "count": 13,
+   "depart": [
+    25200,
+    25800
+   ],
+   "via": [],
+   "from": 86,
+   "to": 56
+  },
+  {
+   "count": 13,
+   "depart": [
+    25200,
+    25800
+   ],
+   "via": [],
+   "from": 86,
+   "to": 66
+  },
+  {
+   "count": 13,
+   "depart": [
+    25200,
+    25800
+   ],
+   "via": [],
+   "from": 86,
+   "to": 76
+  }
+ ],
+ "obstacles": [],
+ "tiles": [
+  {
+   "name": "roundabout-s1",
+   "family": "roundabout",
+   "seed": 1,
+   "params": {
+    "radius": 30,
+    "legs": 4,
+    "rate": 4,
+    "win": 600
+   },
+   "notes": [
+    "radius 30 m, 4 legs"
+   ],
+   "offset": [
+    0,
+    0
+   ],
+   "view": {
+    "x": 0,
+    "z": 0,
+    "span": 210
+   },
+   "bbox": {
+    "minX": -430,
+    "maxX": 430,
+    "minZ": -430,
+    "maxZ": 430
+   }
+  }
+ ]
+}

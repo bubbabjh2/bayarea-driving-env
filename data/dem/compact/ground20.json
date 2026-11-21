@@ -1,0 +1,31 @@
+{
+ "format": "bay-ground-compact/1",
+ "from": "data/dem/ground/ground10.f32 (tools/elevation/build_conform.mjs)",
+ "root": {
+  "x0": -53000,
+  "z0": -57900,
+  "size": 102400
+ },
+ "cell": 20,
+ "n": 5120,
+ "files": {
+  "height": "ground20.dh16.gz (Int16 LE decimetres NAVD88, row-wise delta, gzip)",
+  "mask": "ground20.mask.gz (Uint8, OR of the 2x2 ground10 mask bits)"
+ },
+ "layout": "row-major; row j centre z = z0 + (j + 0.5) * cell, col i centre x = x0 + (i + 0.5) * cell (project metres, x east, z south)",
+ "maskBits": {
+  "road": 1,
+  "feather": 2,
+  "bridgeDeck": 4,
+  "tunnel": 8,
+  "water": 16
+ },
+ "vertical": "NAVD88 metres (bare earth, road corridors conformed to the road surface - 0.15 m)",
+ "errorVsGround10": {
+  "rmsM": 0.565,
+  "rmsLandM": 0.67,
+  "maxAbsM": 45.83
+ },
+ "sampler": "tools/elevation/compact.mjs loadCompactGround().heightAt(x, z)",
+ "licence": "Derived from USGS 3DEP (public domain) and OpenStreetMap road data (ODbL 1.0)"
+}

@@ -1,0 +1,231 @@
+{
+ "format": "bay-roads-bin/1",
+ "tier": "local",
+ "classes": [
+  "tertiary",
+  "tertiary_link",
+  "unclassified",
+  "residential",
+  "living_street"
+ ],
+ "classIds": {
+  "motorway": 0,
+  "motorway_link": 1,
+  "trunk": 2,
+  "trunk_link": 3,
+  "primary": 4,
+  "primary_link": 5,
+  "secondary": 6,
+  "secondary_link": 7,
+  "tertiary": 8,
+  "tertiary_link": 9,
+  "unclassified": 10,
+  "residential": 11,
+  "living_street": 12
+ },
+ "source": "synthetic scenario (src/scenarios), same format as OpenStreetMap-built packs",
+ "projection": {
+  "type": "equirectangular",
+  "lat0": 37.55,
+  "lon0": -122.15,
+  "earthRadius": 6371008.8,
+  "metersPerDegLon": 88157.883,
+  "metersPerDegLat": 111195.0802,
+  "axes": "x = east (m), y = up (m, elevation baked in), z = south (m), north = -z",
+  "rightOfTravel": "for direction (dx,dz) the right-hand perpendicular is (-dz, dx)"
+ },
+ "laneWidth": 3.7,
+ "laneDefaults": {
+  "oneway": {
+   "tertiary": 1,
+   "tertiary_link": 1,
+   "unclassified": 1,
+   "residential": 1,
+   "living_street": 1
+  },
+  "twowayPerDirection": {
+   "tertiary": 1,
+   "tertiary_link": 1,
+   "unclassified": 1,
+   "residential": 1,
+   "living_street": 1
+  }
+ },
+ "defaultSpeedKph": {
+  "tertiary": 45,
+  "tertiary_link": 35,
+  "unclassified": 40,
+  "residential": 40,
+  "living_street": 15
+ },
+ "elevation": {
+  "model": "structures/2",
+  "deckPerLayer": 7,
+  "waterDeckMin": 20,
+  "crossingClearance": 7,
+  "minClearance": 4.5,
+  "maxGrade": {
+   "fw": 0.05,
+   "link": 0.06,
+   "art": 0.06,
+   "loc": 0.08
+  }
+ },
+ "laneWidthByClass": {
+  "tertiary": 3.3,
+  "tertiary_link": 3.3,
+  "unclassified": 3.1,
+  "residential": 3.1,
+  "living_street": 3
+ },
+ "laneModel": {
+  "throughLanes": true,
+  "classMaxPerDirection": {
+   "tertiary": 2,
+   "tertiary_link": 2,
+   "unclassified": 2,
+   "residential": 2,
+   "living_street": 1
+  },
+  "minRunMeters": {
+   "fw": 400,
+   "link": 300,
+   "art": 300,
+   "loc": 200
+  },
+  "accelLaneMeters": 300,
+  "taperMeters": 90
+ },
+ "file": "roads-local.bin",
+ "endianness": "little",
+ "edgeStride": 8,
+ "edgeFields": [
+  "firstNode",
+  "nodeCount",
+  "lanesFwd",
+  "lanesBack",
+  "classId",
+  "speedCmps",
+  "flags",
+  "twin"
+ ],
+ "edgeFieldDoc": {
+  "firstNode": "offset into poly[] of this edge's first node index (travel order)",
+  "nodeCount": "number of node indices in poly[] for this edge (>=2); from=poly[firstNode], to=poly[firstNode+nodeCount-1]",
+  "lanesFwd": "lanes in this edge's travel direction",
+  "lanesBack": "lanes in the opposite direction (0 if oneway)",
+  "classId": "index into meta.classIds / classesAll",
+  "speedCmps": "speed limit in cm/s (divide by 100 for m/s); class default if FLAG_SPEED_DEFAULT",
+  "flags": "bit set, see flagBits",
+  "twin": "edge id of the opposite direction of the same road, or 0xFFFFFFFF"
+ },
+ "flagBits": {
+  "ONEWAY": 1,
+  "BRIDGE": 2,
+  "TUNNEL": 4,
+  "LANES_FALLBACK": 8,
+  "SPEED_DEFAULT": 16,
+  "LINK": 32,
+  "LANES_CLAMPED": 64,
+  "LANES_SMOOTHED": 128,
+  "AUX_LANE": 256,
+  "LANE_DROP": 512
+ },
+ "classesAll": [
+  "motorway",
+  "motorway_link",
+  "trunk",
+  "trunk_link",
+  "primary",
+  "primary_link",
+  "secondary",
+  "secondary_link",
+  "tertiary",
+  "tertiary_link",
+  "unclassified",
+  "residential",
+  "living_street"
+ ],
+ "noTwin": 4294967295,
+ "laneOffsetFormula": "offset_k = ((lanesBack - lanesFwd)/2 + k + 0.5) * laneWidth, metres to the RIGHT of travel, k=0 is the leftmost lane",
+ "csrDoc": "outgoing edges of node n are csrEdges[csrOffsets[n] .. csrOffsets[n+1]); each is an edge id whose from-node is n",
+ "linkNodesDoc": "pairs (thisTierNodeIndex, mainTierNodeIndex) for nodes shared with roads.bin",
+ "json": "roads-local.json",
+ "generated": "1970-01-01T00:00:00Z",
+ "scenario": "sbend-s1",
+ "bbox": {
+  "minX": -350,
+  "maxX": 441.58,
+  "minZ": 0,
+  "maxZ": 45.39
+ },
+ "nodeCount": 45,
+ "edgeCount": 10,
+ "byteLength": 1556,
+ "sections": {
+  "nodeXYZ": {
+   "byteOffset": 0,
+   "byteLength": 540,
+   "type": "Float32",
+   "length": 135,
+   "stride": 3,
+   "count": 45
+  },
+  "edges": {
+   "byteOffset": 540,
+   "byteLength": 320,
+   "type": "Uint32",
+   "length": 80,
+   "stride": 8,
+   "count": 10
+  },
+  "poly": {
+   "byteOffset": 860,
+   "byteLength": 392,
+   "type": "Uint32",
+   "length": 98,
+   "stride": 1,
+   "count": 98
+  },
+  "edgeLength": {
+   "byteOffset": 1252,
+   "byteLength": 40,
+   "type": "Float32",
+   "length": 10,
+   "stride": 1,
+   "count": 10
+  },
+  "csrOffsets": {
+   "byteOffset": 1292,
+   "byteLength": 184,
+   "type": "Uint32",
+   "length": 46,
+   "stride": 1,
+   "count": 46
+  },
+  "csrEdges": {
+   "byteOffset": 1476,
+   "byteLength": 40,
+   "type": "Uint32",
+   "length": 10,
+   "stride": 1,
+   "count": 10
+  },
+  "edgeLaneWidth": {
+   "byteOffset": 1516,
+   "byteLength": 40,
+   "type": "Float32",
+   "length": 10,
+   "stride": 1,
+   "count": 10
+  },
+  "linkNodes": {
+   "byteOffset": 1556,
+   "byteLength": 0,
+   "type": "Uint32",
+   "length": 0,
+   "stride": 2,
+   "count": 0
+  }
+ }
+}

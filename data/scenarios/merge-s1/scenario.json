@@ -1,0 +1,85 @@
+{
+ "format": "bay-scenario/1",
+ "name": "merge-s1",
+ "family": "merge",
+ "seed": 1,
+ "params": {
+  "lanes": 4,
+  "accel": false,
+  "rate": 24,
+  "rampRate": 10,
+  "win": 600
+ },
+ "notes": [
+  "4-lane mainline, gore merge (no added lane)"
+ ],
+ "bbox": {
+  "minX": -1500,
+  "maxX": 1500,
+  "minZ": 0,
+  "maxZ": 150
+ },
+ "nodeCount": 90,
+ "edgeCount": 4,
+ "mainEdgeCount": 4,
+ "nodeNames": {
+  "start": 0,
+  "end": 2,
+  "ramp": 77
+ },
+ "trips": [
+  {
+   "count": 320,
+   "depart": [
+    25200,
+    25800
+   ],
+   "via": [],
+   "from": 0,
+   "to": 2
+  },
+  {
+   "count": 100,
+   "depart": [
+    25200,
+    25800
+   ],
+   "via": [],
+   "from": 77,
+   "to": 2
+  }
+ ],
+ "obstacles": [],
+ "tiles": [
+  {
+   "name": "merge-s1",
+   "family": "merge",
+   "seed": 1,
+   "params": {
+    "lanes": 4,
+    "accel": false,
+    "rate": 24,
+    "rampRate": 10,
+    "win": 600
+   },
+   "notes": [
+    "4-lane mainline, gore merge (no added lane)"
+   ],
+   "offset": [
+    0,
+    0
+   ],
+   "view": {
+    "x": -50,
+    "z": 20,
+    "span": 650
+   },
+   "bbox": {
+    "minX": -1500,
+    "maxX": 1500,
+    "minZ": 0,
+    "maxZ": 150
+   }
+  }
+ ]
+}

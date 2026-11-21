@@ -1,0 +1,74 @@
+{
+ "format": "bay-scenario/1",
+ "name": "lanes-s1",
+ "family": "lanes",
+ "seed": 1,
+ "params": {
+  "kind": "add",
+  "lanes": 2,
+  "freeway": true,
+  "rate": 14,
+  "win": 600
+ },
+ "notes": [
+  "2 -> 3 lanes (motorway)"
+ ],
+ "bbox": {
+  "minX": -1200,
+  "maxX": 1200,
+  "minZ": 0,
+  "maxZ": 0
+ },
+ "nodeCount": 61,
+ "edgeCount": 2,
+ "mainEdgeCount": 2,
+ "nodeNames": {
+  "start": 0,
+  "end": 2
+ },
+ "trips": [
+  {
+   "count": 140,
+   "depart": [
+    25200,
+    25800
+   ],
+   "via": [],
+   "from": 0,
+   "to": 2
+  }
+ ],
+ "obstacles": [],
+ "tiles": [
+  {
+   "name": "lanes-s1",
+   "family": "lanes",
+   "seed": 1,
+   "params": {
+    "kind": "add",
+    "lanes": 2,
+    "freeway": true,
+    "rate": 14,
+    "win": 600
+   },
+   "notes": [
+    "2 -> 3 lanes (motorway)"
+   ],
+   "offset": [
+    0,
+    0
+   ],
+   "view": {
+    "x": 0,
+    "z": 0,
+    "span": 450
+   },
+   "bbox": {
+    "minX": -1200,
+    "maxX": 1200,
+    "minZ": 0,
+    "maxZ": 0
+   }
+  }
+ ]
+}

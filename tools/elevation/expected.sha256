@@ -1,0 +1,32 @@
+# sha256 of the ORIGINAL project outputs (2026-10-24 build). data/build/elev/out = fresh rebuild; data/*.{bin,json.gz,meta.json} = committed copies.
+# controls: patch_points output = original data/pre-junction-fix/controls.* (the committed data/controls.* is the later tools/build_junctions.mjs output).
+a1aaa6c4b5a8fc84d34f93261639e40fdd8a3e97ab1ab3c653aa37541c2a668b  data/dem/ground/g13.f32
+9317bf7fd1e8585aafcb5db506de17f7c3db1b76dc5568f3ec3cb55b695d895b  data/dem/ground/g1m.f32
+0f7773c06cdfca8e84cf7e3b8b8ea82455819142ce8507b8a9d8ba3640366018  data/dem/ground/ground.json  ignore=generated
+73131063c262d7987f18fe71a1bf8acc9286f7c4e90263b0acbd4af73c7d8c85  data/dem/ground/ground10.f32
+b8e917da24dda12b50e026d0befac94158940eecdbf820cf60d8ca1da634ee58  data/dem/ground/ground10.mask
+4ecaa00b668c783e4ffbb53ff9ad8ec89842518560efdf064d17f048e7bb0fc1  data/dem/ground/ground10.json  ignore=generated,roads
+1a3dc075dc6bf7ffe6b5025dcda1cabffdab508cd9d342db4eb697d39f215ea1  data/build/elev/out/roads.bin
+66ca6f5e90c876cb9cbf249896ed3f176494f7b49f44595b59f2a60ce4019e13  data/build/elev/out/roads.json
+3b0744c13bbafe8ef3d93bf4262fdea09cd6526867ae2446b6fa935219fd1066  data/build/elev/out/roads.meta.json  ignore=heightsGenerated
+1a3dc075dc6bf7ffe6b5025dcda1cabffdab508cd9d342db4eb697d39f215ea1  data/roads.bin
+66ca6f5e90c876cb9cbf249896ed3f176494f7b49f44595b59f2a60ce4019e13  data/roads.json.gz
+3b0744c13bbafe8ef3d93bf4262fdea09cd6526867ae2446b6fa935219fd1066  data/roads.meta.json  ignore=heightsGenerated
+af3bf8fc84d2df1a9e22634ffb60dd4c0be5e0a3640f540e05250f17bac46b52  data/build/elev/out/roads-local.bin
+c3a53e8f8cfe87814384003a24316bbbf9343d5bc50122e6a88bb986d037f694  data/build/elev/out/roads-local.json
+916fd238dc0002d9aa2c6f48251d2ff4a890fb6d3e55c3aa2c68821dc4dcd86f  data/build/elev/out/roads-local.meta.json  ignore=heightsGenerated
+af3bf8fc84d2df1a9e22634ffb60dd4c0be5e0a3640f540e05250f17bac46b52  data/roads-local.bin
+c3a53e8f8cfe87814384003a24316bbbf9343d5bc50122e6a88bb986d037f694  data/roads-local.json.gz
+916fd238dc0002d9aa2c6f48251d2ff4a890fb6d3e55c3aa2c68821dc4dcd86f  data/roads-local.meta.json  ignore=heightsGenerated
+74dad6a36302ba071313a9581a6e233fdfa2774a794fe5668d2d99d6c19eb8ad  data/build/elev/out/stations.bin
+74dad6a36302ba071313a9581a6e233fdfa2774a794fe5668d2d99d6c19eb8ad  data/stations.bin
+9778c7f1443ff27bb5701497340c9f1eaed36fdd9f10c8ae544fd4e200e7f2ac  data/build/elev/out/stations.json
+9778c7f1443ff27bb5701497340c9f1eaed36fdd9f10c8ae544fd4e200e7f2ac  data/stations.json
+747c0e0e2a94cb8ebe0109bdae8b967f10f65d20d13cb78d4ee959964ed6552a  data/build/elev/out/stations.meta.json
+747c0e0e2a94cb8ebe0109bdae8b967f10f65d20d13cb78d4ee959964ed6552a  data/stations.meta.json
+e1bb80b9bac83a2a5c1dcde8024f77ee34108c97a179c352f518403aae1c7144  data/build/elev/out/controls.bin
+2f5a529385bc89b5ec4421d18b3fee7e182b28a193de928f9b18c9dba381a20f  data/build/elev/out/controls.json
+6cfd999d233233373a370106a6782c8fa6ddd3b0291c7abc492c343c0ddcfea5  data/build/elev/out/controls.meta.json
+# compact committed product (tools/elevation/build_compact.mjs, deterministic from ground10; hashes of the .gz CONTENT)
+ad5bd36d4bf75f2bbee585cfa39908f244ddf11c0d9b4525bfbe0be30ec09e90  data/dem/compact/ground20.dh16.gz
+6499438c480ca783ced99910a249ecb7cf86c652e6745c4a14a3aa95ca2b1037  data/dem/compact/ground20.mask.gz

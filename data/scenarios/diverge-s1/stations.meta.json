@@ -1,0 +1,39 @@
+{
+ "format": "bay-stations-bin/1",
+ "file": "stations.bin",
+ "byteLength": 0,
+ "endianness": "little",
+ "count": 0,
+ "sections": {
+  "stationXYZ": {
+   "byteOffset": 0,
+   "byteLength": 0,
+   "type": "Float32",
+   "length": 0,
+   "stride": 3,
+   "count": 0
+  },
+  "stationInfo": {
+   "byteOffset": 0,
+   "byteLength": 0,
+   "type": "Uint32",
+   "length": 0,
+   "stride": 4,
+   "count": 0
+  }
+ },
+ "stationInfoFields": [
+  "nodeIndex",
+  "tierId",
+  "pumps",
+  "flags"
+ ],
+ "tierIds": {
+  "main": 0,
+  "local": 1
+ },
+ "flagBits": {
+  "NEAR_INTERCHANGE": 1
+ },
+ "json": "stations.json"
+}

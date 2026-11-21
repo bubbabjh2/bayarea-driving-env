@@ -1,0 +1,63 @@
+{
+ "format": "bay-controls/1",
+ "count": 1,
+ "types": [
+  "signal",
+  "stop",
+  "give_way",
+  "ramp_meter",
+  "crossing_signal"
+ ],
+ "flagBits": {
+  "ALL_WAY": 1,
+  "RAMP_METER": 2,
+  "MIDBLOCK": 4
+ },
+ "edgeIds": "merged graph: main e, local mainEdgeCount + e (= src/sim fromRoadSet, src/geom)",
+ "mainEdgeCount": 8,
+ "byType": {
+  "stop": 1
+ },
+ "allWay": 1,
+ "midBlock": 0,
+ "source": "synthetic scenario (src/scenarios)",
+ "build": {},
+ "file": "controls.bin",
+ "json": "controls.json",
+ "byteLength": 68,
+ "sections": {
+  "controlInfo": {
+   "byteOffset": 0,
+   "byteLength": 24,
+   "type": "Uint32",
+   "length": 6,
+   "stride": 6,
+   "count": 1
+  },
+  "controlXYZ": {
+   "byteOffset": 24,
+   "byteLength": 12,
+   "type": "Float32",
+   "length": 3,
+   "stride": 3,
+   "count": 1
+  },
+  "approachEdge": {
+   "byteOffset": 36,
+   "byteLength": 16,
+   "type": "Uint32",
+   "length": 4,
+   "stride": 1,
+   "count": 4
+  },
+  "approachStopAt": {
+   "byteOffset": 52,
+   "byteLength": 16,
+   "type": "Float32",
+   "length": 4,
+   "stride": 1,
+   "count": 4
+  }
+ },
+ "stopLinesFrom": "data/junctions.bin mouthS (tools/build_junctions.mjs)"
+}
