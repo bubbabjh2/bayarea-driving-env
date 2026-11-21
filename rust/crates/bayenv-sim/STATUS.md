@@ -14,6 +14,7 @@ Rust port of the JS CPU sim (`src/sim`), bit-exact with it. Branch `rust-cpu`, m
 | fuel.js StationNetwork + nav/stations.js routeViaStation | `fuel.rs` | `StationNetwork::plan(&World, &mut dyn Router, from, goal)` (stable API, used by the GPU host) |
 | controls.js stateOf / movementOf + sim `_controlObs` | `extra.rs` | plans come from bayenv_world (TrafficControls) |
 | obs.js, perceive.js, obsLayout.js, gradeObs.js, junctionObs / oncomingObs | `obs.rs` | flat rows: 77 scalars (+358 v3) per slot, layout in the module doc |
+| training repo Driver.sense v2 (70 floats: eyes.js + adjustInputs + grade) | `obs_v2.rs` | `V2Encoder`; oracle `tools/rust/v2_oracle.mjs` (reads the private repo, read-only); call protocol in the module doc |
 | population.js generatePopulation (+ popParallel), scenarios/load.js scenarioPopulation | `population_gen.rs` | rayon, thread-count independent |
 | env.js TrainingEnv | `env.rs`, `vec_env.rs` | act / step(k) / reset; Python-shaped helpers (act_rows (N,3), observe_into, state_columns, crash_flags, stats), `Env::create_real` without node |
 | route.js makeRouter | **not here**: `bayenv_world::nav::Router` (lead) via `route_stub::NavRouter`; `route_stub::AStar` is the old local port, kept for A/B (BAYENV_ROUTER=stub) |
@@ -58,6 +59,13 @@ Not ported: events / tripLog (no effect on state), getStats string fields, the l
 * `fuel::Plan.detour_time` = via-station time - direct time (routeViaStation detourTime).
 
 ## Open items / ideas
+
+* matrix run with `--obs 1`: scenario:urban-s1 x random was killed (the JS trace with obs took > 20 min); its state
+  trace passed without obs. Rerun with fewer steps.
+* v2: refuel-stop completion and the junction-conflict inputs are barely exercised; route changes in the spawn step
+  before the first encode could differ (needs a spawn hook), see obs_v2.rs doc.
+* Events: `Env::take_records()` (bayenv_world EventLog, step-sorted) — counts checked against counters, not yet
+  row-by-row against the GPU.
 
 * Stationary-car fast path in `step_dynamics` (exact fixed point incl. signed zeros) — not done.
 * Spawn: the pending queue is retried every step (JS behaviour); at 100k / 07:00 this is ~10 % of a step.
