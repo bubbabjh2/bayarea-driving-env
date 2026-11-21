@@ -346,6 +346,8 @@ pub struct World {
     pub controls: Option<Controls>,
     pub stations: Vec<Station>,
     pub surfaces: bool,
+    /// per junction movement: sim._conflicts(m) (world conflicts + paths within 4.2 m), filled on first use
+    pub conf_ext: Vec<std::sync::OnceLock<Box<[Conflict]>>>,
     /// hop table: for edge e, entry k = hop to out_edges[out_start[e_to[e]] + k]
     hop_base: Vec<u32>, hops: Vec<Hop>,
     pub bounds: (f64, f64, f64, f64),
@@ -420,7 +422,7 @@ impl World {
             l_start: p.u32s("lStart"), lane_off: p.f64s("laneOff"),
             out_start: p.i32s("outStart"), out_edges: p.i32s("outEdges"), in_start: p.i32s("inStart"), in_edges: p.i32s("inEdges"),
             highway_names: names, max_speed: meta["maxSpeed"].as_f64().unwrap_or(0.0), banned_hops, contact_pairs, lg, j, controls, stations,
-            surfaces: meta["surfaces"].as_bool().unwrap_or(false), hop_base: Vec::new(), hops: Vec::new(),
+            surfaces: meta["surfaces"].as_bool().unwrap_or(false), hop_base: Vec::new(), hops: Vec::new(), conf_ext: Vec::new(),
             bounds: (b["minX"].as_f64().unwrap_or(0.0), b["maxX"].as_f64().unwrap_or(0.0), b["minZ"].as_f64().unwrap_or(0.0), b["maxZ"].as_f64().unwrap_or(0.0)),
         };
         w.build_hops();
@@ -482,7 +484,7 @@ impl World {
             contact_pairs: w.contact_pairs.as_ref().map(|c| c.set.iter().map(|&k| k as i64).collect()),
             lg: Some(lg), j, controls,
             stations: w.stations.iter().map(|s| Station { node: s.node as i32, pumps: s.pumps as i32, x: s.x, z: s.z }).collect(),
-            surfaces: w.surfaces, hop_base: Vec::new(), hops: Vec::new(),
+            surfaces: w.surfaces, hop_base: Vec::new(), hops: Vec::new(), conf_ext: Vec::new(),
             bounds: (g.bounds.min_x, g.bounds.max_x, g.bounds.min_z, g.bounds.max_z),
         };
         world.build_hops();
@@ -508,12 +510,13 @@ impl World {
             banned_hops: g.banned_hops.iter().map(|(&k, v)| (k as i64, v.iter().map(|&x| x as i32).collect())).collect(),
             contact_pairs: None, lg: None, j: None, controls: None,
             stations: w.stations.iter().map(|s| Station { node: s.node as i32, pumps: s.pumps as i32, x: s.x, z: s.z }).collect(),
-            surfaces: false, hop_base: Vec::new(), hops: Vec::new(),
+            surfaces: false, conf_ext: Vec::new(), hop_base: Vec::new(), hops: Vec::new(),
             bounds: (g.bounds.min_x, g.bounds.max_x, g.bounds.min_z, g.bounds.max_z),
         }
     }
 
     fn build_hops(&mut self) {
+        self.conf_ext = (0..self.j.as_ref().map_or(0, |j| j.move_count)).map(|_| std::sync::OnceLock::new()).collect();
         let ne = self.edge_count;
         let mut base = vec![0u32; ne + 1];
         for e in 0..ne { let t = self.e_to[e] as usize; base[e + 1] = base[e] + (self.out_start[t + 1] - self.out_start[t]) as u32; }

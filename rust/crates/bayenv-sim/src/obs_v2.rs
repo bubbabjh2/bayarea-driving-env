@@ -62,7 +62,7 @@
 //! ```
 use crate::jm;
 use crate::leaders::lane_end_ahead;
-use crate::obs::{observe_one, Obs};
+use crate::obs::{observe_one, observe_one_ro, Obs};
 use crate::physics::VEHICLE_PARAMS;
 use crate::sim::Sim;
 use crate::vehicle::STATE_DRIVING;
@@ -380,11 +380,43 @@ impl V2Encoder {
         let mut o = std::mem::take(&mut self.obs);
         observe_one(sim, i, &mut o, None);
         let sim: &Sim = sim;
-        let g = sim.g.clone();
+        let st = self.sync(sim, i);
+        encode_core(st, sim, i, &o, out);
+        self.obs = o;
+    }
+
+    /// encode_v2 for many driving slots (ascending, distinct) into rows of OBS2 floats: trip states synced in slot
+    /// order, then observation + encoding per car in parallel (opts.parallel; each car reads only shared state and
+    /// its own trip state), then the observations' state effects applied. Same result as encode_v2 slot by slot.
+    pub fn encode_batch(&mut self, sim: &mut Sim, slots: &[usize], out: &mut [f32]) {
+        assert!(out.len() >= slots.len() * OBS2);
+        for &i in slots { self.sync(sim, i); }
+        let me: &Sim = sim;
+        let mut states: Vec<&mut TripState> = Vec::with_capacity(slots.len());
+        {
+            let mut it = self.slots.iter_mut().enumerate();
+            for &i in slots { loop { let (k, s) = it.next().expect("encode_batch: slots must be ascending"); if k == i { states.push(s.as_mut().unwrap()); break; } } }
+        }
+        let job = |st: &mut TripState, i: usize, row: &mut [f32]| -> Option<i32> {
+            let mut o = Obs::default();
+            observe_one_ro(me, i, &mut o, None);
+            encode_core(st, me, i, &o, row);
+            o.yield_write
+        };
+        let writes: Vec<Option<i32>> = if me.opts.parallel && slots.len() >= 128 {
+            use rayon::prelude::*;
+            states.into_par_iter().zip(slots.par_iter()).zip(out[..slots.len() * OBS2].par_chunks_mut(OBS2)).with_min_len(16).map(|((st, &i), row)| job(st, i, row)).collect()
+        } else { states.into_iter().zip(slots.iter()).zip(out[..slots.len() * OBS2].chunks_mut(OBS2)).map(|((st, &i), row)| job(st, i, row)).collect() };
+        for (k, w) in writes.into_iter().enumerate() { if let Some(v) = w { sim.set_yield_by(slots[k], v); } }
+    }
+}
+
+/// Driver.sense on an observation already filled for slot i (the 70 floats into out[..70]).
+fn encode_core(st: &mut TripState, sim: &Sim, i: usize, o: &Obs, out: &mut [f32]) {
+        let g = sim.gw();
         let delta = &sim.pop.deltas[sim.vs.commuter[i] as usize * 64..sim.vs.commuter[i] as usize * 64 + 4];
         let (aggression, patience, reaction_time, headway) = (delta[0] as f64, delta[1] as f64, delta[2] as f64, delta[3] as f64);
         let dt = sim.dt;
-        let st = self.sync(sim, i);
         let rd = o.route_distance;
         // guidance + refuel stop completion (Driver.sense; stopDwell 0)
         let mut ga = st.guide.at(rd);
@@ -517,8 +549,6 @@ impl V2Encoder {
         if right_exists && right_end < f64::INFINITY { put(inp, 4, jm::max(0.0, right_end - half)); }
         // position mode, input version 2: road grade in 41..43
         for k in 0..3 { let x = o.grade[k] / 0.35; inp[WHEEL_OFFSET + k] = (if x > 1.0 { 1.0 } else if x < -1.0 { -1.0 } else { x }) as f32; }
-        self.obs = o;
-    }
 }
 
 // ---------------------------------------------------------------- differential check (tools/rust/v2_oracle.mjs)
@@ -550,17 +580,26 @@ pub fn check_v2(dir: &str, max: usize, state_check: bool) -> V2Check {
     let mut row = [0f32; OBS2];
     let (mut ns, mut ons) = (0u128, 0u128);
     let mut tmp = Obs::default();
+    let batch = std::env::var("BAYENV_V2_BATCH").map(|v| !v.is_empty()).unwrap_or(false);
+    let mut batch_rows: Vec<f32> = Vec::new();
     'outer: for k in 1..=steps {
         pol.act(&mut env);
         enc.record_actions(&env.sim);
         env.step(1);
         let slots = crate::obs::driving_slots(&env.sim);
+        if batch { batch_rows.resize(slots.len() * OBS2, 0.0); }
         let recorded = k % every == 0;
         if recorded && vn[rec] as usize != slots.len() {
             res.mismatches.push(V2Mismatch { step: k, slot: usize::MAX, index: usize::MAX, js: vn[rec] as f32, rust: slots.len() as f32 });
             res.steps = k; break;
         }
+        if batch {
+            let t = std::time::Instant::now();
+            enc.encode_batch(&mut env.sim, &slots, &mut batch_rows[..]);
+            ns += t.elapsed().as_nanos(); res.encodes += slots.len();
+        }
         for (r, &i) in slots.iter().enumerate() {
+            if batch { row.copy_from_slice(&batch_rows[r * OBS2..(r + 1) * OBS2]); if !recorded { continue; } } else {
             let t = std::time::Instant::now();
             enc.encode_v2(&mut env.sim, i, &mut row);
             ns += t.elapsed().as_nanos(); res.encodes += 1;
@@ -568,6 +607,7 @@ pub fn check_v2(dir: &str, max: usize, state_check: bool) -> V2Check {
             let t = std::time::Instant::now();
             observe_one(&mut env.sim, i, &mut tmp, None);
             ons += t.elapsed().as_nanos();
+            }
             let q = off + r;
             if vslot[q] as usize != i { res.mismatches.push(V2Mismatch { step: k, slot: i, index: usize::MAX, js: vslot[q] as f32, rust: i as f32 }); res.steps = k; break 'outer; }
             for d in 0..OBS2 {
