@@ -151,6 +151,9 @@ pub struct GpuSim {
     /// route-word packer (packRoutes with the per-hop maneuver table)
     pub packer: Option<Arc<crate::pack::RoutePacker>>,
     staging: wgpu::Buffer,
+    out_staging: Option<wgpu::Buffer>,
+    /// a submitted batch whose readback / events are processed lazily (`run_steps_async`, `sync`)
+    pending: Option<Pending>,
     io_host: Vec<u32>,
 }
 
@@ -160,6 +163,8 @@ struct CrashX { other: u32, pre_a: f64, pre_b: f64, x: f64, z: f64, nx: f64, nz:
 struct Reroute { slot: u32, edge: u32, trip: i32, missed: bool, slow: bool, rp: u32, prefix: i64, t: f64 }
 
 const NONE: u32 = 0xFFFF_FFFF;
+/// events copied with the io header in every readback (more are fetched only when written)
+const EV_FAST: usize = 1024;
 const LANE_W: f64 = 3.7;
 
 fn f32bits(x: f64) -> u32 { (x as f32).to_bits() }
@@ -167,8 +172,11 @@ fn bf(u: u32) -> f64 { f32::from_bits(u) as f64 }
 
 impl GpuSim {
     /// Build on the given world + packed blob (see `crate::pack::build_world_blob`).
-    pub fn with_blob(world: Arc<World>, blob: WorldBlob, opts: GpuOptions) -> Result<GpuSim, String> {
-        let mut gpu = Gpu::new()?;
+    pub fn with_blob(world: Arc<World>, blob: WorldBlob, opts: GpuOptions) -> Result<GpuSim, String> { Self::with_blob_on(Gpu::new()?, world, blob, opts) }
+
+    /// As `with_blob` on a given context (e.g. `other_sim.gpu.share()`: several sims on one device).
+    pub fn with_blob_on(gpu: Gpu, world: Arc<World>, blob: WorldBlob, opts: GpuOptions) -> Result<GpuSim, String> {
+        let mut gpu = gpu;
         let cap = opts.capacity;
         let obs_size = opts.obs.size();
         let use_j = blob.j_m.is_some() && opts.junctions;
@@ -231,9 +239,10 @@ impl GpuSim {
             refuel_queue: Vec::new(), reroute_queue: Default::default(), last_reroute: HashMap::new(), lot: 0, new_pose: false, crashes: Vec::new(), active: Vec::new(),
             counters: Counters::default(), gpu_stats: [0; 64], events: Vec::new(), closed_key: None, closed_n: 0, closed_edges: Vec::new(),
             edge_speed_ema: HashMap::new(), edge_speed_order: Vec::new(), traffic_penalty: HashMap::new(), penalty_order: Vec::new(), pending_penalty: None, next_traffic: -1e9,
-            router: None, packer: None, staging, io_host: vec![0; io_words], blob, gpu, opts,
+            router: None, packer: None, out_staging: None, pending: None, staging, io_host: vec![0; io_words], blob, gpu, opts,
         };
         if !use_j { sim.blob.j_m = None; }
+        sim.blob.words = Vec::new();   // uploaded: no host copy kept (block writes go straight to the GPU)
         sim.ensure_routes(1 << 16);
         sim.compile()?;
         sim.make_bind_groups();
@@ -445,8 +454,22 @@ impl GpuSim {
     }
 
     /// Run n sim steps in one submit, then read back stats + events and process them (host side).
-    pub fn run_steps(&mut self, n: usize) {
-        if n == 0 { return; }
+    pub fn run_steps(&mut self, n: usize) { self.run_steps_into(n, None, None); }
+
+    /// `run_steps(n)` plus, in the same submit, a copy of the observation rows (`obs.len() / obs_size` slots) and/or
+    /// the first `veh.len() / VEH_WORDS` vehicle records into the caller's buffers: one GPU round trip per call.
+    pub fn run_steps_into(&mut self, n: usize, obs: Option<&mut [f32]>, veh: Option<&mut [u32]>) {
+        self.sync();
+        if n == 0 { if let Some(o) = obs { self.read_into("inputs", 0, bytemuck::cast_slice_mut(o)); } if let Some(v) = veh { self.read_into("veh", 0, bytemuck::cast_slice_mut(v)); } return; }
+        let p = self.submit_steps(n, obs.as_ref().map_or(0, |o| o.len()), veh.as_ref().map_or(0, |v| v.len()));
+        self.gpu.device.poll(wgpu::PollType::wait_indefinitely()).expect("poll");
+        self.finish_steps(p, obs, veh);
+    }
+
+    /// First half of `run_steps_into`: host work, encode, submit, map requests (no wait). Call `finish_steps`
+    /// after the device was polled (several sims on one device: submit all, poll once, finish all).
+    pub fn submit_steps(&mut self, n: usize, obs_floats: usize, veh_words: usize) -> Pending {
+        self.sync();
         let t_end = self.time + n as f64 * self.dt;
         self.scenes();
         self.process_refuels();
@@ -458,24 +481,65 @@ impl GpuSim {
         let op_count = self.flush_ops();
         self.write_params(op_count);
         let mut enc = self.gpu.device.create_command_encoder(&Default::default());
-        self.encode(&mut enc, n, op_count);
-        enc.copy_buffer_to_buffer(&self.gpu.get("io"), 0, &self.staging, 0, (self.io_words * 4) as u64);
+        if n > 0 { self.encode(&mut enc, n, op_count); }
+        // io: header + the first EV_FAST events (the rest, rarely needed, is read after the map)
+        let fast = (io::EVDATA + 4 * EV_FAST.min(self.opts.ev_cap)) * 4;
+        enc.copy_buffer_to_buffer(&self.gpu.get("io"), 0, &self.staging, 0, fast as u64);
         enc.clear_buffer(&self.gpu.get("io"), (io::EVCOUNT * 4) as u64, Some(4));
+        let (ob4, vb4) = (obs_floats * 4, veh_words * 4);
+        if ob4 + vb4 > 0 {
+            if self.out_staging.as_ref().map_or(true, |b| b.size() < (ob4 + vb4) as u64) {
+                self.out_staging = Some(self.gpu.device.create_buffer(&wgpu::BufferDescriptor { label: Some("outStaging"), size: (ob4 + vb4) as u64, usage: wgpu::BufferUsages::MAP_READ | wgpu::BufferUsages::COPY_DST, mapped_at_creation: false }));
+            }
+            let os = self.out_staging.as_ref().unwrap();
+            if ob4 > 0 { enc.copy_buffer_to_buffer(&self.gpu.get("inputs"), 0, os, 0, ob4 as u64); }
+            if vb4 > 0 { enc.copy_buffer_to_buffer(&self.gpu.get("veh"), 0, os, ob4 as u64, vb4 as u64); }
+        }
         self.gpu.queue.submit([enc.finish()]);
         self.time = t_end; self.step += n as u64;
         if sampled { if let Some((p, o)) = self.pending_penalty.take() { self.traffic_penalty = p; self.penalty_order = o; } }
-        // readback (only the stats + the events actually written)
-        let st = self.staging.slice(..);
-        st.map_async(wgpu::MapMode::Read, |r| r.expect("map io"));
-        self.gpu.device.poll(wgpu::PollType::wait_indefinitely()).expect("poll");
+        self.staging.slice(..fast as u64).map_async(wgpu::MapMode::Read, |r| r.expect("map io"));
+        if ob4 + vb4 > 0 { self.out_staging.as_ref().unwrap().slice(..(ob4 + vb4) as u64).map_async(wgpu::MapMode::Read, |r| r.expect("map out")); }
+        Pending { fast, ob4, vb4 }
+    }
+
+    /// Submit n steps and return without waiting; the readback and events are processed by the next call that
+    /// needs them (`sync`, any `run_steps*`, `submit_steps`). Same results as `run_steps(n)`.
+    pub fn run_steps_async(&mut self, n: usize) {
+        let p = self.submit_steps(n, 0, 0);
+        self.pending = Some(p);
+    }
+    /// Finish a `run_steps_async` batch (wait for it, ingest its events). No-op when nothing is pending.
+    pub fn sync(&mut self) {
+        if let Some(p) = self.pending.take() {
+            self.gpu.device.poll(wgpu::PollType::wait_indefinitely()).expect("poll");
+            self.finish_steps(p, None, None);
+        }
+    }
+
+    /// Second half: read the mapped io / outputs, process events.
+    pub fn finish_steps(&mut self, p: Pending, obs: Option<&mut [f32]>, veh: Option<&mut [u32]>) {
+        let cnt;
         {
-            let m = st.get_mapped_range().expect("io range");
+            let m = self.staging.slice(..p.fast as u64).get_mapped_range().expect("io range");
             let words: &[u32] = bytemuck::cast_slice(&m);
-            let cnt = (words[io::EVCOUNT] as usize).min(self.opts.ev_cap);
-            let used = io::EVDATA + 4 * cnt;
+            cnt = (words[io::EVCOUNT] as usize).min(self.opts.ev_cap);
+            let used = (io::EVDATA + 4 * cnt).min(p.fast / 4);
             self.io_host[..used].copy_from_slice(&words[..used]);
         }
         self.staging.unmap();
+        if cnt > EV_FAST {   // event data is still in the io buffer (only the count was cleared)
+            let (a, b) = (io::EVDATA + 4 * EV_FAST, io::EVDATA + 4 * cnt);
+            let mut rest = vec![0u32; b - a]; self.gpu.read_into("io", (a * 4) as u64, bytemuck::cast_slice_mut(&mut rest));
+            self.io_host[a..b].copy_from_slice(&rest);
+        }
+        if p.ob4 + p.vb4 > 0 {
+            let os = self.out_staging.as_ref().unwrap();
+            { let m = os.slice(..(p.ob4 + p.vb4) as u64).get_mapped_range().expect("out range");
+              if let Some(o) = obs { bytemuck::cast_slice_mut::<f32, u8>(o).copy_from_slice(&m[..p.ob4]); }
+              if let Some(v) = veh { bytemuck::cast_slice_mut::<u32, u8>(v).copy_from_slice(&m[p.ob4..p.ob4 + p.vb4]); } }
+            os.unmap();
+        }
         self.ingest();
     }
 
@@ -932,6 +996,10 @@ impl GpuSim {
         out[16] = f(t.l); out[17] = f(t.max_steer); out[18] = f(t.max_steer_rate); out[19] = f(t.vmax);
     }
 }
+
+/// An in-flight `submit_steps` (byte sizes of the mapped ranges).
+#[derive(Clone, Copy, Debug)]
+pub struct Pending { fast: usize, ob4: usize, vb4: usize }
 
 #[derive(Clone, Debug)]
 pub struct ScatterInfo { pub placed: usize, pub tries: usize, pub route_words: usize, pub min_rank: u8, pub spacing: f64, pub pool: usize }

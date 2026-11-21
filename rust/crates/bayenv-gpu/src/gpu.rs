@@ -47,6 +47,10 @@ impl Gpu {
         device.on_uncaptured_error(Arc::new(|e| eprintln!("wgpu error: {e}")));
         Ok(Gpu { adapter_info: adapter.get_info(), device, queue, limits, buffers: HashMap::new(), staging: Default::default() })
     }
+    /// A second context on the same device / queue (own buffer registry): several sims on one GPU.
+    pub fn share(&self) -> Gpu {
+        Gpu { device: self.device.clone(), queue: self.queue.clone(), adapter_info: self.adapter_info.clone(), limits: self.limits.clone(), buffers: HashMap::new(), staging: Default::default() }
+    }
     pub fn adapter_name(&self) -> String { format!("{} ({:?})", self.adapter_info.name, self.adapter_info.backend) }
 
     /// Create (or replace) a named buffer; size rounded up to 4 and >= 16 (as device.js).
