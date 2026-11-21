@@ -21,3 +21,6 @@ data/lines*
 data/src/flat/roads.json
 data/src/flat/roads-local.json
 data/src/flat/controls.json
+
+# verify-only traffic-control datasets (no licence stated: fetched, never committed; tools/controls/sources.json)
+data/controls-src/verify/

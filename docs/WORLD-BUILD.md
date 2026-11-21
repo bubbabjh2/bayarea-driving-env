@@ -11,7 +11,7 @@ the ODbL. Elevation: U.S. Geological Survey, 3D Elevation Program (public domain
 | `data/water.json` | yes | `tools/build_water.py` | OSM `coast` |
 | `data/roads{,-local}.{bin,meta.json}`, `.json.gz` | yes | `tools/build_roads.py` (flat) → elevation step (`build_heights`) | OSM roads + local tiles, `water.json`, DEM |
 | `data/stations.*` | yes | `tools/build_stations.py` (synthetic, seed 7) → elevation `patch_points` | roads |
-| `data/controls.{bin,meta.json}`, `.json.gz` | yes | `tools/build_controls.py` → `patch_points` (y) → `build_junctions.mjs` (stop lines) | OSM controls + road inputs |
+| `data/controls.{bin,meta.json}`, `.json.gz` | yes | `tools/build_controls.py` (flat) → `tools/controls/merge.py` (DataSF + San Jose) → `patch_points` (y) → `build_junctions.mjs` (stop lines); all of it `npm run build:controls` | OSM controls (`data/src/flat/controls.*`), `data/controls-src/` |
 | `data/crosswalks.json` | yes | `tools/build_crosswalks.py` | OSM `crossings` |
 | `data/crossings.json` | yes | `tools/build_crossings.py` | terrain roads JSON |
 | `data/junctions.{bin,meta.json}` | **no** (198 MB) | `tools/build_junctions.mjs` (~90 s, ~10 GB heap) | roads, controls, crosswalks |
@@ -54,13 +54,22 @@ Steps in the original order:
 7. elevation (README, `npm run build:elevation`): `build_heights` (flat → terrain roads in `data/`), `patch_points`
    (controls + stations y)
 8. `python3 -I tools/build_crossings.py data`
-9. `node tools/build_junctions.mjs data/` (also writes the junction-mouth stop lines into `data/controls.*`)
-10. `node tools/lines/build_lines.mjs data`
+9. `npm run build:controls` (`tools/controls/build.mjs`): `tools/controls/merge.py` merges the authoritative
+   signal / stop-sign datasets into the flat OSM controls (`data/src/flat/controls.*`, or pass `--in data/osm/flat`)
+   → `patch_points.mjs data` (y) → `build_junctions.mjs data/` (junction-mouth stop lines, crosswalk legs)
+   → `build_lines.mjs data` → `verify:world`. See `tools/controls/README.md`.
 
 `node tools/osm/verify.mjs --flat data/osm/flat` compares every output with the original project's hashes
 (`tools/osm/world-manifest.json`; `flat/*` = the flat build of step 3–5).
 
 ## Verification against the original project (2026-11-20)
+
+Since the traffic-control merge (tools/controls/), `controls.*`, `junctions.bin` and `lines*.bin` differ from the
+original by design; `tools/osm/world-manifest.json` keeps the original hashes as `baselines.osm-only`.
+`node tools/controls/build.mjs --osm-only` rebuilds the OSM-only world: `junctions.bin` and `lines-geom.bin` are
+bit-exact; `controls.*` and `lines.bin` differ in 17 approach stop lines (14 controls, 0.6–7.7 m) on edges without
+a junction mouth, where the original kept values from an older junction build (`baselines.osm-only-rebuild`).
+`npm run build:controls` twice in a row gives identical hashes. The tables below are the pre-merge verification.
 
 Deterministic steps, rebuilt in a scratch copy of this repo's `data/` and hashed against the original:
 

@@ -8,7 +8,9 @@ Every car is driven by actions you supply.
 * Real road network: ~2 tiers (freeways/arterials + local streets), per-lane geometry, junction connectors,
   lane ends / merges / weaves, ramps, bridges, tunnels, stacked decks.
 * Real terrain: road heights from USGS 3DEP (1 m lidar in SF, 1/3" elsewhere), grades up to ~41 % in SF.
-* Traffic controls from OSM: signals (with generated plans), stop / give-way signs, ramp meters, crossings.
+* Traffic controls: OSM signals, stop / give-way signs and ramp meters, merged with the authoritative SFMTA (signals,
+  stop signs) and San Jose (signals) inventories; every control records its source. Signal timing is generated
+  (synthetic), not real (see "Traffic controls").
 * Physics, not rules: dynamic bicycle model with tyres, friction circle, weight transfer, ABS/EBD, aero,
   grade; swept-SAT rigid-body contacts; crash severity = per-vehicle delta-v; incidents block lanes and get
   cleared / towed on realistic timelines; fuel and gas stations.
@@ -85,6 +87,47 @@ Local frame: metres, **x = east, z = south, y = up** (NAVD88 metres, bare-earth)
 37.55 N, 122.15 W (`src/proj.js` converts to/from lat/lon). Heading = atan2(dz, dx). Right-hand traffic,
 lane 0 = rightmost.
 
+## Traffic controls
+
+`data/controls.*` holds 39,631 controls: 13,578 signals (3,583 of them mid-block pedestrian signals), 23,218 stops,
+2,313 give-ways and 522 ramp meters. They come from OSM, merged with authoritative city data by `npm run build:controls`
+(`tools/controls/README.md`). Each record carries:
+* `source`: `osm`, `osm+<dataset>` or `<dataset>`.
+* `verified`: `true` (matched to an authoritative record), `false` (in the dataset's area but not in it; kept, because
+  inventories omit Caltrans signals) or `null` (no authoritative data there).
+* `timing: "synthetic"` on every signal and ramp meter.
+
+Only openly licensed data is merged: DataSF (PDDL) and San Jose (CC BY). Five cities publish data with no licence, so
+those datasets are only used to measure known gaps.
+
+| city | dataset (role) | signals: confirmed / added / unplaced / OSM-only | stop signs |
+|---|---|---|---|
+| San Francisco | SFMTA signals + stop signs (merge) | 1,229 / 32 / 50 / 85 | 2,026 OSM stop controls confirmed, 1,823 added, 2,696 approaches added, 135 OSM-only removed |
+| San Jose | City Owned Traffic Signals (merge) | 757 / 51 / 163 / 145 | none published |
+| Oakland | TrafficSignals (verify only) | 621 / known missing 74 / 35 / 53 | none published |
+| South San Francisco | Traffic_Signals_View (verify only) | 109 / known missing 12 / 14 / 27 | none published |
+| Emeryville | Traffic_Signals_View (verify only) | 30 / known missing 3 / 3 / 17 | none published |
+| Mountain View | Signal poles (verify only) | 116 / known missing 4 / 9 / 54 | none published |
+| Cupertino | Signal heads + signs (verify only) | 68 / 0 / 6 / 7 | 171 sign records confirmed, 415 known missing |
+
+What the columns mean:
+* *unplaced*: the record has no graph junction within 30 m. Most of San Jose's are east of the map edge (−121.80°).
+* *OSM-only*: an OSM signal with no record within 50 m. These are kept and flagged.
+* Validation: 23 of 24 sampled intersections match. The one miss is an Oakland signal on the known-missing list
+  (`tools/controls/report/validation.txt`).
+
+No authoritative source was found for Palo Alto, Sunnyvale, Santa Clara, Redwood City, San Mateo, Menlo Park,
+Burlingame, San Bruno, Millbrae, Daly City, Belmont, San Carlos, Foster City, Los Altos, Milpitas, Fremont, Newark,
+Union City, Hayward, San Leandro, Alameda or Berkeley. Caltrans has no state-highway signal or ramp-meter layer. In all
+of these places the controls are OSM only.
+
+Signals are assigned per approach edge (all lanes of that edge). The fixed-time plans use two axes, protected lefts
+on big arterials, ITE yellow, a 1.5 s all-red and a green wave; ramp meters run 06:00–10:00.
+
+`src/look/signals.js` is an optional three.js helper that draws heads, poles, mast arms and STOP/YIELD plates at
+every stop line, driven by the sim's signal states. The env never imports it, and its **shape is generic**: the same
+pole/arm/head everywhere, not surveyed. It needs `three` (`npm i three` or an import map; see `tools/controls/README.md`).
+
 ## Rebuilding the world
 
 Everything committed under `data/` can be regenerated and checked against pinned hashes:
@@ -94,8 +137,9 @@ Everything committed under `data/` can be regenerated and checked against pinned
   road-conformed 10 m ground and the compact grid; `npm run verify:elevation` hashes all outputs. Verified
   bit-identical to the original project.
 * **Derived world** (`docs/WORLD-BUILD.md`): `npm run unpack && npm run build:world-derived` rebuilds crossings,
-  junctions and lane markings from the committed packs; `npm run verify:world` checks them against the original
-  project's sha256 (junctions.bin, lines.bin, lines-geom.bin, crossings.json: bit-identical).
+  the traffic controls (`npm run build:controls`: authoritative merge, junctions, lane markings) from the committed
+  packs and snapshots; `npm run verify:world` checks every file against `tools/osm/world-manifest.json` (rebuilds are
+  bit-identical; the original project's OSM-only hashes are kept as `--baseline osm-only`).
 * **From OSM** (`npm run build:osm`): pinned Overpass queries with attic dates, sha256 lockfile
   (`tools/osm/osm-lock.json`). water.json and crosswalks.json rebuild bit-identically. The flat road tier
   does **not**: the original was fetched from an Overpass mirror whose database was internally inconsistent
@@ -110,7 +154,9 @@ Everything committed under `data/` can be regenerated and checked against pinned
   junction-box conflicts ~45 %, unseen wrecks ~37 % of collapse causes; partly fixed in layout v8).
 * Road geometry residuals: 3 lane-count jumps, 24 open weaves, 39 ramp overlaps (OSM crossings), 13 stacked
   SoMa/YBI ramp segments over the grade limit.
-* Signal timing plans are **synthetic** (generated per junction), not real city timing.
+* Signal timing plans are **synthetic**: fixed-time plans generated per junction (`src/sim/controls.js`). No city
+  publishes timing plans, and there are no flashing/beacon states. Signal and stop locations are authoritative only
+  in San Francisco and San Jose; elsewhere they are OSM, with known gaps (see "Traffic controls").
 * The reaction-time delay (up to 1.8 s) makes naive controllers unstable; plan for it.
 * With no built-in driver, the sim's deadlock breaker / IDM-related options are inert, and every car must be
   driven by your policy (expensive at full scale on CPU: use the GPU sim).
