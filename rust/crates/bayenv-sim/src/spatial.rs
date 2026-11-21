@@ -64,6 +64,11 @@ impl SpatialHash {
         }
     }
     /// Collect forEachNear results (the JS callbacks never touch the hash, so collecting first is equivalent).
+    /// near_into keeping only slots > `after` (same order as near_into's filtered list)
+    pub fn near_after_into(&self, vs_x: &[f32], vs_z: &[f32], x: f64, z: f64, r: f64, after: usize, out: &mut Vec<usize>) {
+        out.clear();
+        self.for_each_near(vs_x, vs_z, x, z, r, |i| { if i > after { out.push(i); } true });
+    }
     pub fn near_into(&self, vs_x: &[f32], vs_z: &[f32], x: f64, z: f64, r: f64, out: &mut Vec<usize>) {
         out.clear();
         self.for_each_near(vs_x, vs_z, x, z, r, |i| { out.push(i); true });
@@ -108,10 +113,10 @@ impl LaneIndex {
     }
     pub fn rebuild(&mut self, vs: &VehicleStore) {
         let high = vs.high;
-        let mut total = 0usize;
-        for i in 0..high { let st = vs.state[i]; if st == STATE_DRIVING || st == STATE_CRASHED { total = (total as i64 + vs.lane_hi[i] as i64 - vs.lane_lo[i] as i64 + 1) as usize; } }
-        if self.order.len() < total { self.order = vec![0; total * 2]; }
-        if self.touched.len() < total { self.touched.resize(total * 2, 0); }
+        // at most MAX_OCC lane entries per indexed car: size by that bound (no counting pass)
+        let total = high * MAX_OCC as usize;
+        if self.order.len() < total { self.order = vec![0; total]; }
+        if self.touched.len() < total { self.touched.resize(total, 0); }
         if self.ent_pos.len() < high * MAX_OCC as usize { self.ent_pos = vec![0; high * MAX_OCC as usize * 2]; }
         for q in 0..self.n_touched { let k = self.slot(self.touched[q] as usize); self.lstart[k] = 0; self.lend[k] = 0; }
         let mut nt = 0usize;

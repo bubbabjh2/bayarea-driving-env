@@ -97,9 +97,8 @@ impl Sim {
             let sweep_i = jm::hypot(f(vs.x[i]) - f(vs.px[i]), f(vs.z[i]) - f(vs.pz[i]));
             let hd_i = jm::hypot(f(vs.hl[i]), f(vs.hw[i]));
             let (xi, zi, yi) = (f(vs.x[i]), f(vs.z[i]), f(vs.y[i]));
-            self.hash.near_into(&vs.x, &vs.z, xi, zi, hd_i + 6.5 + sweep_i + 5.0, &mut cand);
+            self.hash.near_after_into(&vs.x, &vs.z, xi, zi, hd_i + 6.5 + sweep_i + 5.0, i, &mut cand);
             for &j in cand.iter() {
-                if j <= i { continue; }
                 let vs = &self.vs;
                 let sj = vs.state[j];
                 if sj != STATE_DRIVING && sj != STATE_CRASHED { continue; }
