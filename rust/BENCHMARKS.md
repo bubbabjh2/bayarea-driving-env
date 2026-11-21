@@ -130,3 +130,70 @@ other sessions (load average 12-21), so times are noisy (repeat-run spread ~±15
 Per-call cost of a synchronous step at 10k cars: ~0.4 ms on top of the GPU time (host prep, submit, completion latency).
 At 100k cars the 28 MB observation copy (GPU -> staging -> numpy) dominates `step_observe` (~3 ms); `step(k)` without
 observations returns after the submit.
+
+## Observation readback (rust-obs: zero-copy views, lag=1 / async, float16)
+
+`crates/bayenv-py/examples/bench_loop.py` (scatter, seed 11, gas 0.3, capacity = cars, M4 Max). The observation
+variants are timed round robin (blocks of 10 calls in turn, min over 30 blocks; the step cost drifts as traffic
+evolves, so sequential timings of different variants are not comparable), best of 3 runs; "before" is the previous
+build (c409813) run alternately with the same script. The machine was shared (load average 6-12).
+
+| call | 10k before | 10k after | 100k before | 100k after |
+|---|---|---|---|---|
+| `act` + `step(1)` + `sync()` (no observation) | 0.82 ms | 0.85 ms | 3.61 ms | 3.69 ms |
+| `observe(out=)` | 0.175 ms | 0.187 ms | 0.675 ms | 0.690 ms |
+| `observe(copy=False)` (zero-copy view) | | 0.146 ms | | 0.304 ms |
+| `step_observe(A, 1, out=)` (default path, bit-identical) | 0.90 ms | 0.93 ms | 4.27 ms | 4.29 ms |
+| `step_observe(A, 1, copy=False)` | | 0.89 ms | | 3.89 ms |
+| `step_observe(A, 1, out=, lag=1)` | | 0.89 ms | | 3.78 ms |
+| `step_observe(A, 1, copy=False, lag=1)` | | 0.85 ms | | 3.41 ms |
+| `step_async(A, 1)` + `observe_wait(copy=False)` | | 0.88 ms | | 3.52 ms |
+| `step_observe(A, 1, out=f16, dtype="float16")` | | 0.93 ms | | 4.02 ms |
+| `step_observe(A, 1, copy=False, dtype="float16")` | | 0.90 ms | | 3.97 ms |
+| policy stand-in (`obs.sum()`, ~0.7 ms at 100k) + `step_observe(A, 1, out=)` | 0.98 ms | 1.03 ms | 4.99 ms | 5.13 ms |
+| policy stand-in + `step_observe(A, 1, copy=False)` | | 0.96 ms | | 4.72 ms |
+| policy stand-in + `step_observe(A, 1, copy=False, lag=1)` | | 0.84 ms | | 3.86 ms |
+
+VecEnv `step_observe(A, 1)` per call (bench_loop.py VecEnv section, sequential, best of 3):
+
+| | before (`out=`) | after `out=` | after `copy=False` | after `out=, lag=1` |
+|---|---|---|---|---|
+| 1 x 10k | 1.70 ms | 1.10 ms | 1.05 ms | 0.91 ms |
+| 4 x 10k | 3.62 ms | 3.24 ms | 2.95 ms | 2.96 ms |
+| 8 x 10k | 6.26 ms | 6.22 ms | 5.71 ms | 5.79 ms |
+| 16 x 2.5k | 8.54 ms | 8.55 ms | 8.24 ms | 8.29 ms |
+| 4 x 25k | 5.44 ms | 5.38 ms | 4.88 ms | 4.77 ms |
+
+Where the time went at 100k (`observe` microbenchmarks): submit + wait round trip ~0.25 ms, the 28 MB host memcpy into
+numpy ~0.4-0.5 ms, the 28 MB GPU copy `inputs` -> MAP_READ buffer < 0.05 ms (`step_observe(copy=False)` is within
+~0.05-0.2 ms of a bare step). So:
+
+* The zero-copy view removes the memcpy (-0.4 ms at 100k). On Metal a mapped wgpu buffer is `MTLBuffer.contents`
+  (shared storage) and `unmap` is a no-op, so the view stays valid memory for the lifetime of the buffer (held by the
+  view's `base`); its contents change once the 2-slot ring reuses that slot (documented: until the next call).
+* Making `inputs` itself mappable (`Features::MAPPABLE_PRIMARY_BUFFERS`) would only save the GPU copy (< 0.05 ms) while
+  forcing an unmap before every submit and invalidating views during the next step (the obs kernels write `inputs` in
+  place; four kernels write parts of it, so a ring of `inputs` buffers would also change results), so it was not
+  adopted.
+* `lag=1` / `step_async` hide the remaining round trip and any Python work behind the GPU step: the per-call cost
+  becomes max(GPU step, host work) instead of the sum (100k with a policy pass: 4.99 -> 3.86 ms, 1.29x).
+* float16 halves the bytes (14 MB at 100k) but costs a conversion pass (~0.1 ms at 100k), so it only pays where the
+  bytes are copied or moved on (copy path 0.69 vs 0.78 ms in `observe`; host -> accelerator transfers, replay buffers).
+
+float16 error per observation field (`obs_check.py`: 10k cars, 100 x `step_observe(A, 10)` with random steering, 1M
+rows; f16 = numpy's round-to-nearest-even `astype(float16)`, checked bit for bit). Fields not listed are exact (flags,
+one-hot and values on the f16 grid): 6, 7, 21-32, 38, 40, 45-55, 58-64, 67, 68.
+
+| fields | max \|x\| | max abs error | mean abs error |
+|---|---|---|---|
+| 0, 1, 3 | 0.81, 0.73, 1.17 | 2.4e-4, 2.4e-4, 3.3e-4 | 4.7e-5, 7.5e-5, 6.2e-5 |
+| 2, 4, 5 | 1 | 2.4e-4 | 3.4e-6, 3.3e-5, 5.0e-5 |
+| 8-20 | 1 | 2.4e-4 | 4e-7 - 3.6e-5 (20: 3.6e-5, 8: 9.8e-6) |
+| 33, 34, 35, 37, 39 | ≤ 1 | 2.4e-4 | 8.1e-5 - 1.2e-4 |
+| 36 | 1.8 | 4.9e-4 | 1.6e-4 |
+| 41-44 | ≤ 1 | 2.4e-4 | 2.4e-6 - 8.4e-6 |
+| 56, 57, 65, 66, 69 | 1 | 2.4e-4 | 5e-8 - 2.6e-5 |
+| all 70 | 1.8 | 4.9e-4 (field 36) | 1.5e-5 |
+
+The relative error is ≤ 4.9e-4 for |x| ≥ 6.1e-5 (normal f16); smaller magnitudes lose relative precision (subnormals) and
+values below 6e-8 flush to 0 (max relative error 1 on fields 0, 4, 5, 9, 11, ...).

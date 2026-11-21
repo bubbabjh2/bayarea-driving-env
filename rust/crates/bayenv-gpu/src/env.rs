@@ -46,3 +46,20 @@ pub fn step_many(sims: &mut [GpuSim], k: usize, mut obs: Vec<Option<&mut [f32]>>
     sims[0].gpu.device.poll(wgpu::PollType::wait_indefinitely()).expect("poll");
     for ((s, p), (o, v)) in sims.iter_mut().zip(pend).zip(obs.into_iter().zip(veh.into_iter())) { s.finish_steps(p, o, v); }
 }
+
+/// As `step_many`, the observation rows of sim i written to `buf` at byte `i * rows * obs_size * fmt.elem_bytes()`
+/// (one `ObsRing` slot for all sims). `lazy`: return after the submits, each sim keeping its batch pending (`sync`);
+/// otherwise wait once and finish every sim. Request the map of `buf` between the submits and the wait: `on_submitted`.
+pub fn step_many_obs(sims: &mut [GpuSim], k: usize, buf: &std::sync::Arc<wgpu::Buffer>, rows: usize, fmt: crate::obs::ObsFmt, lazy: bool, on_submitted: impl FnOnce()) {
+    if sims.is_empty() { on_submitted(); return; }
+    for s in sims.iter_mut() { s.sync(); }
+    let per = (rows * sims[0].obs_size * fmt.elem_bytes()) as u64;
+    let pend: Vec<_> = sims.iter_mut().enumerate().map(|(i, s)| {
+        let d = crate::obs::ObsDst { buf: buf.clone(), offset: i as u64 * per, rows, fmt };
+        if k == 0 { s.submit_obs(&d); None } else { Some(s.submit_steps_obs(k, 0, Some(&d), 0)) }
+    }).collect();
+    on_submitted();
+    if lazy { for (s, p) in sims.iter_mut().zip(pend) { if let Some(p) = p { s.defer(p); } } return; }
+    sims[0].gpu.device.poll(wgpu::PollType::wait_indefinitely()).expect("poll");
+    for (s, p) in sims.iter_mut().zip(pend) { if let Some(p) = p { s.finish_steps(p, None, None); } }
+}

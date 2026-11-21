@@ -12,7 +12,9 @@ use bayenv_gpu::defines::ObsMode;
 use bayenv_gpu::layout::{self as L, flag, state as vstate, veh};
 use bayenv_gpu::sim::{GpuOptions, GpuSim};
 use bayenv_world::{LoadOptions, World};
-use numpy::{PyArray1, PyArray2, PyArrayMethods, PyReadonlyArray2, PyUntypedArrayMethods};
+use bayenv_gpu::obs::{ObsDst, ObsFmt, ObsRing};
+use numpy::ndarray::{self, IxDyn};
+use numpy::{PyArray1, PyArray2, PyArrayDyn, PyArrayMethods, PyReadonlyArray2, PyUntypedArrayMethods};
 use pyo3::exceptions::{PyNotImplementedError, PyRuntimeError, PyValueError};
 use pyo3::prelude::*;
 use pyo3::types::PyDict;
@@ -31,6 +33,10 @@ struct Env {
     rows: usize,
     obs_size: usize,
     cap: usize,
+    /// observation readback ring (gpu backend)
+    ring: Option<ObsRing>,
+    /// bumped by calls that change the sim state outside a step (readback tags = steps + gen << 48)
+    gen: u64,
 }
 
 fn gpu_mut(env: &mut Env) -> &mut GpuSim { match &mut env.backend { Backend::Gpu(s) => s, Backend::Cpu(_) => panic!("gpu-only call on the cpu backend") } }
@@ -41,6 +47,119 @@ struct CpuGuard<'a>(std::sync::MutexGuard<'a, CpuBackend>);
 impl<'a> std::ops::Deref for CpuGuard<'a> { type Target = bayenv_sim::env::Env; fn deref(&self) -> &Self::Target { &self.0.env } }
 fn cpu_only(env: &Env) -> Option<CpuGuard<'_>> { cpu_backend(env).map(CpuGuard) }
 fn py_sync(sim: &mut GpuSim) { sim.sync(); }
+
+/// Keeps an observation ring buffer alive while a zero-copy numpy view of it exists (the view's `base`).
+#[pyclass(module = "bayenv._bayenv", frozen)]
+struct ObsBuffer { _buf: Arc<wgpu::Buffer> }
+
+fn parse_fmt(dtype: &str) -> PyResult<ObsFmt> {
+    match dtype { "float32" | "f4" | "f32" => Ok(ObsFmt::F32), "float16" | "f2" | "f16" | "half" => Ok(ObsFmt::F16),
+        _ => Err(PyValueError::new_err("dtype must be 'float32' or 'float16'")) }
+}
+
+/// CPU observations: float32 `arr` as is, or converted to float16 (into `out` when given).
+fn cpu_finish<'py>(py: Python<'py>, arr: Bound<'py, PyAny>, out: Option<Bound<'py, PyAny>>, fmt: ObsFmt) -> PyResult<Bound<'py, PyAny>> {
+    if fmt == ObsFmt::F32 { return Ok(arr); }
+    let h = arr.call_method1("astype", ("float16",))?;
+    match out { Some(o) => { o.call_method1("__setitem__", (py.Ellipsis(), h))?; Ok(o) } None => Ok(h) }
+}
+
+/// The ready readback of `ring` as numpy (shape `shape`, dtype of the readback): a read-only zero-copy view when
+/// `copy=False` (Metal; a copy elsewhere), else a copy into `out` / a new array.
+fn ring_out<'py>(py: Python<'py>, ring: &ObsRing, shape: &[usize], out: Option<Bound<'py, PyAny>>, copy: bool) -> PyResult<Bound<'py, PyAny>> {
+    let (fmt, _) = ring.ready_info().ok_or_else(|| PyRuntimeError::new_err("no observation readback"))?;
+    let n: usize = shape.iter().product();
+    let f16 = fmt == ObsFmt::F16;
+    if !copy && out.is_none() && ring.zero_copy_ok {
+        let (ptr, buf) = ring.ready_ptr();
+        let base = Bound::new(py, ObsBuffer { _buf: buf })?.into_any();
+        // SAFETY: `ptr` is the mapped (Metal: MTLBuffer.contents, page aligned) range of a buffer of >= n elements,
+        // kept alive by `base`; the view is read-only. Its contents change once the ring reuses the slot (documented).
+        let arr = unsafe {
+            if f16 { PyArrayDyn::<u16>::borrow_from_array(&ndarray::ArrayViewD::from_shape_ptr(IxDyn(shape), ptr as *const u16), base).into_any() }
+            else { PyArrayDyn::<f32>::borrow_from_array(&ndarray::ArrayViewD::from_shape_ptr(IxDyn(shape), ptr as *const f32), base).into_any() }
+        };
+        let kw = PyDict::new(py); kw.set_item("write", false)?;
+        arr.call_method("setflags", (), Some(&kw))?;
+        return if f16 { arr.call_method1("view", ("float16",)) } else { Ok(arr) };
+    }
+    let (arr, ret): (Bound<'py, PyAny>, Bound<'py, PyAny>) = match out {
+        Some(a) => {
+            let sh: Vec<usize> = a.getattr("shape")?.extract()?;
+            if sh != shape { return Err(PyValueError::new_err(format!("out has the wrong shape (expected {shape:?})"))); }
+            let dt: String = a.getattr("dtype")?.str()?.extract()?;
+            if dt != if f16 { "float16" } else { "float32" } { return Err(PyValueError::new_err(format!("out must be {}", if f16 { "float16" } else { "float32" }))); }
+            (if f16 { a.call_method1("view", ("uint16",))? } else { a.clone() }, a)
+        }
+        None => {
+            // SAFETY: fully overwritten below before it is returned
+            let a = unsafe { if f16 { PyArrayDyn::<u16>::new(py, IxDyn(shape), false).into_any() } else { PyArrayDyn::<f32>::new(py, IxDyn(shape), false).into_any() } };
+            let r = if f16 { a.call_method1("view", ("float16",))? } else { a.clone() };
+            (a, r)
+        }
+    };
+    let bytes = n * fmt.elem_bytes();
+    if f16 {
+        let a = arr.cast::<PyArrayDyn<u16>>()?; let mut rw = a.readwrite();
+        let sl = rw.as_slice_mut().map_err(|_| PyValueError::new_err("out must be C-contiguous"))?;
+        py.detach(|| ring.read_into(0, &mut bytemuck::cast_slice_mut(sl)[..bytes]));
+    } else {
+        let a = arr.cast::<PyArrayDyn<f32>>()?; let mut rw = a.readwrite();
+        let sl = rw.as_slice_mut().map_err(|_| PyValueError::new_err("out must be C-contiguous"))?;
+        py.detach(|| ring.read_into(0, &mut bytemuck::cast_slice_mut(sl)[..bytes]));
+    }
+    Ok(ret)
+}
+
+impl Env {
+    fn obs_check(&self) -> PyResult<()> {
+        if self.obs_size == 0 { return Err(PyRuntimeError::new_err("created with obs='none'")); }
+        Ok(())
+    }
+    /// CPU backend observations (n_slots, width) into `out` / a new array (float16: converted from float32 on the host).
+    fn cpu_obs<'py>(&mut self, py: Python<'py>, out: Option<Bound<'py, PyAny>>, fmt: ObsFmt) -> PyResult<Bound<'py, PyAny>> {
+        let Backend::Cpu(e) = &mut self.backend else { unreachable!() };
+        let e = e.get_mut().unwrap(); let (n, w) = (e.n_slots(), e.obs.width());
+        let f32_out = if fmt == ObsFmt::F32 { out.clone() } else { None };
+        let arr = match f32_out {
+            Some(a) => { let a = a.cast_into::<PyArray2<f32>>().map_err(|_| PyValueError::new_err("out must be a float32 array"))?; if a.shape() != [n, w] { return Err(PyValueError::new_err("out has the wrong shape (n_slots, obs_size)")); } a }
+            None => PyArray2::<f32>::zeros(py, [n, w], false),
+        };
+        { let mut rw = arr.readwrite(); let sl = rw.as_slice_mut().map_err(|_| PyValueError::new_err("out must be C-contiguous"))?; py.detach(|| e.observe_into(sl)); }
+        cpu_finish(py, arr.into_any(), out, fmt)
+    }
+    fn parts(&mut self) -> (&mut GpuSim, &mut ObsRing) { match &mut self.backend { Backend::Gpu(s) => (&mut **s, self.ring.as_mut().unwrap()), _ => unreachable!() } }
+    fn tag(&self) -> u64 { gpu_ref(self).step + (self.gen << 48) }
+    /// Fresh readback of the current observations into the ring (waits for any pending batch first).
+    fn snapshot(&mut self, py: Python<'_>, fmt: ObsFmt) {
+        let (rows, d, tag) = (self.rows, self.obs_size, self.tag());
+        let (sim, ring) = self.parts();
+        py.detach(|| {
+            let buf = ring.begin(rows * d * fmt.elem_bytes(), fmt, tag);
+            sim.submit_obs(&ObsDst { buf, offset: 0, rows, fmt });
+            ring.submitted(); ring.complete();
+        });
+    }
+    /// Wait for the in-flight batch (events ingested) and its readback.
+    fn wait_inflight(&mut self, py: Python<'_>) { let (sim, ring) = self.parts(); py.detach(|| { sim.sync(); ring.complete(); }); }
+    /// Make the ring's ready readback show the current state in `fmt` (reuse it when it does).
+    fn ensure_current(&mut self, py: Python<'_>, fmt: ObsFmt) {
+        self.wait_inflight(py);
+        let tag = self.tag();
+        if self.ring.as_ref().unwrap().ready_info() != Some((fmt, tag)) { self.snapshot(py, fmt); }
+    }
+    /// Submit k steps with their readback, left pending (`step_async`, lag=1).
+    fn submit(&mut self, py: Python<'_>, k: usize, fmt: ObsFmt) {
+        let (rows, d, tag) = (self.rows, self.obs_size, self.tag() + k as u64);
+        let (sim, ring) = self.parts();
+        py.detach(|| {
+            let buf = ring.begin(rows * d * fmt.elem_bytes(), fmt, tag);
+            let dst = ObsDst { buf, offset: 0, rows, fmt };
+            if k == 0 { sim.submit_obs(&dst); } else { sim.run_steps_async_obs(k, &dst); }
+            ring.submitted();
+        });
+    }
+}
 
 #[pymethods]
 impl Env {
@@ -81,7 +200,7 @@ impl Env {
             });
             let (world, env) = res.map_err(PyRuntimeError::new_err)?;
             let _ = (accidents, collisions, controls, junctions, steer, decide_every, keep_events, capacity);
-            return Ok(Env { backend: Backend::Cpu(Box::new(std::sync::Mutex::new(CpuBackend::new(env, cobs)))), world, rows: 0, obs_size: cobs.width(), cap: 0 });
+            return Ok(Env { backend: Backend::Cpu(Box::new(std::sync::Mutex::new(CpuBackend::new(env, cobs)))), world, rows: 0, obs_size: cobs.width(), cap: 0, ring: None, gen: 0 });
         }
         let obs_mode = match obs { "v2" => ObsMode::V2, "v3" => ObsMode::V3, "none" => ObsMode::None, _ => return Err(PyValueError::new_err("obs must be 'v2', 'v3' or 'none'")) };
         if backend != "gpu" { return Err(PyValueError::new_err("backend must be 'gpu' or 'cpu'")); }
@@ -107,7 +226,8 @@ impl Env {
         });
         let (world, sim, placed) = res.map_err(PyRuntimeError::new_err)?;
         let obs_size = sim.obs_size;
-        Ok(Env { backend: Backend::Gpu(Box::new(sim)), world, rows: placed, obs_size: if obs_mode == ObsMode::None { 0 } else { obs_size }, cap })
+        let ring = Some(ObsRing::new(&sim.gpu.device, sim.gpu.adapter_info.backend));
+        Ok(Env { backend: Backend::Gpu(Box::new(sim)), world, rows: placed, obs_size: if obs_mode == ObsMode::None { 0 } else { obs_size }, cap, ring, gen: 0 })
     }
 
     /// Number of slots with a car (rows of observe() / state()).
@@ -121,29 +241,18 @@ impl Env {
     #[getter] fn adapter(&self) -> String { if cpu_only(self).is_some() { "cpu".into() } else { gpu_ref(self).gpu.adapter_name() } }
 
     /// Observation vectors, float32 (n_slots, obs_size), sensed in the last step (src/gpu/README.md v2 layout).
-    /// `out`: optional preallocated C-contiguous float32 array to fill instead (no allocation).
-    #[pyo3(signature = (out=None))]
-    fn observe<'py>(&mut self, py: Python<'py>, out: Option<Bound<'py, PyArray2<f32>>>) -> PyResult<Bound<'py, PyArray2<f32>>> {
-        if let Backend::Gpu(sim) = &mut self.backend { py_sync(sim); }
-        if let Backend::Cpu(e) = &mut self.backend {
-            let e = e.get_mut().unwrap(); let (n, w) = (e.n_slots(), e.obs.width());
-            if w == 0 { return Err(PyRuntimeError::new_err("created with obs='none'")); }
-            let arr = match out { Some(a) => { if a.shape() != [n, w] { return Err(PyValueError::new_err("out has the wrong shape (n_slots, obs_size)")); } a } None => PyArray2::<f32>::zeros(py, [n, w], false) };
-            { let mut rw = arr.readwrite(); let sl = rw.as_slice_mut().map_err(|_| PyValueError::new_err("out must be C-contiguous"))?; py.detach(|| e.observe_into(sl)); }
-            return Ok(arr);
-        }
-        if self.obs_size == 0 { return Err(PyRuntimeError::new_err("created with obs='none'")); }
-        let arr = match out {
-            Some(a) => { if a.shape() != [self.rows, self.obs_size] { return Err(PyValueError::new_err("out has the wrong shape")); } a }
-            None => PyArray2::<f32>::zeros(py, [self.rows, self.obs_size], false),
-        };
-        {
-            let mut rw = arr.readwrite();
-            let sl = rw.as_slice_mut().map_err(|_| PyValueError::new_err("out must be C-contiguous"))?;
-            let sim = gpu_ref(self);
-            py.detach(|| sim.read_into("inputs", 0, bytemuck::cast_slice_mut(sl)));
-        }
-        Ok(arr)
+    /// `out`: optional preallocated C-contiguous array of the result dtype to fill instead (no allocation).
+    /// `copy=False`: return a read-only zero-copy view of the mapped readback buffer (Metal / unified memory; a copy
+    /// on other backends) that stays valid until the next observe / step* call on this env (it is reused after
+    /// that); `np.array(v)` it to keep it. `dtype='float16'`: converted on the GPU (half the bytes; see
+    /// rust/BENCHMARKS.md for the per-field error).
+    #[pyo3(signature = (out=None, copy=true, dtype="float32"))]
+    fn observe<'py>(&mut self, py: Python<'py>, out: Option<Bound<'py, PyAny>>, copy: bool, dtype: &str) -> PyResult<Bound<'py, PyAny>> {
+        self.obs_check()?;
+        let fmt = parse_fmt(dtype)?;
+        if cpu_only(self).is_some() { return self.cpu_obs(py, out, fmt); }
+        self.snapshot(py, fmt);
+        ring_out(py, self.ring.as_ref().unwrap(), &[self.rows, self.obs_size], out, copy)
     }
 
     /// Set actions: float32 (N, 3) [steer, gas, brake] for slots offset..offset+N. steer in [-1, 1] = target wheel
@@ -174,25 +283,74 @@ impl Env {
     }
 
     /// Fused RL step: optional actions (N, 3) -> k steps -> observations, in one GPU submit and one wait
-    /// (actions upload, steps and the observation copy share the command stream). Returns (n_slots, obs_size) float32;
-    /// `out` = preallocated array to fill.
-    #[pyo3(signature = (actions=None, k=1, out=None))]
-    fn step_observe<'py>(&mut self, py: Python<'py>, actions: Option<PyReadonlyArray2<'py, f32>>, k: usize, out: Option<Bound<'py, PyArray2<f32>>>) -> PyResult<Bound<'py, PyArray2<f32>>> {
-        if cpu_only(self).is_some() { if let Some(a) = actions { self.act(a, 0)?; } self.step(py, k); return self.observe(py, out); }
-        if self.obs_size == 0 { return Err(PyRuntimeError::new_err("created with obs='none'")); }
-        if let Some(a) = actions { self.act(a, 0)?; }
-        let arr = match out {
-            Some(a) => { if a.shape() != [self.rows, self.obs_size] { return Err(PyValueError::new_err("out has the wrong shape")); } a }
-            None => PyArray2::<f32>::zeros(py, [self.rows, self.obs_size], false),
-        };
-        {
-            let mut rw = arr.readwrite();
-            let sl = rw.as_slice_mut().map_err(|_| PyValueError::new_err("out must be C-contiguous"))?;
-            let sim = gpu_mut(self);
-            py.detach(|| sim.run_steps_into(k, Some(sl), None));
+    /// (actions upload, steps and the observation copy share the command stream). Returns (n_slots, obs_size);
+    /// `out`, `copy`, `dtype` as in observe().
+    /// lag=1 (pipelined): returns the observation as of the *start* of this call (after the previous call's steps,
+    /// i.e. before `actions` act) and leaves this call's k steps running on the GPU while Python works; the next
+    /// call (or any other call) waits for them. So the obs returned by call t is one action stale: it does not
+    /// reflect actions_t yet, and actions_{t+1} are chosen from it. Same trajectory as lag=0 for the same actions.
+    #[pyo3(signature = (actions=None, k=1, out=None, copy=true, lag=0, dtype="float32"))]
+    #[allow(clippy::too_many_arguments)]
+    fn step_observe<'py>(&mut self, py: Python<'py>, actions: Option<PyReadonlyArray2<'py, f32>>, k: usize, out: Option<Bound<'py, PyAny>>, copy: bool, lag: u32, dtype: &str) -> PyResult<Bound<'py, PyAny>> {
+        self.obs_check()?;
+        let fmt = parse_fmt(dtype)?;
+        if lag > 1 { return Err(PyValueError::new_err("lag must be 0 or 1")); }
+        if cpu_only(self).is_some() {
+            if lag == 1 {
+                let o = self.cpu_obs(py, None, fmt)?;
+                if let Some(a) = actions { self.act(a, 0)?; }
+                self.step(py, k);
+                return match out { Some(a) => { a.call_method1("__setitem__", (py.Ellipsis(), o))?; Ok(a) } None => Ok(o) };
+            }
+            if let Some(a) = actions { self.act(a, 0)?; }
+            self.step(py, k); return self.cpu_obs(py, out, fmt);
         }
-        Ok(arr)
+        if let Some(a) = actions { self.act(a, 0)?; }
+        if lag == 1 {
+            self.ensure_current(py, fmt);
+            self.submit(py, k, fmt);
+        } else if k == 0 { self.snapshot(py, fmt); }
+        else {
+            let (rows, d, gen) = (self.rows, self.obs_size, self.gen);
+            let (sim, ring) = self.parts();
+            py.detach(|| {
+                let buf = ring.begin(rows * d * fmt.elem_bytes(), fmt, sim.step + k as u64 + (gen << 48));
+                let p = sim.submit_steps_obs(k, 0, Some(&ObsDst { buf, offset: 0, rows, fmt }), 0);
+                ring.submitted();
+                sim.gpu.device.poll(wgpu::PollType::wait_indefinitely()).expect("poll");
+                sim.finish_steps(p, None, None);
+                ring.complete();
+            });
+        }
+        ring_out(py, self.ring.as_ref().unwrap(), &[self.rows, self.obs_size], out, copy)
     }
+
+    /// Submit actions (optional) + k steps + their observation readback and return at once (GIL released, GPU
+    /// running); collect the observations with observe_wait(). Other calls (state(), events(), ...) wait for the
+    /// batch implicitly. The readback of the previous batch stays valid while this one runs.
+    #[pyo3(signature = (actions=None, k=1, dtype="float32"))]
+    fn step_async(&mut self, py: Python<'_>, actions: Option<PyReadonlyArray2<'_, f32>>, k: usize, dtype: &str) -> PyResult<()> {
+        self.obs_check()?;
+        let fmt = parse_fmt(dtype)?;
+        if let Some(a) = actions { self.act(a, 0)?; }
+        if cpu_only(self).is_some() { self.step(py, k); return Ok(()); }   // CPU: steps synchronously
+        self.submit(py, k, fmt);
+        Ok(())
+    }
+
+    /// Wait for the last step_async() batch and return its observations (dtype as submitted); without one in
+    /// flight, the current observations (as observe(dtype=dtype)). `out` / `copy` as in observe().
+    #[pyo3(signature = (out=None, copy=true, dtype="float32"))]
+    fn observe_wait<'py>(&mut self, py: Python<'py>, out: Option<Bound<'py, PyAny>>, copy: bool, dtype: &str) -> PyResult<Bound<'py, PyAny>> {
+        self.obs_check()?;
+        let fmt = parse_fmt(dtype)?;
+        if cpu_only(self).is_some() { return self.cpu_obs(py, out, fmt); }
+        if self.ring.as_ref().unwrap().has_inflight() { self.wait_inflight(py); } else { self.ensure_current(py, fmt); }
+        ring_out(py, self.ring.as_ref().unwrap(), &[self.rows, self.obs_size], out, copy)
+    }
+
+    /// True when observe(copy=False) & co. return zero-copy views (Metal / unified memory); else they copy.
+    #[getter] fn zero_copy(&self) -> bool { self.ring.as_ref().is_some_and(|r| r.zero_copy_ok) }
 
     /// Wait for the last step() batch and process its events (other calls do this implicitly).
     fn sync(&mut self, py: Python<'_>) { if cpu_only(self).is_some() { return; } let sim = gpu_mut(self); py.detach(|| sim.sync()); }
@@ -325,7 +483,7 @@ impl Env {
     #[pyo3(signature = (start_time=None))]
     fn reset_day(&mut self, py: Python<'_>, start_time: Option<f64>) -> PyResult<()> {
         if cpu_only(self).is_some() { return Err(PyNotImplementedError::new_err("reset_day: gpu backend only")); }
-        let sim = gpu_mut(self); py.detach(|| sim.reset_day(start_time)); Ok(())
+        self.gen += 1; let sim = gpu_mut(self); py.detach(|| sim.reset_day(start_time)); Ok(())
     }
 
     /// Training obstacles (GPUSim.placeObstacles): `count` obstacles cycling through `kinds` (default all of 'midblock',
@@ -392,7 +550,7 @@ impl Env {
     fn import_snapshot(&mut self, path: &str) -> PyResult<()> {
         if cpu_only(self).is_some() { return Err(PyNotImplementedError::new_err("import_snapshot: gpu backend only")); }
         let snap = bayenv_gpu::sim::Snapshot::load(std::path::Path::new(path)).map_err(PyRuntimeError::new_err)?;
-        let cap = self.cap; let sim = gpu_mut(self); sim.sync(); sim.import_snapshot(&snap).map_err(PyRuntimeError::new_err)?;
+        self.gen += 1; let cap = self.cap; let sim = gpu_mut(self); sim.sync(); sim.import_snapshot(&snap).map_err(PyRuntimeError::new_err)?;
         self.rows = self.rows.max(snap.high.min(cap)); Ok(())
     }
 
@@ -403,7 +561,40 @@ impl Env {
 /// Arrays carry a leading env axis: act((E, N, 3)), step_observe -> (E, N, obs_size), crash_flags -> (E, N).
 /// Env i uses seed + i. All envs are submitted together and waited on once per step call.
 #[pyclass(module = "bayenv._bayenv")]
-struct VecEnv { sims: Vec<GpuSim>, cpu: Vec<std::sync::Mutex<CpuBackend>>, rows: usize, obs_size: usize }
+struct VecEnv { sims: Vec<GpuSim>, cpu: Vec<std::sync::Mutex<CpuBackend>>, rows: usize, obs_size: usize, ring: Option<ObsRing> }
+
+impl VecEnv {
+    fn tag(&self) -> u64 { self.sims[0].step }
+    fn ring(&self) -> &ObsRing { self.ring.as_ref().unwrap() }
+    fn out<'py>(&self, py: Python<'py>, out: Option<Bound<'py, PyAny>>, copy: bool) -> PyResult<Bound<'py, PyAny>> { ring_out(py, self.ring(), &[self.sims.len(), self.rows, self.obs_size], out, copy) }
+    fn wait(&mut self, py: Python<'_>) { let (sims, ring) = (&mut self.sims, self.ring.as_mut().unwrap()); py.detach(|| { for s in sims.iter_mut() { s.sync(); } ring.complete(); }); }
+    fn ensure_current(&mut self, py: Python<'_>, fmt: ObsFmt) {
+        self.wait(py);
+        if self.ring().ready_info() != Some((fmt, self.tag())) { self.submit(py, 0, fmt, false); }
+    }
+    /// CPU envs: observations (E, n_slots, width), rows past an env's slot count zero.
+    fn cpu_obs<'py>(&mut self, py: Python<'py>, out: Option<Bound<'py, PyAny>>, fmt: ObsFmt) -> PyResult<Bound<'py, PyAny>> {
+        let (e, d) = (self.cpu.len(), self.obs_size); let r = self.n_slots();
+        let f32_out = if fmt == ObsFmt::F32 { out.clone() } else { None };
+        let arr = match f32_out {
+            Some(a) => { let a = a.cast_into::<numpy::PyArray3<f32>>().map_err(|_| PyValueError::new_err("out must be a float32 array"))?; if a.shape() != [e, r, d] { return Err(PyValueError::new_err("out has the wrong shape (n_envs, n_slots, obs_size)")); } a }
+            None => numpy::PyArray3::<f32>::zeros(py, [e, r, d], false),
+        };
+        { let mut rw = arr.readwrite(); let sl = rw.as_slice_mut().map_err(|_| PyValueError::new_err("out must be C-contiguous"))?; let c = &mut self.cpu;
+          if r > 0 { py.detach(|| { use rayon::prelude::*; sl.par_chunks_mut(r * d).zip(c.par_iter_mut()).for_each(|(o, e)| { let e = e.get_mut().unwrap(); let n = e.n_slots(); o.fill(0.0); e.observe_into(&mut o[..n * d]); }); }); } }
+        cpu_finish(py, arr.into_any(), out, fmt)
+    }
+    /// k steps (0: readback only) in every env with the readback into the next ring slot; lazy: leave it pending.
+    fn submit(&mut self, py: Python<'_>, k: usize, fmt: ObsFmt, lazy: bool) {
+        let (rows, d, e, tag) = (self.rows, self.obs_size, self.sims.len(), self.tag() + k as u64);
+        let (sims, ring) = (&mut self.sims, self.ring.as_mut().unwrap());
+        py.detach(|| {
+            let buf = ring.begin(e * rows * d * fmt.elem_bytes(), fmt, tag);
+            bayenv_gpu::env::step_many_obs(sims, k, &buf, rows, fmt, lazy || k == 0, || ring.submitted());
+            if !lazy { ring.complete(); }
+        });
+    }
+}
 
 #[pymethods]
 impl VecEnv {
@@ -423,7 +614,7 @@ impl VecEnv {
             });
             let envs = res.map_err(PyRuntimeError::new_err)?;
             let _ = (capacity, accidents, collisions);
-            return Ok(VecEnv { sims: Vec::new(), cpu: envs.into_iter().map(|e| std::sync::Mutex::new(CpuBackend::new(e, cobs))).collect(), rows: 0, obs_size: cobs.width() });
+            return Ok(VecEnv { sims: Vec::new(), cpu: envs.into_iter().map(|e| std::sync::Mutex::new(CpuBackend::new(e, cobs))).collect(), rows: 0, obs_size: cobs.width(), ring: None });
         }
         let start_time = start_time.unwrap_or(18000.0);
         let obs_mode = match obs { "v2" => ObsMode::V2, "v3" => ObsMode::V3, "none" => ObsMode::None, _ => return Err(PyValueError::new_err("obs must be 'v2', 'v3' or 'none'")) };
@@ -440,7 +631,8 @@ impl VecEnv {
         });
         let (sims, rows) = res.map_err(PyRuntimeError::new_err)?;
         let obs_size = if obs_mode == ObsMode::None { 0 } else { sims[0].obs_size };
-        Ok(VecEnv { sims, cpu: Vec::new(), rows, obs_size })
+        let ring = ObsRing::new(&sims[0].gpu.device, sims[0].gpu.adapter_info.backend);
+        Ok(VecEnv { sims, cpu: Vec::new(), rows, obs_size, ring: Some(ring) })
     }
     #[getter] fn n_envs(&self) -> usize { if self.cpu.is_empty() { self.sims.len() } else { self.cpu.len() } }
     /// rows per env (CPU: the largest env's slot count; observe / crash_flags pad the others)
@@ -469,30 +661,54 @@ impl VecEnv {
     #[pyo3(signature = (k=1))]
     fn step(&mut self, py: Python<'_>, k: usize) {
         if !self.cpu.is_empty() { use rayon::prelude::*; let c = &mut self.cpu; py.detach(|| c.par_iter_mut().for_each(|e| e.get_mut().unwrap().step(k))); return; }
-        let sims = &mut self.sims; py.detach(|| bayenv_gpu::env::step_many(sims, k, Vec::new(), Vec::new())); }
+        let (sims, ring) = (&mut self.sims, self.ring.as_mut().unwrap()); py.detach(|| { ring.complete(); bayenv_gpu::env::step_many(sims, k, Vec::new(), Vec::new()) }); }
 
-    /// Optional actions (E, N, 3) -> k steps in every env -> observations (E, n_slots, obs_size).
-    #[pyo3(signature = (actions=None, k=1, out=None))]
-    fn step_observe<'py>(&mut self, py: Python<'py>, actions: Option<numpy::PyReadonlyArray3<'py, f32>>, k: usize, out: Option<Bound<'py, numpy::PyArray3<f32>>>) -> PyResult<Bound<'py, numpy::PyArray3<f32>>> {
+    /// Optional actions (E, N, 3) -> k steps in every env -> observations (E, n_slots, obs_size), one submit per env and
+    /// one wait. `out`, `copy`, `dtype`, `lag` as in Env.step_observe (all envs share one readback buffer, so
+    /// copy=False is a single (E, n_slots, obs_size) view).
+    #[pyo3(signature = (actions=None, k=1, out=None, copy=true, lag=0, dtype="float32"))]
+    #[allow(clippy::too_many_arguments)]
+    fn step_observe<'py>(&mut self, py: Python<'py>, actions: Option<numpy::PyReadonlyArray3<'py, f32>>, k: usize, out: Option<Bound<'py, PyAny>>, copy: bool, lag: u32, dtype: &str) -> PyResult<Bound<'py, PyAny>> {
         if self.obs_size == 0 { return Err(PyRuntimeError::new_err("created with obs='none'")); }
+        let fmt = parse_fmt(dtype)?;
+        if lag > 1 { return Err(PyValueError::new_err("lag must be 0 or 1")); }
         if let Some(a) = actions { self.act(a)?; }
         if !self.cpu.is_empty() {
+            let o = if lag == 1 { Some(self.cpu_obs(py, None, fmt)?) } else { None };
             self.step(py, k);
-            let (e, d) = (self.cpu.len(), self.obs_size); let r = self.n_slots();
-            let arr = match out { Some(a) => { if a.shape() != [e, r, d] { return Err(PyValueError::new_err("out has the wrong shape (n_envs, n_slots, obs_size)")); } a } None => numpy::PyArray3::<f32>::zeros(py, [e, r, d], false) };
-            { let mut rw = arr.readwrite(); let sl = rw.as_slice_mut().map_err(|_| PyValueError::new_err("out must be C-contiguous"))?; let c = &mut self.cpu;
-              if r > 0 { py.detach(|| { use rayon::prelude::*; sl.par_chunks_mut(r * d).zip(c.par_iter_mut()).for_each(|(o, e)| { let e = e.get_mut().unwrap(); let n = e.n_slots(); o.fill(0.0); e.observe_into(&mut o[..n * d]); }); }); } }
-            return Ok(arr);
+            return match o { Some(o) => match out { Some(a) => { a.call_method1("__setitem__", (py.Ellipsis(), o))?; Ok(a) } None => Ok(o) }, None => self.cpu_obs(py, out, fmt) };
         }
-        let (e, r, d) = (self.sims.len(), self.rows, self.obs_size);
-        let arr = match out { Some(a) => { if a.shape() != [e, r, d] { return Err(PyValueError::new_err("out has the wrong shape")); } a } None => numpy::PyArray3::<f32>::zeros(py, [e, r, d], false) };
-        {
-            let mut rw = arr.readwrite(); let sl = rw.as_slice_mut().map_err(|_| PyValueError::new_err("out must be C-contiguous"))?;
-            let sims = &mut self.sims;
-            py.detach(|| { let obs: Vec<Option<&mut [f32]>> = sl.chunks_mut(r * d).map(Some).collect(); bayenv_gpu::env::step_many(sims, k, obs, Vec::new()); });
-        }
-        Ok(arr)
+        if lag == 1 { self.ensure_current(py, fmt); self.submit(py, k, fmt, true); } else { self.submit(py, k, fmt, false); }
+        self.out(py, out, copy)
     }
+    /// Submit actions (optional) + k steps in every env + the readback, return at once; observe_wait() collects.
+    #[pyo3(signature = (actions=None, k=1, dtype="float32"))]
+    fn step_async(&mut self, py: Python<'_>, actions: Option<numpy::PyReadonlyArray3<'_, f32>>, k: usize, dtype: &str) -> PyResult<()> {
+        if self.obs_size == 0 { return Err(PyRuntimeError::new_err("created with obs='none'")); }
+        let fmt = parse_fmt(dtype)?;
+        if let Some(a) = actions { self.act(a)?; }
+        if !self.cpu.is_empty() { self.step(py, k); return Ok(()); }   // CPU: steps synchronously
+        self.submit(py, k, fmt, true); Ok(())
+    }
+    /// Observations (E, n_slots, obs_size) of the last step_async() batch (waits), else the current ones.
+    #[pyo3(signature = (out=None, copy=true, dtype="float32"))]
+    fn observe_wait<'py>(&mut self, py: Python<'py>, out: Option<Bound<'py, PyAny>>, copy: bool, dtype: &str) -> PyResult<Bound<'py, PyAny>> {
+        if self.obs_size == 0 { return Err(PyRuntimeError::new_err("created with obs='none'")); }
+        let fmt = parse_fmt(dtype)?;
+        if !self.cpu.is_empty() { return self.cpu_obs(py, out, fmt); }
+        if self.ring().has_inflight() { self.wait(py); } else { self.ensure_current(py, fmt); }
+        self.out(py, out, copy)
+    }
+    /// Current observations (E, n_slots, obs_size) of every env.
+    #[pyo3(signature = (out=None, copy=true, dtype="float32"))]
+    fn observe<'py>(&mut self, py: Python<'py>, out: Option<Bound<'py, PyAny>>, copy: bool, dtype: &str) -> PyResult<Bound<'py, PyAny>> {
+        if self.obs_size == 0 { return Err(PyRuntimeError::new_err("created with obs='none'")); }
+        let fmt = parse_fmt(dtype)?;
+        if !self.cpu.is_empty() { return self.cpu_obs(py, out, fmt); }
+        self.submit(py, 0, fmt, false);
+        self.out(py, out, copy)
+    }
+    #[getter] fn zero_copy(&self) -> bool { self.ring.as_ref().is_some_and(|r| r.zero_copy_ok) }
     /// crash flags (E, n_slots) bool
     fn crash_flags<'py>(&mut self, py: Python<'py>) -> PyResult<Bound<'py, numpy::PyArray2<bool>>> {
         if !self.cpu.is_empty() { let r = self.n_slots(); let e = self.cpu.len(); let mut out = vec![false; e * r];
@@ -554,6 +770,7 @@ fn world_info(py: Python<'_>, data_dir: &str) -> PyResult<Py<PyDict>> {
 fn _bayenv(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_class::<Env>()?;
     m.add_class::<VecEnv>()?;
+    m.add_class::<ObsBuffer>()?;
     m.add_function(wrap_pyfunction!(world_info, m)?)?;
     m.add("OBS_V2_SIZE", 70)?;
     Ok(())

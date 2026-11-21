@@ -10,6 +10,7 @@ pub mod gpu;
 pub mod kernels;
 pub mod layout;
 pub mod pack;
+pub mod obs;
 pub mod oracle;
 pub mod sim;
 pub mod profile;
