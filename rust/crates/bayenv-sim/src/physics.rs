@@ -82,6 +82,18 @@ pub fn step_dynamics2(a: (&mut DynState, f64, f64, f64, &VehicleParams, f64, boo
     da.finish(sa); db.finish(sb);
 }
 
+/// step_dynamics for four cars (same dt), substeps interleaved as in step_dynamics2.
+#[allow(clippy::type_complexity)]
+pub fn step_dynamics4(c: [(&mut DynState, f64, f64, f64, &VehicleParams, f64, bool, Option<Surf>); 4], dt: f64, position: bool) {
+    let [(s0, r0, g0, b0, p0, gr0, l0, f0), (s1, r1, g1, b1, p1, gr1, l1, f1), (s2, r2, g2, b2, p2, gr2, l2, f2), (s3, r3, g3, b3, p3, gr3, l3, f3)] = c;
+    let (mut d0, n) = Dyn::new(s0, r0, g0, b0, p0, dt, gr0, l0, position, f0);
+    let (mut d1, _) = Dyn::new(s1, r1, g1, b1, p1, dt, gr1, l1, position, f1);
+    let (mut d2, _) = Dyn::new(s2, r2, g2, b2, p2, dt, gr2, l2, position, f2);
+    let (mut d3, _) = Dyn::new(s3, r3, g3, b3, p3, dt, gr3, l3, position, f3);
+    for _ in 0..n { d0.substep(); d1.substep(); d2.substep(); d3.substep(); }
+    d0.finish(s0); d1.finish(s1); d2.finish(s2); d3.finish(s3);
+}
+
 /// step_dynamics' per-call constants and loop state (the substep body is the JS loop body verbatim)
 #[derive(Clone, Copy)]
 struct Dyn<'a> {

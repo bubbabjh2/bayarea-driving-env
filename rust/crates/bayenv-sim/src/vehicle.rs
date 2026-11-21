@@ -483,6 +483,21 @@ impl VehicleStore {
         (x, y)
     }
 
+    /// integrate_car for four cars (physics::step_dynamics4); each result is integrate_car's.
+    #[allow(clippy::type_complexity)]
+    pub fn integrate_car4(cs: [(&mut Car, &[i32], &[f32], Option<(f64, f64)>, &mut CarOut, bool); 4], position_mode: bool, dt: f64, now: f64, g: &World, step: i64) -> [i32; 4] {
+        let [(c0, r0, g0, m0, o0, l0), (c1, r1, g1, m1, o1, l1), (c2, r2, g2, m2, o2, l2), (c3, r3, g3, m3, o3, l3)] = cs;
+        let mut k0 = Self::integrate_pre(c0, g0, o0, g, step, l0);
+        let mut k1 = Self::integrate_pre(c1, g1, o1, g, step, l1);
+        let mut k2 = Self::integrate_pre(c2, g2, o2, g, step, l2);
+        let mut k3 = Self::integrate_pre(c3, g3, o3, g, step, l3);
+        physics::step_dynamics4([
+            (&mut k0.st, k0.sr, k0.gas, k0.brake, k0.p, k0.grade, l0, k0.sf), (&mut k1.st, k1.sr, k1.gas, k1.brake, k1.p, k1.grade, l1, k1.sf),
+            (&mut k2.st, k2.sr, k2.gas, k2.brake, k2.p, k2.grade, l2, k2.sf), (&mut k3.st, k3.sr, k3.gas, k3.brake, k3.p, k3.grade, l3, k3.sf)], dt, position_mode);
+        [Self::integrate_post(c0, k0, r0, m0, position_mode, o0, dt, now, g, step, l0), Self::integrate_post(c1, k1, r1, m1, position_mode, o1, dt, now, g, step, l1),
+         Self::integrate_post(c2, k2, r2, m2, position_mode, o2, dt, now, g, step, l2), Self::integrate_post(c3, k3, r3, m3, position_mode, o3, dt, now, g, step, l3)]
+    }
+
     /// integrate_car up to the vehicle dynamics (commands from the ring, state, surface, grade)
     fn integrate_pre(c: &mut Car, ring: &[f32], out: &mut CarOut, g: &World, step: i64, locked: bool) -> DynCall {
         let base = 0usize;
