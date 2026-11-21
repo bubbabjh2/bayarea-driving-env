@@ -68,12 +68,14 @@ pop.place_obstacles(count=40, seed=3); pop.place_wrecks(10); pop.reset_day()
   `import_snapshot(path)` (a CPU-sim `exportState` snapshot).
 * Constructor options: `backend="gpu"`, `capacity` (default `n_cars` rounded up to 1024; results are identical for any
   capacity ≥ `n_cars`), `obs="v2" | "v3" | "none"`, `dt`, `start_time`, `accidents`, `collisions`, `fuel`, `controls`,
-  `junctions`, `steer="position" | "rate"`, `decide_every`, `keep_events`, `cpu_connector_join` (default `True`).
+  `junctions`, `steer="position" | "rate"`, `decide_every`, `keep_events`, `cpu_connector_join` (default `True`), `contact_tangent` (default `True`).
 * **GPU model fix (default since the kerb investigation):** `cpu_connector_join=True` makes junction connector entry
   match the CPU sim. `False` is the legacy mode, the JS GPU kernels bit-for-bit, including their connector-entry bug.
   **Legacy GPU runs and all earlier GPU checkpoints were trained with the bug:** steer-0 cars drift into the kerb after
-  junction boxes (`docs/kerb-investigation.md`). The JS-oracle checks (`host_oracle` test, `oracle_run`,
-  `parity_run`, `parity_check`, `opt_check`, hence `compare_gpu.sh` / `compare_parity.sh`) run with `false`.
+  junction boxes (`docs/kerb-investigation.md`). `contact_tangent=True` (default since the crash-divergence
+  investigation) gives the contact impulse an f32-robust friction tangent. With `False`, the JS kernels' tangent is
+  rounding noise in an aligned rear-end, and the wrecks spin to the kerb (`docs/crash-divergence.md`). The JS-oracle checks (`host_oracle` test, `oracle_run`,
+  `parity_run`, `parity_check`, `opt_check`, hence `compare_gpu.sh` / `compare_parity.sh`) run with both `false`.
 * `step_observe(actions, k=1, out=arr)`: actions upload, k steps and the observation copy in one submit and one wait
   (the fused RL step). `step(k)` returns right after the submit; the readback and events are processed by the next
   call (same results, the Python side overlaps with the GPU). `sync()` waits explicitly.
@@ -218,6 +220,7 @@ switch each back to the JS behaviour (env `BAYENV_GPU_OPTS=flag=0,...` in the ex
 | `fast_scan` | `scan4k.wgsl` | lane / cell starts at 4096 per workgroup, counts into accumulators the scan zeroes (no clear kernels; 12 -> 6 dispatches) |
 | `fast_search` | `patches.wgsl` | function patches applied to the resolved sources (`kernels::patch`, original text checked): binary instead of linear polyline segment search (`yAlongEdge`, `arcPointJ`, `connPointJ`; precondition: non-decreasing cumulative distances, checked on the world at creation), one-entry `hopMap` memo |
 | `cpu_connector_join` (**on**; a model fix, so not bit-identical with the JS) | `cpu_connector_join.wgsl` | junction connector entry as in the CPU sim (`sArrive`, not the end-of-step `s`); fixes the GPU kerb strikes (`docs/kerb-investigation.md`). `false` = legacy JS GPU model, used by every JS-oracle check |
+| `contact_tangent` (**on**; a model fix) | `contact_tangent.wgsl` | contact impulse friction tangent re-orthogonalised to the normal, slip below `1e-5 |rv|` = none; without it an aligned rear-end gets a full Coulomb impulse in an f32-noise direction (`docs/crash-divergence.md`). `false` = legacy JS GPU model, used by every JS-oracle check |
 | `zero_init_workgroup` (off) | - | no workgroup-memory zero fill (every kernel writes its workgroup variables first) |
 
 `GpuOptions.profile` (`bench --profile`) records GPU timestamps per dispatch for the first step of every batch

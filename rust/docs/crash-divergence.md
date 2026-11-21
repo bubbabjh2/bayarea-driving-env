@@ -95,21 +95,24 @@ perfectly collinear rear-end. The difference is in `resolveContact`:
 The kernel comment says it is "1:1 with collide.js", but an absolute 1e-6 threshold does not carry over to f32. This
 is a port bug, deterministic for every aligned contact at speed, not chaos.
 
-### Fix (flagged, default off): `GpuOptions.contact_tangent`
+### Fix: `GpuOptions.contact_tangent` (default on; `false` = the legacy JS kernels)
 
 `crates/bayenv-gpu/kernels/contact_tangent.wgsl`, applied by `kernels::model_patches` to the `contacts` kernels and to
 `kernels/resolve_fused.wgsl`, makes two changes. It removes the normal component of `t` again, so `t` is exactly
 orthogonal to `n`. And it treats a slip below `max(1e-6, 1e-5·|rv|)` as no slip. In f64 the CPU's friction impulse
 for such a slip is at most `|t|/kT`, which is negligible, so the patch agrees with collide.js. Ways to enable it:
-Python `Env(..., contact_tangent=True)`, `VecEnv(..., contact_tangent=True)`, `BAYENV_GPU_OPTS=contact_tangent=1`,
-or `compare_backends.py --contact-tangent`.
+The patch is on by default. Turn it off with Python `Env(..., contact_tangent=False)` or `VecEnv(...,
+contact_tangent=False)`, `BAYENV_GPU_OPTS=contact_tangent=0`, or `compare_backends.py --no-contact-tangent`.
+`--legacy-gpu` turns off both fixes. The JS-oracle checks (`host_oracle`, `oracle_run`, `parity_run`, `parity_check`,
+`opt_check`) set it to `false` explicitly, and `tests/cpu_vs_gpu.rs` asserts the default. The numbers below were
+measured before it became the default, as off vs on.
 
 With the patch, the step-783 crash of 6748 / 9682 gives yaw 0.003 rad/s and speeds after the impulse equal to the
 CPU's. The wrecks stop in lane 1 at `s` 245.859 / 253.425 (CPU: 245.857 / 253.425). Agent 8956 hits the 6748 wreck
 at step 1,352 (CPU: 1,353).
 
 `compare_backends.py data 5000 3000 25200 42 --spawn-default` (default GPU model), without and with
-`--contact-tangent`:
+`--contact-tangent` (now: `--no-contact-tangent` vs the default):
 
 | event (CPU / GPU) | off | `contact_tangent` |
 |---|---|---|
@@ -132,7 +135,8 @@ this build.
 those of `cpu_divergence.py`. Agents are mapped to slots by each backend's own spawn rows. The GPU columns lane_lo /
 lane_hi, leader, gap, conn, ctl_type / ctl_state / ctl_dist, commuter / leg and agent come from `Env.state()` on the
 GPU branch. They are read from the veh record (`lanes` bits, `leader`, `gap`, `taper` − 1 = connector) and from the
-ctl record (words 1, 2 and 5).
+ctl record (words 1, 2 and 5). The `gpu-` files were written with `contact_tangent` off, the `gpuct-` files with
+it on (the default now).
 
 | files | content |
 |---|---|
@@ -142,5 +146,5 @@ ctl record (words 1, 2 and 5).
 | `gpuct-{6748,9682,8956}` | GPU with `contact_tangent`, steps 780–1,353 |
 | `cpu-r` / `gpuct-r-{4060,656}`, `cpu-s` / `gpuct-s-656` | cause A on two more agents (GPU with `contact_tangent`) |
 
-`python rust/tools/gpu_divergence.py data --agents 4114,8318,8956 [--cpu-dir DIR]` reproduces the GPU half, and runs
-in about 15 s.
+`python rust/tools/gpu_divergence.py data --agents 4114,8318,8956 --no-contact-tangent [--cpu-dir DIR]` reproduces
+the `gpu-` files. Without `--no-contact-tangent` it uses the default model. A run takes about 15 s.

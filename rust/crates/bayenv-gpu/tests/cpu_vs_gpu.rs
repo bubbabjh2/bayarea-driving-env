@@ -1,4 +1,5 @@
-//! CPU reference sim (bayenv-sim) vs the GPU sim with the default model (GpuOptions.cpu_connector_join = true):
+//! CPU reference sim (bayenv-sim) vs the GPU sim with the default model (GpuOptions.cpu_connector_join = true,
+//! contact_tangent = true):
 //! rust/tools/compare_backends.py --spawn-default as a test. 5,000 commuters (population.js, seed 42) from 07:00,
 //! dt 0.05, 1,200 steps, every driving car commanded [0, 0.3, 0]; GPU slots that are not driving get the CPU's default
 //! action [0, 0, 0.3] (a car spawning during a step brakes on its first decision, as on the CPU). Aggregate event
@@ -22,7 +23,7 @@ fn cpu_and_gpu_agree_in_aggregate() {
     let world = match bayenv_world::World::load(data) { Ok(w) => Arc::new(w), Err(e) => { eprintln!("skip: world: {e}"); return } };
     let cap = (N + 1023) / 1024 * 1024;
     let mut o = GpuOptions { capacity: cap, start_time: START, seed: 42, obs: ObsMode::None, refuel_budget_ms: f64::INFINITY, ..Default::default() };
-    assert!(o.cpu_connector_join, "the CPU connector entry is the default GPU model");
+    assert!(o.cpu_connector_join && o.contact_tangent, "the CPU connector entry and the f32 contact tangent are the default GPU model");
     o.features.accidents = true;
     let mut gpu = match bayenv_gpu::env::create(world.clone(), o) { Ok(s) => s, Err(e) => { eprintln!("skip: {e}"); return } };
     gpu.set_population(Arc::new(GpuPopulation::generate(&world, N, 42.0, true).unwrap()), true);

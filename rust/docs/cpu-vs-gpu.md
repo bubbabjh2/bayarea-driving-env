@@ -3,14 +3,16 @@
 The two backends implement the same model twice. The CPU sim is `src/sim` in JS and `bayenv-sim` in Rust, bit-exact
 with each other. The GPU sim is `src/gpu` in JS (WGSL) and `bayenv-gpu` in Rust (the same WGSL through wgpu).
 
-The Rust GPU defaults to `GpuOptions.cpu_connector_join = true`. This fixes a bug in the JS GPU kernel's junction
-connector entry, described in `kerb-investigation.md`. With `false` (legacy mode), the Rust GPU runs the JS kernels
-and matches the JS GPU within float tolerance, including the bug.
+The Rust GPU defaults to `GpuOptions.cpu_connector_join = true` and `contact_tangent = true`. These fix two bugs in
+the JS GPU kernels: the junction connector entry (`kerb-investigation.md`) and the f32 friction tangent of the contact
+impulse (`crash-divergence.md`). With both `false` (legacy mode), the Rust GPU runs the JS kernels and matches the JS
+GPU within float tolerance, including the bugs.
 
 **Legacy GPU runs and every GPU checkpoint trained before this default were trained with the bug.** In those runs,
 almost every car entering a junction box got a constant heading offset of up to 0.09 rad. A car that does not steer
 against the offset drifts into the kerb. Those policies learned to correct a drift that the CPU model, and now the
-default GPU model, does not have.
+default GPU model, does not have. The contact-tangent bug affects only crash outcomes: aligned rear-end wrecks spin
+to the kerb instead of stopping in their lane.
 
 Measured with `rust/tools/compare_backends.py data 5000 1200 25200 42 [--legacy-gpu] [--spawn-default]`. The setup is
 5,000 commuters from population.js, seed 42, from 07:00, dt 0.05, k = 1, with every driving car commanded
@@ -23,7 +25,7 @@ Measured with `rust/tools/compare_backends.py data 5000 1200 25200 42 [--legacy-
 | crashed (car disabled) | 28 / 27, 27 common, 26 on the same step | 28 / 31, 27 common | 28 / 41, 13 common |
 | contact rows | 17 / 12 | 17 / 10 | 17 / 1,394 (1,388 barrier strikes) |
 | missed exit | 120 / 123, 116 common | 120 / 123, 116 common | 120 / 86, 74 common |
-| signal / stop violation | 1,627 / 1,627, 657 on the same step | 1,627 / 1,625 | 1,627 / 1,592 |
+| signal / stop violation | 1,627 / 1,626, 659 on the same step | 1,627 / 1,625 | 1,627 / 1,592 |
 
 `crates/bayenv-gpu/tests/cpu_vs_gpu.rs` runs the first column as a test, so it is part of `check.sh`. It asserts
 aggregate agreement within tolerances around these values.
@@ -42,10 +44,11 @@ What this means:
   re-projected, with a heading error of about 0.2 rad. This is a CPU artefact, and no GPU flag is provided.
   `missed_at_out_edge` changes only when the GPU reports the missed exit, not its route.
   (B) A **JS-GPU bug:** in an aligned rear-end, the f32 friction tangent of the contact impulse is rounding noise
-  (`collidefns.wgsl:60`), and the wrecks spin to the kerb. `GpuOptions.contact_tangent` /
-  `Env(..., contact_tangent=True)` (default off) fixes it. Crashed agents in common go from 67 to 70 (CPU 76, GPU 71).
+  (`collidefns.wgsl:60`), and the wrecks spin to the kerb. `GpuOptions.contact_tangent` (default on;
+  `Env(..., contact_tangent=False)` is the legacy JS model) fixes it. Crashed agents in common go from 67 to 70
+  (CPU 76, GPU 71).
 * **For training,** the default GPU model is the CPU model. Compare policies trained on legacy GPU runs only with
-  `cpu_connector_join=False`, or retrain or fine-tune them on the default model.
+  `cpu_connector_join=False, contact_tangent=False`, or retrain or fine-tune them on the default model.
 
 ## Crash divergence dumps (CPU half: `rust/tools/cpu_divergence.py`)
 
