@@ -105,8 +105,8 @@ impl Router for AStar {
 
 /// The shared router (bayenv_world::nav::Router, the route.js makeRouter port) behind the sim's Router trait.
 pub struct NavRouter { r: bayenv_world::nav::router::Router, avoid: Vec<u32>, pen: Vec<(u32, f64)>,
-    /// parallel batch routing (with_pool): the graph and per-thread routers (search state is per router)
-    graph: Option<std::sync::Arc<bayenv_world::graph::SimGraph>>, weight: f64, pool: Vec<std::sync::Mutex<bayenv_world::nav::router::Router>>, pool_size: usize }
+    /// parallel batch routing (with_pool; the pool of search states lives in the nav Router)
+    graph: Option<std::sync::Arc<bayenv_world::graph::SimGraph>>, weight: f64, pool_size: usize }
 
 impl NavRouter {
     /// makeRouter(graph, { weight }) over the sim's world.
@@ -131,7 +131,7 @@ impl NavRouter {
     /// makeRouter(graph, { weight }) directly over the shared graph (no World copy).
     pub fn from_sim_graph(g: &bayenv_world::graph::SimGraph, weight: f64) -> NavRouter {
         let o = bayenv_world::nav::router::RouterOpts { weight, ..Default::default() };
-        NavRouter { r: bayenv_world::nav::router::Router::new(g, &o), avoid: Vec::new(), pen: Vec::new(), graph: None, weight, pool: Vec::new(), pool_size: 0 }
+        NavRouter { r: bayenv_world::nav::router::Router::new(g, &o), avoid: Vec::new(), pen: Vec::new(), graph: None, weight, pool_size: 0 }
     }
     /// route_batch runs avoid / penalty queries on up to `threads` routers in parallel (built on first use; each
     /// holds its own search state, ~ one graph's worth of node arrays). Results equal sequential `route`.
@@ -149,24 +149,13 @@ impl Router for NavRouter {
         self.r.route_with(start as usize, goal as usize, &q).map(to_i)
     }
     fn route_batch(&mut self, queries: &[(i32, i32)], avoid: Option<&std::collections::HashSet<i32>>, penalty: Option<&std::collections::HashMap<i32, f64>>) -> Vec<Option<Vec<i32>>> {
-        // (cached queries too: a pool router's result equals the cached one; only the main router's cache misses it)
         if self.pool_size < 2 || queries.len() < 4 || self.graph.is_none() { return queries.iter().map(|&(s, g)| self.route(s, g, avoid, penalty)).collect(); }
-        if self.pool.is_empty() {
-            let o = bayenv_world::nav::router::RouterOpts { weight: self.weight, ..Default::default() };
-            let g = self.graph.as_ref().unwrap();
-            self.pool = (0..self.pool_size).map(|_| std::sync::Mutex::new(bayenv_world::nav::router::Router::new(g, &o))).collect();
-        }
+        // bayenv_world's route_batch: rayon over pooled search states on the router's shared graph (+ OD cache for
+        // plain queries); each result equals route_with of the same query
         let a: Vec<u32> = avoid.map(|s| s.iter().map(|&x| x as u32).collect()).unwrap_or_default();
         let p: Vec<(u32, f64)> = penalty.map(|m| m.iter().map(|(&e, &v)| (e as u32, v)).collect()).unwrap_or_default();
-        use rayon::prelude::*;
-        let n = self.pool.len();
-        let chunk = queries.len().div_ceil(n);
-        let mut out: Vec<Option<Vec<i32>>> = vec![None; queries.len()];
-        self.pool.par_iter_mut().zip(out.par_chunks_mut(chunk)).zip(queries.par_chunks(chunk)).for_each(|((r, o), qs)| {
-            let r = r.get_mut().unwrap();
-            let q = bayenv_world::nav::router::RouteQuery { avoid: &a, penalty: &p };
-            for (k, &(s, g)) in qs.iter().enumerate() { o[k] = r.route_with(s as usize, g as usize, &q).map(|v| v.into_iter().map(|x| x as i32).collect()); }
-        });
-        out
+        let q = bayenv_world::nav::router::RouteQuery { avoid: &a, penalty: &p };
+        let qs: Vec<(usize, usize, bayenv_world::nav::router::RouteQuery)> = queries.iter().map(|&(s, g)| (s as usize, g as usize, q)).collect();
+        self.r.route_batch(&qs).into_iter().map(|r| r.map(|v| v.into_iter().map(|x| x as i32).collect())).collect()
     }
 }
