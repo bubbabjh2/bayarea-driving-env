@@ -1,9 +1,9 @@
 //! Streaming route prefetch (RouteProvider workers) vs serial routing at departure.
 //!
-//!   cargo run --release -p bayenv-gpu --example stream_prefetch -- <data> route [n=1380000] [threads=cores] [from_h=5] [to_h=10]
+//!   cargo run --release -p bayenv-gpu --example stream_prefetch -- <data> route [n=1380000] [threads=cores] [from_h=5] [to_h=10] [modes=0,threads (threads[:cache],...)]
 //!     routes every departure of [from_h - 1 h, to_h) (the window setStreaming takes from a from_h start) serially,
 //!     then with `threads` prefetch workers; checks that both give the same route for every commuter.
-//!   cargo run --release -p bayenv-gpu --example stream_prefetch -- <data> sim [n] [threads] [start_h=5] [hours=1] [steps=20] [capacity]
+//!   cargo run --release -p bayenv-gpu --example stream_prefetch -- <data> sim [n] [threads] [start_h=5] [hours=1] [steps=20] [capacity] [cache=0] [chunk_h=1]
 //!     GPU sim with streaming on (threads = 0: serial routes at departure); per simulated hour: wall time, cars,
 //!     route stats; the spawn hash (every placed departure: commuter, step, slot, queue entry, route) at the end.
 use bayenv_gpu::sim::{CommuterTable, GpuOptions, RouteProvider};
@@ -32,8 +32,8 @@ fn main() {
             let (k0, k1) = (table.index_at(h0 * 3600.0 - 3600.0), table.index_at(h1 * 3600.0));
             let ids: Vec<usize> = table.order[k0..k1].iter().map(|&i| i as usize).collect();
             println!("departures {}..{} h: {} commuters", h0 - 1.0, h1, ids.len());
-            let run = |threads: usize| {
-                let mut p = RouteProvider::new(&world, threads);
+            let run = |threads: usize, cache: usize| {
+                let mut p = RouteProvider::new(&world, threads, cache);
                 let t = Instant::now();
                 let mut h = 0xcbf29ce484222325u64; let mut none = 0;
                 if threads > 0 {
@@ -56,37 +56,56 @@ fn main() {
                 let s = t.elapsed().as_secs_f64();
                 let st = p.stats();
                 let computed = st.misses + st.prefetched;
-                println!("threads {threads:>2}: {:.1} s, {:.0} departures/s, {} A* ({:.0} routes/s), OD cache hit rate {:.1} % ({} served from cache incl. prefetched, {} waited for a worker, {:.1} s waiting), {} no route, cache {} entries / {:.0} MB of edges, worker A* {:.2} ms/route, sim-thread A* {:.2} ms/route, load {}, route hash {h:016x}",
-                    s, ids.len() as f64 / s, computed, computed as f64 / s, 100.0 * (1.0 - computed as f64 / st.lookups as f64), st.hits, st.waited, st.wait_ns as f64 * 1e-9, none,
-                    st.cache_len, st.cache_edges as f64 * 4.0 / 1048576.0, st.worker_ns as f64 * 1e-6 / st.prefetched.max(1) as f64, st.route_ns as f64 * 1e-6 / st.misses.max(1) as f64, load());
+                println!("threads {threads:>2}: {:.1} s, {:.0} departures/s, {} A* ({:.0} routes/s), cache {cache}: OD hit rate {:.1} % ({} served from the cache, {} waited for a worker, {:.1} s waiting), {} no route, cache {} entries / {:.0} MB of edges, sim-thread bookkeeping + locks {:.2} s, worker A* {:.2} ms/route, sim-thread A* {:.2} ms/route, load {}, route hash {h:016x}",
+                    s, ids.len() as f64 / s, computed, computed as f64 / s, 100.0 * (1.0 - computed as f64 / st.lookups as f64), st.cache_hits, st.waited, st.wait_ns as f64 * 1e-9, none,
+                    st.cache_len, st.cache_edges as f64 * 4.0 / 1048576.0, (st.lock_ns - st.wait_ns) as f64 * 1e-9, st.worker_ns as f64 * 1e-6 / st.prefetched.max(1) as f64, st.route_ns as f64 * 1e-6 / st.misses.max(1) as f64, load());
                 h
             };
-            let modes: Vec<usize> = a.get(7).map_or(vec![0, threads], |s| s.split(',').map(|x| x.parse().unwrap()).collect());
-            let hs: Vec<u64> = modes.iter().map(|&t| run(t)).collect();
+            // modes: threads[:cache entries], comma-separated
+            let modes: Vec<(usize, usize)> = a.get(7).map_or(vec![(0, 0), (threads, 0)], |s| s.split(',').map(|x| { let mut p = x.split(':'); (p.next().unwrap().parse().unwrap(), p.next().map_or(0, |c| c.parse().unwrap())) }).collect());
+            let hs: Vec<u64> = modes.iter().map(|&(t, c)| run(t, c)).collect();
             println!("routes identical across {:?}: {}", modes, hs.windows(2).all(|w| w[0] == w[1]));
         }
         "sim" => {
             let (h0, hours, steps): (f64, f64, usize) = (arg(&a, 5, 5.0), arg(&a, 6, 1.0), arg(&a, 7, 20));
             let cap: usize = arg(&a, 8, n.min(131072).div_ceil(1024) * 1024);
-            let o = GpuOptions { capacity: cap, start_time: h0 * 3600.0, refuel_budget_ms: f64::INFINITY, route_threads: threads, ..Default::default() };
+            let cache: usize = arg(&a, 9, 0);
+            let chunk_h: f64 = arg(&a, 10, 1.0);
+            let o = GpuOptions { capacity: cap, start_time: h0 * 3600.0, refuel_budget_ms: f64::INFINITY, route_threads: threads, route_cache: cache, ..Default::default() };
             let mut sim = bayenv_gpu::env::create(world.clone(), o).expect("sim");
             sim.set_streaming(Arc::new(table), true, None);
+            // reroute ODs (diagnostic for an OD cache on reroutes): plain = cacheable by OD; others keyed by the
+            // 60 s traffic-penalty epoch
+            let mut seen_q: std::collections::HashSet<(u32, u64)> = Default::default();
+            let (mut rr_n, mut rr_plain) = (0u64, 0u64);
+            let mut rr_keys: std::collections::HashSet<(u32, u32, i64)> = Default::default();
+            let mut rr_plain_keys: std::collections::HashSet<(u32, u32)> = Default::default();
             println!("sim: capacity {cap}, start {h0} h, {hours} h, {steps} steps per call, route threads {threads}");
-            let per_hour = (3600.0 / sim.dt).round() as usize / steps;
+            let per_hour = (chunk_h * 3600.0 / sim.dt).round() as usize / steps;
             let total = Instant::now();
-            let total_calls = (hours * per_hour as f64).round() as usize;
+            let total_calls = (hours / chunk_h * per_hour as f64).round() as usize;
             for hr in 0..total_calls.div_ceil(per_hour) {
                 let t = Instant::now(); let s0 = sim.route_stats().unwrap();
-                for _ in 0..per_hour.min(total_calls - hr * per_hour) { sim.run_steps(steps); }
+                for _ in 0..per_hour.min(total_calls - hr * per_hour) {
+                    sim.sync();
+                    for (f, g, plain, slot, tb) in sim.reroute_ods() {
+                        if !seen_q.insert((slot, tb)) { continue; }
+                        rr_n += 1;
+                        if plain { rr_plain += 1; rr_plain_keys.insert((f, g)); } else { rr_keys.insert((f, g, (sim.time / 60.0).floor() as i64)); }
+                    }
+                    sim.run_steps(steps);
+                }
                 sim.sync();
                 let s1 = sim.route_stats().unwrap(); let ss = sim.x.stream_stats;
-                println!("  hour {:>4.1}-{:>4.1}: {:.1} s wall, cars on road {}, routed {} total, A* this hour {} sim-thread / {} workers, sim thread routing {:.1} s + waiting {:.1} s, pool full {}, load {}",
-                    h0 + hr as f64, h0 + hr as f64 + 1.0, t.elapsed().as_secs_f64(), cap - sim.free_len(), ss.routed, s1.misses - s0.misses, s1.prefetched - s0.prefetched,
+                println!("  {:>5.2}-{:>5.2} h: {:.1} s wall, cars on road {}, routed {} total, A* this hour {} sim-thread / {} workers, sim thread routing {:.1} s + waiting {:.1} s, pool full {}, load {}",
+                    h0 + hr as f64 * chunk_h, h0 + (hr + 1) as f64 * chunk_h, t.elapsed().as_secs_f64(), cap - sim.free_len(), ss.routed, s1.misses - s0.misses, s1.prefetched - s0.prefetched,
                     (s1.route_ns - s0.route_ns) as f64 * 1e-9, (s1.wait_ns - s0.wait_ns) as f64 * 1e-9, ss.pool_full, load());
             }
             let st = sim.route_stats().unwrap();
             println!("total {:.1} s; spawn hash {:016x} routed {} no route {}; OD lookups {} hits {} ({:.1} %)", total.elapsed().as_secs_f64(), sim.x.stream_stats.spawn_hash, sim.x.stream_stats.routed, sim.counters.no_route,
                 st.lookups, st.hits, 100.0 * st.hits as f64 / st.lookups.max(1) as f64);
+            println!("reroutes queued {rr_n} (reroutes applied {}): plain {rr_plain} with {} distinct ODs (OD-cache hit rate {:.1} %); penalised {} with {} distinct (OD, 60 s epoch) (hit rate {:.1} %)",
+                sim.counters.reroutes, rr_plain_keys.len(), 100.0 * (1.0 - rr_plain_keys.len() as f64 / rr_plain.max(1) as f64), rr_n - rr_plain, rr_keys.len(), 100.0 * (1.0 - rr_keys.len() as f64 / (rr_n - rr_plain).max(1) as f64));
         }
         "spawn" => {
             // host-only spawn table, every field: frames of 20 steps without GPU stepping; each spawn-queue entry is
