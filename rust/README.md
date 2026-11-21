@@ -24,6 +24,19 @@ python3 -m venv .venv && .venv/bin/pip install maturin numpy gymnasium
 cd crates/bayenv-py && ../../.venv/bin/maturin develop --release                      # installs `bayenv`
 ```
 
+## Data verification
+
+`World::load` checks every input (roads, controls, stations, surfaces, crossings, crosswalks) against the sha256 values
+in `tools/osm/world-manifest.json`, which is embedded at compile time; hashes are cached per size and mtime.
+- A missing unpacked `controls.json` is restored from the committed `.json.gz`.
+- A missing `data/junctions.bin` is built from the verified inputs. The result must equal the manifest's
+  junctions.bin byte for byte, and it is cached in `data/build/rust/junctions.bake`, keyed by the input hashes.
+- A missing, stale or modified file is an error naming the fix (`git checkout -- data/<file>`, `npm run unpack`,
+  delete a stale junctions.bin). The loader never silently builds a different world.
+- `LoadOptions { verify: false, .. }` is for custom data dirs.
+- Test: `tests/fresh_clone.rs` copies only the git-tracked data into a temp dir and must reach the same
+  `World::content_hash()` as the full checkout. A tampered input must fail.
+
 ## Python
 
 ```python
