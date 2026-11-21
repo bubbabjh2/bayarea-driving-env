@@ -24,6 +24,28 @@ Router optimizations (weight 1.25): first straight port with split arrays 1.54 m
 out-edges + single-division hypot (bit-identical to V8 `Math.hypot`, tested) 1.47 ms -> Morton-ordered internal node
 numbering 1.09-1.12 ms (results are independent of the numbering: heap order depends only on keys and push order).
 
+Router v2 (shared graph, batch, OD cache, exact fast A*; `cargo run --release -p bayenv-world --example router_bench -- ../data oracle/nav/nav.json 3`).
+Before = the previous router (kept as `nav::router_ref`), after = `nav::Router`, alternating per query in one process, best
+of 3 rounds. Taken under the bench lock on a heavily shared machine (load average 30-90 during the run), so the absolute numbers are
+higher than the table above. The ratios are the reliable part.
+
+| query kind (oracle queries) | before | after | speed-up |
+|---|---|---|---|
+| plain w 1.25 (3000) | 1.177 ms | 0.817 ms | 1.44x |
+| plain w 1 (750) | 2.364 ms | 1.628 ms | 1.45x |
+| avoid w 1.25 (750) | 4.167 ms | 2.780 ms | 1.50x |
+| penalty w 1.25 (750) | 3.083 ms | 2.055 ms | 1.50x |
+| `route_batch`, 4500 w 1.25 queries (plain + avoid + penalty), 14 threads | 502 q/s (1 thread) | 4312 q/s (740 q/s on 1 thread) | 8.6x vs before |
+| OD cache hit (`route`, plain) | 0.9 ms (miss) | 0.12 us | |
+| `route_batch` all cache hits | | 0.26 us wall per query | |
+
+Gains come from these changes: a 4-ary heap with goal-bound push skipping and a tie check (an exact fallback to the JS heap
+fired 21 times in 102k random queries), 16-byte node state (`gen << 1 | closed`), out-edges that carry the head node's
+coordinates and out-edge span (heap entries carry the span, and the pushed node's out-edges are prefetched), and the
+junction penalty from a per-rank table. A "no path" between strongly connected components that cannot reach each
+other costs 0 pops, where it was a full search before (11k of the 102k random equality queries). The batch scales
+by 5.8x on 14 threads under this load. Search state is 16 B per node per worker, and the pool holds at most one state per rayon thread.
+
 ## Lane geometry + junction builder (bayenv_world::lanes_build, junctions_build, `build-junctions`)
 
 Full corridor (291,155 edges): `buildLaneGeometry` (opposing-carriageway + taper-limit passes) and `tools/build_junctions.mjs`

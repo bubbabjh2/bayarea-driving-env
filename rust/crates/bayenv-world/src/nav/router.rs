@@ -44,6 +44,7 @@ pub struct RouteQuery<'a> {
     /// edges never used
     pub avoid: &'a [u32],
     /// (edge, extra seconds); a later entry for the same edge replaces an earlier one (Map.set); 0 / NaN = none
+    /// (a negative value that makes a cycle's cost negative never terminates, as in the JS)
     pub penalty: &'a [(u32, f64)],
 }
 impl RouteQuery<'_> {
@@ -483,14 +484,26 @@ impl Router {
             }
             todo.push(i);
         }
-        let found: Vec<Option<Vec<u32>>> = todo.par_iter().map_init(
-            || { let st = self.pool.lock().unwrap().pop().unwrap_or_else(|| SearchState::new(g)); Lease { pool: &self.pool, st: Some(st) } },
-            |lease, &i| {
-                let (s, t, ref q) = queries[i];
+        // one worker per rayon thread (at most), each with one pooled search state, pulling queries from a shared
+        // counter: the pool never holds more states than threads (rayon map_init would make one per split)
+        let workers = rayon::current_num_threads().min(todo.len()).max(1);
+        let next = std::sync::atomic::AtomicUsize::new(0);
+        let parts: Vec<Vec<(usize, Option<Vec<u32>>)>> = (0..workers).into_par_iter().map(|_| {
+            let mut lease = Lease { pool: &self.pool, st: Some(self.pool.lock().unwrap().pop().unwrap_or_else(|| SearchState::new(g))) };
+            let st = lease.st.as_mut().unwrap();
+            let mut v = Vec::new();
+            loop {
+                let k = next.fetch_add(1, Ordering::Relaxed);
+                if k >= todo.len() { break; }
+                let (s, t, ref q) = queries[todo[k]];
                 let mut out = Vec::new();
-                let ok = lease.st.as_mut().unwrap().route_into(g, s, t, q, &mut out);
-                if ok { Some(out) } else { None }
-            }).collect();
+                let ok = st.route_into(g, s, t, q, &mut out);
+                v.push((k, if ok { Some(out) } else { None }));
+            }
+            v
+        }).collect();
+        let mut found: Vec<Option<Vec<u32>>> = vec![None; todo.len()];
+        for p in parts { for (k, r) in p { found[k] = r; } }
         for (&i, r) in todo.iter().zip(found) {
             let (s, t, ref q) = queries[i];
             if q.is_plain() { if let Some(c) = &self.cache { c.insert(self.key(s, t), r.as_deref().map(Arc::from)); } }
