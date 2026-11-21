@@ -76,6 +76,24 @@ pub struct GpuOptions {
     /// rust/docs/crash-divergence.md). false = legacy mode, bit-identical with the JS GPU kernels (whose f32 tangent
     /// gives aligned rear-end wrecks a spurious spin). JS: off
     pub contact_tangent: bool,
+    /// contact-resolve priorities from the car pair instead of the contact list index (kernels/contact_order.wgsl;
+    /// rust/docs/determinism.md): same-seed runs bit-identical. Default ON; false = the JS kernel (run-to-run
+    /// differences wherever two contacts share a car). Needs capacity <= 131,072. JS: off
+    pub deterministic_contacts: bool,
+    /// entry-lane claims of spawns and station re-entries in claim / commit rounds, the smallest queue entry / slot
+    /// winning a contested lane (kernels/spawn_order.wgsl; rust/docs/determinism.md). Default ON; false = the JS
+    /// kernel (the first thread wins: run-dependent). JS: off
+    pub deterministic_spawn: bool,
+    /// host: each step's GPU events in slot order (stable) before they are handled (`canonical_event_order`;
+    /// rust/docs/determinism.md). Default ON; false = the order the kernels' atomics emitted them (run-dependent:
+    /// it feeds the free lists, the reroute / refuel queues and the route arena). JS: off
+    pub deterministic_events: bool,
+    /// perception without read / write races or list-order ties: the leaders pass reads other cars' control records
+    /// from a snapshot, jperceive / jyield read other cars' leader / gap from a snapshot, courtesy proposals are
+    /// committed by a min-slot rule, the junction lists and hash cells are slot-ordered (kernels/leaders_order.wgsl,
+    /// courtesy_order, junction_order, jyield_order, hash_order; rust/docs/determinism.md). Default ON; false = the JS
+    /// kernels. JS: off
+    pub deterministic_leaders: bool,
     /// lane / hash-cell starts with kernels/scan4k.wgsl (4096 per workgroup, the count clears folded into the
     /// scan: 12 -> 6 dispatches; identical starts). JS: off
     pub fast_scan: bool,
@@ -86,7 +104,9 @@ pub struct GpuOptions {
     pub profile: bool,
     /// populations: schedule the return legs (GPU_DEFAULTS.returnTrips)
     pub return_trips: bool,
-    /// wall-clock budget per frame for refuel plans (JS refuelBudgetMs = 4; f64::INFINITY = every queued plan each frame, deterministic)
+    /// wall-clock budget per frame for refuel plans. Default f64::INFINITY = every queued plan each frame, as one
+    /// parallel batch (deterministic). A finite budget (JS refuelBudgetMs = 4) makes the run depend on wall-clock time
+    /// (rust/docs/determinism.md)
     pub refuel_budget_ms: f64,
     /// streaming: route prefetch workers (0 = serial A* at departure; n = n worker threads routing departures up to
     /// `route_ahead` sim s ahead). Same routes and spawn steps for any value. Default: available cores
@@ -109,7 +129,7 @@ impl Features {
 impl GpuOptions {
     /// Set a host optimisation flag by name (indirect_resolve, fused_resolve, sorted_order, profile).
     pub fn set_flag(&mut self, name: &str, on: bool) -> Result<(), String> {
-        match name { "indirect_resolve" => self.indirect_resolve = on, "fused_resolve" => self.fused_resolve = on, "sorted_order" => self.sorted_order = on, "fast_scan" => self.fast_scan = on, "fast_search" => self.fast_search = on, "zero_init_workgroup" => self.zero_init_workgroup = on, "cpu_connector_join" => self.cpu_connector_join = on, "contact_tangent" => self.contact_tangent = on,
+        match name { "indirect_resolve" => self.indirect_resolve = on, "fused_resolve" => self.fused_resolve = on, "sorted_order" => self.sorted_order = on, "fast_scan" => self.fast_scan = on, "fast_search" => self.fast_search = on, "zero_init_workgroup" => self.zero_init_workgroup = on, "cpu_connector_join" => self.cpu_connector_join = on, "contact_tangent" => self.contact_tangent = on, "deterministic_contacts" => self.deterministic_contacts = on, "deterministic_spawn" => self.deterministic_spawn = on, "deterministic_events" => self.deterministic_events = on, "deterministic_leaders" => self.deterministic_leaders = on,
             "profile" => self.profile = on, _ => return Err(format!("unknown GpuOptions flag {name}")) }
         Ok(())
     }
@@ -128,7 +148,7 @@ impl Default for GpuOptions {
     fn default() -> Self {
         GpuOptions { capacity: 131072, dt: 0.05, start_time: 5.0 * 3600.0, seed: 1, obs: ObsMode::V2, steer_rate: false, decide_every: 1, features: Features::default(),
             controls: true, junctions: true, table_bits: 18, contact_cap: 131072, ev_cap: 16384, spawn_queue: 16384, op_cap: 16384, max_blocks: 4096, route_slack: 1 << 22,
-            resolve_rounds: 12, progress_weight: 1.0, jerk_weight: 0.5, jerk_reward: false, grade_obs: true, squeeze_delay: 15.0 * 60.0, deadlock_break: 0, reroute: true, keep_events: false, record_events: true, record_share: false, missed_at_out_edge: false, indirect_resolve: true, fused_resolve: true, sorted_order: true, fast_scan: true, fast_search: true, cpu_connector_join: true, contact_tangent: true, zero_init_workgroup: false, profile: false, return_trips: true, refuel_budget_ms: 4.0,
+            resolve_rounds: 12, progress_weight: 1.0, jerk_weight: 0.5, jerk_reward: false, grade_obs: true, squeeze_delay: 15.0 * 60.0, deadlock_break: 0, reroute: true, keep_events: false, record_events: true, record_share: false, missed_at_out_edge: false, indirect_resolve: true, fused_resolve: true, sorted_order: true, fast_scan: true, fast_search: true, cpu_connector_join: true, contact_tangent: true, deterministic_contacts: true, deterministic_spawn: true, deterministic_events: true, deterministic_leaders: true, zero_init_workgroup: false, profile: false, return_trips: true, refuel_budget_ms: f64::INFINITY,
             route_threads: std::thread::available_parallelism().map_or(1, |n| n.get()), route_ahead: 300.0, route_cache: 0 }
     }
 }
@@ -311,7 +331,9 @@ impl GpuSim {
         gpu.storage("hitems", (cap * 4) as u64, None, wgpu::BufferUsages::empty());
         gpu.storage("hidx", (cap * 8) as u64, None, wgpu::BufferUsages::empty());
         gpu.storage("contacts", ((4 + opts.contact_cap * 8 + 262144 * 4 + cap) * 4) as u64, None, wgpu::BufferUsages::empty());
-        gpu.storage("laneClaim", (blob.k.max(1) * 4) as u64, None, wgpu::BufferUsages::empty());
+        // deterministic_spawn: + bids (K), lane choices per slot (cap) and per queue entry (spawn_queue); kernels/spawn_order.wgsl
+        let lc_words = if opts.deterministic_spawn { 2 * blob.k + cap + opts.spawn_queue } else { blob.k };
+        gpu.storage("laneClaim", (lc_words.max(1) * 4) as u64, None, wgpu::BufferUsages::empty());
         let io_words = io::EVDATA + 4 * opts.ev_cap;
         gpu.storage("io", (io_words * 4) as u64, None, wgpu::BufferUsages::empty());
         gpu.storage("queue", (opts.spawn_queue * L::SPAWN_WORDS * 4) as u64, None, wgpu::BufferUsages::empty());
@@ -398,16 +420,33 @@ impl GpuSim {
     fn j_m(&self) -> usize { self.blob.j_m.unwrap_or(0) }
 
     fn compile(&mut self) -> Result<(), String> {
+        if self.opts.deterministic_contacts && self.cap > 131072 { return Err(format!("deterministic_contacts needs capacity <= 131072 (contact keys use i + j < 2^18), got {}", self.cap)); }
         let mut specs = kernels::specs(self.has_junctions(), self.opts.obs == ObsMode::V3);
         for sp in specs.iter_mut() { sp.file = self.kernel_file(sp.file); }
         // compile in parallel (naga + Metal pipeline creation), results in spec order
         let gpu = &self.gpu; let obs = self.opts.obs; let cap = self.cap;
         let out: Vec<Result<Kernel, String>> = std::thread::scope(|s| {
-            let zi = self.opts.zero_init_workgroup; let fsr = self.fast_search_ok; let cj = self.opts.cpu_connector_join; let ct = self.opts.contact_tangent;
-            let hs: Vec<_> = specs.iter().map(|sp| s.spawn(move || { let src = kernels::model_patches(kernels::source(sp, obs, cap), sp.file, cj, ct); gpu.kernel_with(sp.label, &if fsr { kernels::patch(&src) } else { src }, sp.entry, zi) })).collect();
+            let zi = self.opts.zero_init_workgroup; let fsr = self.fast_search_ok; let cj = self.opts.cpu_connector_join; let ct = self.opts.contact_tangent; let oo = &self.opts;
+            let hs: Vec<_> = specs.iter().map(|sp| s.spawn(move || { let src = kernels::order_patches(kernels::model_patches(kernels::source(sp, obs, cap), sp.file, cj, ct), sp.file, oo); gpu.kernel_with(sp.label, &if fsr { kernels::patch(&src) } else { src }, sp.entry, zi) })).collect();
             hs.into_iter().map(|h| h.join().unwrap()).collect()
         });
         for (sp, k) in specs.iter().zip(out) { self.k.insert(sp.label, k?); }
+        if self.opts.deterministic_spawn {
+            for (l, e) in [("spawnClaim", "spawnClaim"), ("spawnCommit", "spawnCommit"), ("leaveClaim", "leaveClaim"), ("leaveCommit", "leaveCommit")] {
+                let spec = kernels::KernelSpec { label: l, file: "spawn", entry: e, defines: true };
+                let src = self.patched(kernels::order_patches(kernels::model_patches(kernels::source(&spec, self.opts.obs, self.cap), "spawn", false, false), "spawn", &self.opts));
+                self.k.insert(l, self.gpu.kernel_with(l, &src, e, self.opts.zero_init_workgroup)?);
+            }
+        }
+        if self.opts.deterministic_leaders {
+            let mut ks = vec![("ctlSnap", "leaders", "ctlSnap"), ("hash.hrank", "hash", "hrank")];
+            if self.has_junctions() { ks.extend([("courtesy.commit", "courtesy", "commit"), ("jyield.snap", "jyield", "ysnap"), ("junction.jsortA", "junction", "jsortA"), ("junction.jsortB", "junction", "jsortB")]); }
+            for (l, f, e) in ks {
+                let spec = kernels::KernelSpec { label: l, file: f, entry: e, defines: true };
+                let src = self.patched(kernels::order_patches(kernels::source(&spec, self.opts.obs, self.cap), f, &self.opts));
+                self.k.insert(l, self.gpu.kernel_with(l, &src, e, self.opts.zero_init_workgroup)?);
+            }
+        }
         self.k.insert("contactArgs", self.gpu.kernel("contactArgs", kernels::host_raw("contact_args"), "main")?);
         { let code = crate::defines::prefix(self.opts.obs, self.cap) + &kernels::load("common") + "\n" + kernels::host_raw("step_mark");
           self.k.insert("stepMark", self.gpu.kernel("stepMark", &code, "stepMark")?); }
@@ -419,7 +458,7 @@ impl GpuSim {
                 if !only.as_ref().map_or(on, |o| o.split(',').any(|x| x == l)) { continue; }
                 if !self.k.contains_key(l) { continue; }
                 let spec = kernels::KernelSpec { label: sl, file: self.kernel_file(file), entry, defines: true };
-                let src = kernels::sorted_source(&self.patched(kernels::model_patches(kernels::source(&spec, self.opts.obs, self.cap), spec.file, self.opts.cpu_connector_join, self.opts.contact_tangent)), entry, sorted_wg(l, wg));
+                let src = kernels::sorted_source(&self.patched(kernels::order_patches(kernels::model_patches(kernels::source(&spec, self.opts.obs, self.cap), spec.file, self.opts.cpu_connector_join, self.opts.contact_tangent), spec.file, &self.opts)), entry, sorted_wg(l, wg));
                 self.k.insert(sl, self.gpu.kernel_with(sl, &src, &format!("{entry}_sorted"), self.opts.zero_init_workgroup)?);
             }
         }
@@ -427,7 +466,7 @@ impl GpuSim {
             for (l, e) in [("scan4k.first", "scanFirst"), ("scan4k.inPlace", "scanInPlace"), ("scan4k.add", "addSums")] { self.k.insert(l, self.gpu.kernel_with(l, kernels::host_raw("scan4k"), e, false)?); }
         }
         if self.opts.fused_resolve {
-            let src = defines::prefix(self.opts.obs, self.cap) + &format!("const RF_ROUNDS: u32 = {}u;\n", self.opts.resolve_rounds) + &self.patched(kernels::model_patches(kernels::resolve_includes(kernels::host_raw("resolve_fused")), "contacts", false, self.opts.contact_tangent));
+            let src = defines::prefix(self.opts.obs, self.cap) + &format!("const RF_ROUNDS: u32 = {}u;\n", self.opts.resolve_rounds) + &self.patched(kernels::order_patches(kernels::model_patches(kernels::resolve_includes(kernels::host_raw("resolve_fused")), "contacts", false, self.opts.contact_tangent), "contacts", &GpuOptions { deterministic_spawn: false, deterministic_leaders: false, ..self.opts.clone() }));
             self.k.insert("contacts.resolveFused", self.gpu.kernel_with("contacts.resolveFused", &src, "resolveFused", self.opts.zero_init_workgroup)?);
         }
         Ok(())
@@ -586,8 +625,9 @@ impl GpuSim {
         let fresh = first && self.new_pose;
         if self.queue_high > 0 || self.lot > 0 || fresh {
             stage = "spawn"; if fresh { self.new_pose = false; }
-            if self.lot > 0 { push!("leave", "leave", g(cap as usize, 128)); }
-            if self.queue_high > 0 { push!("spawn", "spawn", g(self.queue_high, 64)); }
+            let det = self.opts.deterministic_spawn && !js;
+            if self.lot > 0 { if det { for _ in 0..kernels::DET_ROUNDS { push!("leaveClaim", "leaveClaim", g(cap as usize, 128)); push!("leaveCommit", "leaveCommit", g(cap as usize, 128)); } } else { push!("leave", "leave", g(cap as usize, 128)); } }
+            if self.queue_high > 0 { if det { for _ in 0..kernels::DET_ROUNDS { push!("spawnClaim", "spawnClaim", g(self.queue_high, 64)); push!("spawnCommit", "spawnCommit", g(self.queue_high, 64)); } } else { push!("spawn", "spawn", g(self.queue_high, 64)); } }
             push!("integrate.newPose", "integrate.newPose", g(cap as usize, 256));
         }
         if f.collisions {
@@ -598,6 +638,7 @@ impl GpuSim {
                 for l in (0..self.hscan.len().saturating_sub(1)).rev() { push!("addSums", &format!("hscanA{l}"), self.hscan[l].blocks as u32); }
             }
             push!("hash.hscatter", "hash.hscatter", g(cap as usize, 256));
+            if self.opts.deterministic_leaders && !js { push!("hash.hrank", "hash.hrank", g(cap as usize, 256)); push!("hash.hscatter", "hash.hscatter", g(cap as usize, 256)); }
             stage = "barrier"; push!("contacts.barrier", "contacts.barrier", g(cap as usize, 128));
             stage = "detect"; push!("contacts.detect", "contacts.detect", g(cap as usize, 128));
             stage = "resolve";
@@ -617,13 +658,18 @@ impl GpuSim {
         let sorted = self.opts.sorted_order && !self.js_stages;
         if sorted { push!("listArgs", "listArgs", 1); }
         let hj = self.blob.j_m.is_some() && !f.empty;
-        if hj { stage = "jlists"; push!("junction.clear", "junction.clear", g(self.j_m() + self.blob.e, 256)); push!("junction.clearOff", "junction.clearOff", g(self.blob.e, 256)); push!("junction.link", "junction.link", g(cap as usize, 256)); }
-        stage = "leaders"; push!("leaders", "leaders", g(cap as usize, 128));
+        if hj { stage = "jlists"; push!("junction.clear", "junction.clear", g(self.j_m() + self.blob.e, 256)); push!("junction.clearOff", "junction.clearOff", g(self.blob.e, 256)); push!("junction.link", "junction.link", g(cap as usize, 256)); if self.opts.deterministic_leaders && !js { push!("junction.jsortA", "junction.jsortA", g(cap as usize, 256)); push!("junction.jsortB", "junction.jsortB", g(cap as usize, 256)); } }
+        stage = "leaders";
+        let dl = self.opts.deterministic_leaders && !js;
+        if dl && !hj { push!("ctlSnap", "ctlSnap", g(cap as usize, 256)); }   // with junctions: in junction.jsortB
+        push!("leaders", "leaders", g(cap as usize, 128));
         if hj {
             stage = "junctions";
             if f.collisions { push!("junction.perceive", "junction.perceive", g(cap as usize, 128)); }
             push!("courtesy.propose", "courtesy.propose", g(cap as usize, 128)); push!("courtesy.apply", "courtesy.apply", g(cap as usize, 128));
+            if dl { push!("courtesy.commit", "courtesy.commit", g(cap as usize, 128)); }
             if self.opts.deadlock_break != 0 { push!("junction.dlFind", "junction.dlFind", g(cap as usize, 128)); push!("junction.dlApply", "junction.dlApply", g(cap as usize, 128)); }
+            if dl && self.opts.deadlock_break != 0 { push!("jyield.snap", "jyield.snap", g(cap as usize, 256)); }   // else in courtesy.commit
             push!("junction.yield", "junction.yield", g(cap as usize, 128));
             let every = jsmath::round(2.0 / self.dt).max(1.0) as u64;
             if (self.closed_n > 0 || !self.traffic_penalty.is_empty()) && self.opts.reroute && step_index % every == 0 { push!("junction.reroute", "junction.reroute", g(cap as usize, 128)); }
@@ -911,11 +957,12 @@ impl GpuSim {
     }
 
     fn ingest(&mut self) {
-        let io = std::mem::take(&mut self.io_host);
+        let mut io = std::mem::take(&mut self.io_host);
         self.gpu_stats.copy_from_slice(&io[io::STATS..io::STATS + 64]);
         let n = io[io::EVCOUNT] as usize; let cap = self.opts.ev_cap;
         if n > cap { self.counters.events_dropped += (n - cap) as u64; }
         let m = n.min(cap); let base = io::EVDATA;
+        if self.opts.deterministic_events { canonical_event_order(&mut io[base..base + 4 * m]); }
         for k in 0..m { let t = io[base + 4 * k];
             if t & 255 == ev::WRECK { self.wrecks.insert(io[base + 4 * k + 1], Wreck { lo: (t >> 8) & 15, hi: (t >> 12) & 15, ty: (t >> 16) & 255, edge: io[base + 4 * k + 2], s: f32::from_bits(io[base + 4 * k + 3]) as f64 }); } }
         if self.opts.record_events { self.record_batch(&io[base..base + 4 * m]); }
@@ -1464,4 +1511,20 @@ pub struct SimState { pub veh: Vec<u32>, pub par: Vec<u32>, pub pose: Vec<f32> }
 impl SimState {
     pub fn u(&self, slot: usize, k: usize) -> u32 { self.veh[slot * L::VEH_WORDS + k] }
     pub fn f(&self, slot: usize, k: usize) -> f32 { f32::from_bits(self.veh[slot * L::VEH_WORDS + k]) }
+}
+
+/// Canonical order of one batch of GPU events (4 words each): within every step (the segments between stepMark
+/// records, kind 254; the whole batch without them) a stable sort by slot. Only the order between different slots is
+/// left to the atomics: the events of one slot keep their order (one thread emits them in program order; kernels run
+/// in dispatch order; the contact rounds that touch a car are separated by barriers), so per-slot sequences such as
+/// CRASHX_* before CRASH or TRIPX before ARRIVE are kept.
+pub fn canonical_event_order(evs: &mut [u32]) {
+    let mut v: Vec<[u32; 4]> = evs.chunks_exact(4).map(|c| [c[0], c[1], c[2], c[3]]).collect();
+    let mut a = 0;
+    while a < v.len() {
+        let mut b = a; while b < v.len() && v[b][0] & 255 != 254 { b += 1; }
+        v[a..b].sort_by_key(|e| e[1]);
+        a = b + 1;
+    }
+    for (k, e) in v.iter().enumerate() { evs[4 * k..4 * k + 4].copy_from_slice(e); }
 }

@@ -49,6 +49,13 @@ pub const HOST_SOURCES: &[(&str, &str)] = &[
     ("obs_f16", include_str!("../kernels/obs_f16.wgsl")),
     ("cpu_connector_join", include_str!("../kernels/cpu_connector_join.wgsl")),
     ("contact_tangent", include_str!("../kernels/contact_tangent.wgsl")),
+    ("contact_order", include_str!("../kernels/contact_order.wgsl")),
+    ("spawn_order", include_str!("../kernels/spawn_order.wgsl")),
+    ("leaders_order", include_str!("../kernels/leaders_order.wgsl")),
+    ("courtesy_order", include_str!("../kernels/courtesy_order.wgsl")),
+    ("junction_order", include_str!("../kernels/junction_order.wgsl")),
+    ("jyield_order", include_str!("../kernels/jyield_order.wgsl")),
+    ("hash_order", include_str!("../kernels/hash_order.wgsl")),
 ];
 
 /// Lane-list-order variant of a per-car kernel (kernels/sorted.wgsl): the entry `entry` of `src` becomes the
@@ -185,6 +192,23 @@ pub fn model_patches(src: String, file: &str, cpu_connector_join: bool, contact_
     let src = if cpu_connector_join && file == "integrate" { patch_text(&src, "cpu_connector_join") } else { src };
     if contact_tangent && file == "contacts" { patch_text(&src, "contact_tangent") } else { src }
 }
+/// Determinism patches selected by GpuOptions (off: the JS kernels unchanged) for the kernel file `file` (see
+/// `model_patches` for "contacts"): kernels/contact_order.wgsl (`deterministic_contacts`), kernels/spawn_order.wgsl
+/// (`deterministic_spawn`), kernels/leaders_order.wgsl, courtesy_order.wgsl, junction_order.wgsl, jyield_order.wgsl, hash_order.wgsl
+/// (`deterministic_leaders`).
+pub fn order_patches(src: String, file: &str, o: &crate::sim::GpuOptions) -> String {
+    let src = if o.deterministic_contacts && file == "contacts" { patch_text(&src, "contact_order") } else { src };
+    let src = if o.deterministic_spawn && file == "spawn" { patch_text(&src, "spawn_order") } else { src };
+    let src = if o.deterministic_leaders && file == "leaders" { patch_text(&src, "leaders_order") } else { src };
+    let src = if o.deterministic_leaders && file == "courtesy" { patch_text(&src, "courtesy_order") } else { src };
+    let src = if o.deterministic_leaders && file == "junction" { patch_text(&src, "junction_order") } else { src };
+    let src = if o.deterministic_leaders && file == "jyield" { patch_text(&src, "jyield_order") } else { src };
+    if o.deterministic_leaders && file == "hash" { patch_text(&src, "hash_order") } else { src }
+}
+/// Claim / commit rounds per step of the deterministic spawn (kernels/spawn_order.wgsl): a spawn or station re-entry
+/// that loses its lane to a smaller id tries the lanes left in the next round (the JS kernel: in the same pass), and
+/// after the last round in the next step.
+pub const DET_ROUNDS: usize = 1;
 /// Apply kernels/patches.wgsl to a resolved kernel source: each patched function present in `src` is replaced
 /// (panics when its text differs from the original the patch was written for).
 pub fn patch(src: &str) -> String {
@@ -212,6 +236,19 @@ mod tests {
         let p = super::model_patches(src.clone(), "integrate", true, false);
         assert!(p.contains("if (sArr > sIn + 0.3 && P.hasLG != 0u)") && !p.contains("if (s > sIn + 0.3 && P.hasLG != 0u)"));
         assert_eq!(super::model_patches(super::load("contacts"), "contacts", true, false), super::load("contacts"));
+    }
+    #[test]
+    fn order_patches_apply() {
+        let on = crate::sim::GpuOptions::default();
+        let off = crate::sim::GpuOptions { deterministic_contacts: false, deterministic_spawn: false, deterministic_leaders: false, ..Default::default() };
+        for f in ["contacts", "spawn", "leaders", "courtesy", "junction", "jyield", "hash", "integrate"] {
+            let src = super::load(f);
+            assert_eq!(super::order_patches(src.clone(), f, &off), src, "{f}: flags off = the JS kernel");
+            let p = super::order_patches(src.clone(), f, &on);   // panics unless every original snippet is there once
+            assert_eq!(p == src, f == "integrate", "{f}");
+        }
+        let fused = super::resolve_includes(super::host_raw("resolve_fused"));
+        assert!(super::order_patches(fused, "contacts", &on).contains("((i + j) & 0x3ffffu)"));
     }
     #[test]
     fn contact_tangent_applies() {

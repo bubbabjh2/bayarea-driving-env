@@ -164,6 +164,7 @@ fn main() {
             if let Some(v) = flag("collisions") { o.features.collisions = v; }
             if let Some(v) = flag("accidents") { o.features.accidents = v; }
             let stations = flag("stations").unwrap_or(true);
+            o.apply_env();   // BAYENV_GPU_OPTS (e.g. deterministic_leaders=0)
             let mut sim = bayenv_gpu::env::create(world.clone(), o).expect("sim");
             sim.set_streaming(Arc::new(table), stations, None);
             let dt = sim.dt; let calls = |m: f64| (m * 60.0 / dt).round() as usize / steps;
@@ -171,6 +172,7 @@ fn main() {
             for _ in 0..calls(warm_min) { sim.run_steps(steps); }
             sim.sync();
             println!("prof: start {h0} h, warm-up {warm_min} sim min in {:.1} s, cars on road {}, PROF_OPTS '{po}', steps/call {steps}, capacity {cap}, load {}", tw.elapsed().as_secs_f64(), cap - sim.free_len(), load());
+            if let Some(p) = sim.profiler.as_mut() { p.reset(); }   // BAYENV_GPU_OPTS=profile=1: per-kernel GPU time
             let (mut ts, mut tw, mut tf) = (0f64, 0f64, 0f64); let k = calls(min); let (r0, e0) = (sim.counters.reroutes, sim.rec.len());
             let t_all = Instant::now();
             for _ in 0..k {
@@ -182,6 +184,11 @@ fn main() {
             let n = (k * steps) as f64;
             println!("prof: {} steps in {:.1} s = {:.2} ms/step: submit {:.2}, GPU wait {:.2}, finish {:.2} ms/step; cars on road {}, reroutes {}, records {}, load {}",
                 k * steps, t_all.elapsed().as_secs_f64(), t_all.elapsed().as_secs_f64() * 1e3 / n, ts * 1e3 / n, tw * 1e3 / n, tf * 1e3 / n, cap - sim.free_len(), sim.counters.reroutes - r0, sim.rec.len() - e0, load());
+            if let Some(p) = &sim.profiler {
+                let mut rows = p.report(); rows.sort_by(|a, b| b.ms.partial_cmp(&a.ms).unwrap());
+                println!("prof profile: {} profiled steps, GPU step {:.3} ms", p.steps, p.step_ms());
+                for r in rows.iter().take(40) { println!("  {:10} {:24} {:8.3} ms {:5}", r.stage, r.kernel, r.ms, r.dispatches); }
+            }
             // state hash (bit-identity checks between builds): GPU state, slot tables, route mirror, records, counters
             let stt = sim.read_state(); let mut h = 0xcbf29ce484222325u64;
             for &w in stt.veh.iter().chain(&stt.par) { fnv(&mut h, w); } for &f in &stt.pose { fnv(&mut h, f.to_bits()); }
