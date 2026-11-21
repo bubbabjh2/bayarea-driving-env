@@ -109,6 +109,11 @@ impl Env {
         }
         w
     }
+    /// events(): drain the per-slot event log (Sim::event_log, `sim::Event`) since the last call.
+    pub fn events(&mut self) -> Vec<crate::sim::Event> { std::mem::take(&mut self.sim.event_log) }
+    /// state()["progress_m"]: route distance per slot.
+    pub fn progress_m(&self) -> Vec<f32> { self.sim.vs.route_dist[..self.sim.vs.high].to_vec() }
+
     /// act_batch(slots, actions n*3 [steer, gas, brake])
     pub fn act_batch(&mut self, slots: &[u32], actions: &[f32]) {
         for (r, &sl) in slots.iter().enumerate() {
