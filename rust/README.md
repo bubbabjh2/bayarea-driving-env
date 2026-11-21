@@ -194,6 +194,36 @@ scatter runs: after 200 steps every car has the same state and edge and 99.8 % a
 1,000 steps 99.5 % (99.2 % with 40 obstacles) have the same state and edge and 96.9 % (96.4 %) are within 0.5 m and
 0.1 m/s; counters stay within 1 % (crash scenes 222 vs 224, refuel plans 110 vs 110).
 
+## Verifying against the JS
+
+The JS-equivalence tests compare against dumps of the JS implementation in `rust/oracle/`, which is gitignored (several
+GB). In a fresh clone they cannot run: each prints a `SKIPPED <test>: <reason>` line (shown without `--nocapture`)
+and passes, so a plain `cargo test` / `tools/check.sh` there checks the Rust code but **not** equivalence with the JS.
+Generate the oracle from this checkout's JS sources, then run the tests with skipping turned into failure:
+
+```
+bash rust/tools/make_oracle.sh            # all parts, ~30-60 min; --quick for smaller runs; --only math,nav,...
+cd rust && BAYENV_REQUIRE_ORACLE=1 cargo test --release --workspace --exclude bayenv-py
+```
+
+| part | generator | written to | tests |
+|---|---|---|---|
+| math | `tools/oracle/gen_math.mjs` | `oracle/math.bin` | bayenv-world `jsmath_oracle` |
+| world | `tools/oracle/dump_world.mjs` | `oracle/{graph,controls,lg}.*` | bayenv-world `geom_exact`, `bayenv-world check` |
+| junctions | `tools/build_junctions.mjs` (on a scratch copy of `data/`) | `oracle/ref/junctions.*` | `geom_exact::junctions` |
+| nav | `tools/oracle/nav_dump.mjs` | `oracle/nav/nav.json` | bayenv-world `nav_oracle` |
+| gpu | `tools/oracle/gpu_mock.mjs` (mock WebGPU, no GPU needed) | `oracle/gpu10k` | bayenv-gpu `host_oracle`, `pack_oracle` |
+| traces | `tools/rust/trace.mjs --obs 1` (junction-s1, synthetic, real 2k) | `oracle/sim/traces` | bayenv-sim `obs_trace`, `events`, `world_hops` |
+| v2 | `tools/rust/v2_oracle.mjs` (needs the bayarea-driving-sim checkout, `--brain`) | `oracle/sim/v2` | bayenv-sim `obs_v2_trace` (inputs, eyes.near, TeacherObs) |
+| pop | `tools/rust/export_pop.mjs` (synthetic, scenario, real, region) | `oracle/sim/pop` | bayenv-sim `population_gen` |
+
+The env vars `BAYENV_OBS_TRACE`, `BAYENV_V2_TRACE` (':'-separated dirs), `BAYENV_EVENTS_TRACE`, `BAYENV_POP_DIR`,
+`BAYENV_TRACE_DIR` and `JSMATH_ORACLE` point the tests at other dumps. The JS-port tests (`tests/js_port_*`) build their
+fixtures with node on first use and skip the same way without node. Larger differential runs:
+`bash tools/rust/matrix.sh <outdir>` (every scenario x policy, checked with `target/release/trace_check`), and
+`target/release/v2_check <dir>` for any `v2_oracle.mjs` run. Bit-exactness is against `SimOpts::js()` (the model fixes
+off), which every oracle path uses.
+
 ## Performance (Apple M4 Max, Metal; real world, constant gas 0.3, obs v2, bench.html protocol)
 
 | | 10k cars | 100k cars |

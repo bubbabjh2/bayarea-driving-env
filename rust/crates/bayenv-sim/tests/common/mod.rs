@@ -24,7 +24,7 @@ pub fn fixture_dir() -> Option<&'static PathBuf> {
         let dir = PathBuf::from(env!("CARGO_TARGET_TMPDIR")).join("js_port_fixtures");
         if dir.join("fixtures.json").exists() { return Some(dir); }
         let root = repo_root();
-        if !root.join("src/sim/roadGraph.js").exists() { eprintln!("js_port: repo src/sim not found at {}: skipping", root.display()); return None; }
+        if !root.join("src/sim/roadGraph.js").exists() { bayenv_world::oracle::skip("js_port", &format!("repo src/sim not found at {}", root.display())); return None; }
         // build into a private dir, then move into place (cargo may run several test binaries / threads)
         let tmp = PathBuf::from(env!("CARGO_TARGET_TMPDIR")).join(format!("js_port_fixtures.tmp{}", std::process::id()));
         let _ = std::fs::remove_dir_all(&tmp);
@@ -34,8 +34,8 @@ pub fn fixture_dir() -> Option<&'static PathBuf> {
                 if std::fs::rename(&tmp, &dir).is_err() { let _ = std::fs::remove_dir_all(&tmp); }
                 if dir.join("fixtures.json").exists() { Some(dir) } else { None }
             }
-            Ok(s) => { eprintln!("js_port: gen_worlds.mjs failed ({s}): skipping"); None }
-            Err(e) => { eprintln!("js_port: node unavailable ({e}): skipping"); None }
+            Ok(s) => { bayenv_world::oracle::skip("js_port", &format!("gen_worlds.mjs failed ({s})")); None }
+            Err(e) => { bayenv_world::oracle::skip("js_port", &format!("node unavailable ({e})")); None }
         }
     }).as_ref()
 }
@@ -64,7 +64,7 @@ pub fn shared_world(name: &str) -> Option<Arc<World>> {
 
 /// `let Some(x) = fixtures!(load_world, "synth") else { return }` style helper.
 #[macro_export]
-macro_rules! need { ($e:expr) => { match $e { Some(x) => x, None => { eprintln!("SKIP: node fixtures unavailable ({}:{})", file!(), line!()); return; } } }; }
+macro_rules! need { ($e:expr) => { match $e { Some(x) => x, None => { bayenv_world::oracle::skip(&format!("{}:{}", file!(), line!()), "node fixtures unavailable"); return; } } }; }
 
 /// synthAxis population options of test/sim/helpers.js popOpts: PopConfig::env_synthetic (axis synth, long 5-16 km, departures 'spec').
 pub fn env_with(world: Arc<World>, pop: Arc<Population>, opts: SimOpts, start: f64) -> Env {

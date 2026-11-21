@@ -37,7 +37,7 @@ fn jsmath_matches_v8_dump() {
         .map(PathBuf::from)
         .unwrap_or_else(|| PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../oracle/math.bin"));
     let Ok(buf) = std::fs::read(&path) else {
-        eprintln!("SKIP jsmath_oracle: {} missing (run `node rust/tools/oracle/gen_math.mjs`)", path.display());
+        bayenv_world::oracle::skip("jsmath_oracle", &format!("{} missing", path.display()));
         return;
     };
     assert_eq!(&buf[..8], b"JSMATH01", "bad magic in {}", path.display());

@@ -2,7 +2,9 @@
 //! cargo test --release -p bayenv-sim --test obs_v2_trace -- --nocapture
 #[test]
 fn v2_bit_exact() {
-    let Ok(dirs) = std::env::var("BAYENV_V2_TRACE") else { eprintln!("BAYENV_V2_TRACE unset: skip"); return };
+    // BAYENV_V2_TRACE, else every run under rust/oracle/sim/v2 (make_oracle.sh)
+    let dirs = std::env::var("BAYENV_V2_TRACE").unwrap_or_else(|_| bayenv_world::oracle::dirs_with(&bayenv_world::oracle::oracle_root().join("sim/v2"), "run.json").iter().map(|p| p.to_string_lossy().to_string()).collect::<Vec<_>>().join(":"));
+    if dirs.is_empty() { bayenv_world::oracle::skip("obs_v2_trace", "BAYENV_V2_TRACE unset and no rust/oracle/sim/v2/*"); return; }
     for dir in dirs.split(':').filter(|d| !d.is_empty()) {
         let r = bayenv_sim::obs_v2::check_v2(dir, 20, true);
         for m in &r.mismatches { eprintln!("  step {} slot {} v2[{}]: js {} rust {}", m.step, m.slot, m.index, m.js, m.rust); }

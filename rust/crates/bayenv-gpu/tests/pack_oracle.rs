@@ -19,7 +19,7 @@ fn read_buf(dir: &Path, meta: &serde_json::Value, name: &str) -> Option<Vec<u8>>
 fn world_blob_and_routes_match_js() {
     let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../..");
     let dir = root.join("rust/oracle/gpu10k");
-    if !dir.join("gpu.meta.json").exists() || !root.join("data/roads.meta.json").exists() { eprintln!("skip: no oracle"); return; }
+    if !dir.join("gpu.meta.json").exists() || !root.join("data/roads.meta.json").exists() { bayenv_world::oracle::skip("pack_oracle", "no rust/oracle/gpu10k/gpu.meta.json or data/roads.meta.json"); return; }
     let meta: serde_json::Value = serde_json::from_slice(&std::fs::read(dir.join("gpu.meta.json")).unwrap()).unwrap();
     let w = World::load(root.join("data")).expect("world");
     let t = Instant::now();

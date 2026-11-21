@@ -36,7 +36,7 @@ fn data_dir() -> std::path::PathBuf { default_data_dir() }
 #[test]
 fn sim_graph_population_matches_world() {
     let dir = data_dir();
-    if !dir.join("roads.meta.json").exists() { eprintln!("skip: no data dir {}", dir.display()); return; }
+    if !dir.join("roads.meta.json").exists() { bayenv_world::oracle::skip("population_sim_graph", &format!("no data dir {}", dir.display())); return; }
     let t = Instant::now();
     let bw = bayenv_world::World::load(&dir).unwrap();
     eprintln!("bayenv_world::World::load {:.0} ms", t.elapsed().as_secs_f64() * 1e3);

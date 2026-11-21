@@ -2,7 +2,9 @@
 //! cargo test --release -p bayenv-sim --test obs_trace -- --nocapture
 #[test]
 fn obs_bit_exact() {
-    let Ok(dirs) = std::env::var("BAYENV_OBS_TRACE") else { eprintln!("BAYENV_OBS_TRACE unset: skip"); return };
+    // BAYENV_OBS_TRACE, else every trace under rust/oracle/sim/traces (make_oracle.sh)
+    let dirs = std::env::var("BAYENV_OBS_TRACE").unwrap_or_else(|_| bayenv_world::oracle::dirs_with(&bayenv_world::oracle::oracle_root().join("sim/traces"), "trace.pack").iter().map(|p| p.to_string_lossy().to_string()).collect::<Vec<_>>().join(":"));
+    if dirs.is_empty() { bayenv_world::oracle::skip("obs_trace", "BAYENV_OBS_TRACE unset and no rust/oracle/sim/traces/*/trace.pack"); return; }
     for dir in dirs.split(':').filter(|d| !d.is_empty()) {
         let tr = bayenv_sim::pack::Pack::read(&format!("{dir}/trace.pack")).expect("trace.pack");
         assert!(tr.has("obs.n"), "{dir}: trace has no obs sections (record with --obs 1)");

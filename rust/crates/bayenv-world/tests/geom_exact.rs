@@ -23,7 +23,7 @@ fn bits_eq<T: bytemuck::Pod>(a: &[T], b: &[T]) -> (usize, Option<usize>) {
 #[test]
 fn lane_geometry_matches_js() {
     let data = root().join("data"); let oracle = root().join("rust/oracle");
-    if !data.join("roads.meta.json").exists() || !oracle.join("lg.meta.json").exists() { eprintln!("skip: no data / oracle"); return; }
+    if !data.join("roads.meta.json").exists() || !oracle.join("lg.meta.json").exists() { bayenv_world::oracle::skip("geom_exact::lane_geometry", "no data/roads.meta.json or rust/oracle/lg.meta.json"); return; }
     let main = RoadSet::load(&data, "roads.meta.json").unwrap();
     let local = RoadSet::load(&data, "roads-local.meta.json").unwrap();
     let g = graph_from_road_sets(&main, Some(&local));
@@ -49,8 +49,8 @@ fn lane_geometry_matches_js() {
 #[test]
 fn junctions_match_js_file() {
     let data = root().join("data"); let refd = root().join("rust/oracle/ref");
-    if !data.join("roads.meta.json").exists() || !refd.join("junctions.bin").exists() || !data.join("controls.json").exists() {
-        eprintln!("skip: no data / rust/oracle/ref/junctions.bin (copy of npm run build:junctions output) / data/controls.json"); return;
+    if !data.join("roads.meta.json").exists() || !refd.join("junctions.bin").exists() || !refd.join("controls.json").exists() || !data.join("controls.json").exists() {
+        bayenv_world::oracle::skip("geom_exact::junctions", "no data / rust/oracle/ref/{junctions.bin,controls.json} (npm run build:junctions output) / data/controls.json"); return;
     }
     use bayenv_world::jsjson;
     use bayenv_world::junctions_build::{build_junctions_full, crosswalk_legs, ControlLegs};
