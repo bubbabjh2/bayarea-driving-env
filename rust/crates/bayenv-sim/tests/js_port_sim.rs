@@ -26,7 +26,7 @@ fn busy_pop(g: &Arc<bayenv_sim::world::World>, n: usize) -> Arc<bayenv_sim::popu
 fn one_simulated_hour_500_vehicles_no_nans_everyone_accounted_for() {
     let g = need!(common::shared_world("synth"));
     let pop = busy_pop(&g, 500);
-    let mut env = common::env_with(g.clone(), pop, SimOpts { dt: 0.05, ..SimOpts::default() }, 7.0 * 3600.0);
+    let mut env = common::env_with(g.clone(), pop, SimOpts { dt: 0.05, ..SimOpts::js() }, 7.0 * 3600.0);
     let mut steps = 0;
     while env.sim.time < 8.5 * 3600.0 {
         env.step(1); steps += 1;
@@ -64,7 +64,7 @@ fn scale_crash_options_on_and_off_keep_state_finite() {
     let pop = busy_pop(&g, 400);
     let run = |on: bool| {
         let f = if on { 1.0 } else { 0.0 };
-        let opts = SimOpts { dt: 0.05, junction_sight: f, path_sight: f, deadlock_break: f, spawn_lane_route: f, ..SimOpts::default() };
+        let opts = SimOpts { dt: 0.05, junction_sight: f, path_sight: f, deadlock_break: f, spawn_lane_route: f, ..SimOpts::js() };
         let mut env = common::env_with(g.clone(), pop.clone(), opts, 7.0 * 3600.0);
         while env.sim.time < 8.5 * 3600.0 { env.step(1); }
         let vs = &env.sim.vs;

@@ -180,12 +180,12 @@ impl Env {
     /// False = legacy mode, the JS GPU kernels bit-for-bit, with their connector-entry bug (all earlier GPU checkpoints).
     /// contact_tangent (gpu, default True): f32-robust friction tangent in the contact impulse (rust/docs/crash-divergence.md).
     /// False = legacy mode, the JS GPU kernels bit-for-bit (aligned rear-end wrecks spin to the kerb).
-    /// replan_at_missed_event (cpu, default False = the JS): re-plan a missed turn at the event, as the GPU does
-    /// (SimOpts::replan_at_missed_event, rust/docs/crash-divergence.md cause A).
+    /// replan_at_missed_event (cpu, default True): re-plan a missed turn at the event, as the GPU does
+    /// (SimOpts::replan_at_missed_event, rust/docs/crash-divergence.md cause A). False = the JS CPU sim's model.
     #[new]
     #[pyo3(signature = (data_dir, n_cars=10000, seed=1, backend="gpu", capacity=None, obs="v2", dt=0.05, start_time=None,
         accidents=true, collisions=true, fuel=true, controls=true, junctions=true, steer="position", decide_every=1, keep_events=false,
-        population=None, pop_seed=42.0, streaming=false, return_trips=true, stations=true, refuel_budget_ms=None, crash_share=false, missed_at_out_edge=false, cpu_connector_join=true, contact_tangent=true, replan_at_missed_event=false))]
+        population=None, pop_seed=42.0, streaming=false, return_trips=true, stations=true, refuel_budget_ms=None, crash_share=false, missed_at_out_edge=false, cpu_connector_join=true, contact_tangent=true, replan_at_missed_event=true))]
     #[allow(clippy::too_many_arguments)]
     fn new(py: Python<'_>, data_dir: &str, n_cars: usize, seed: u32, backend: &str, capacity: Option<usize>, obs: &str, dt: f64, start_time: Option<f64>,
            accidents: bool, collisions: bool, fuel: bool, controls: bool, junctions: bool, steer: &str, decide_every: u32, keep_events: bool,

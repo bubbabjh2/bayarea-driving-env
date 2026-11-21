@@ -11,7 +11,8 @@ use serde_json::Value;
 use std::sync::Arc;
 
 pub fn sim_opts_from(v: &Value) -> SimOpts {
-    let mut o = SimOpts::default();
+    // JS-oracle runs: the JS model (model fixes off)
+    let mut o = SimOpts::js();
     let n = |k: &str, d: f64| -> f64 { match &v[k] { Value::Number(x) => x.as_f64().unwrap(), Value::String(s) if s == "Infinity" => f64::INFINITY, Value::Bool(b) => if *b { 1.0 } else { 0.0 }, _ => d } };
     o.dt = n("dt", o.dt); o.start_time = n("startTime", o.start_time); o.learner_fraction = n("learnerFraction", o.learner_fraction);
     o.shoulder = n("shoulder", o.shoulder); o.freeway_shoulder = n("freewayShoulder", o.freeway_shoulder); o.opposite_margin = n("oppositeMargin", o.opposite_margin);

@@ -30,6 +30,7 @@ fn cpu_and_gpu_agree_in_aggregate() {
     let sw = Arc::new(bayenv_sim::world::World::from_bayenv(&world));
     let pop = Arc::new(bayenv_sim::population::Population::generate_like_env(&sw, "real", N, 42.0, Some(data)).unwrap());
     let mut opts = bayenv_sim::sim::SimOpts::default(); opts.dt = 0.05; opts.seed = 42.0;
+    assert!(opts.replan_at_missed_event, "the CPU re-plans a missed turn at the event (crash-divergence cause A) by default");
     let cfg = bayenv_sim::env::EnvConfig { opts, start_time: Some(START), static_obstacles: Vec::new(), scenario_obstacles: Vec::new(), obstacles: None };
     let mut cpu = bayenv_sim::env::Env::new(sw, pop, cfg, Box::new(|w| bayenv_sim::harness::router_for(&w)));
     let (mut cc, mut gc, mut cb, mut gb) = ([0usize; 10], [0usize; 10], 0, 0);
