@@ -56,6 +56,8 @@ pub const HOST_SOURCES: &[(&str, &str)] = &[
     ("junction_order", include_str!("../kernels/junction_order.wgsl")),
     ("jyield_order", include_str!("../kernels/jyield_order.wgsl")),
     ("hash_order", include_str!("../kernels/hash_order.wgsl")),
+    ("model_contacts", include_str!("../kernels/model_contacts.wgsl")),
+    ("model_integrate", include_str!("../kernels/model_integrate.wgsl")),
 ];
 
 /// Lane-list-order variant of a per-car kernel (kernels/sorted.wgsl): the entry `entry` of `src` becomes the
@@ -186,11 +188,44 @@ pub fn patch_text(src: &str, file: &str) -> String {
     }
     out
 }
+/// The model-fix flags of GpuOptions (all false = the JS kernels unchanged; see `GpuOptions` for each).
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct ModelFixes {
+    pub cpu_connector_join: bool, pub contact_tangent: bool,
+    pub wreck_real_mass: bool, pub curvature_dynamics: bool, pub wreck_end_stop: bool, pub contact_episodes: bool,
+    pub connector_barrier: bool, pub brake_hold: bool, pub heavy_brakes: bool, pub barrier_soft_push: bool, pub impact_reverse: bool,
+}
+impl ModelFixes {
+    /// every fix on (the GpuOptions default is this with curvature_dynamics off: `ModelFixes::default_model()`)
+    pub fn default_model() -> ModelFixes { ModelFixes { curvature_dynamics: false, ..ModelFixes::all() } }
+    pub fn all() -> ModelFixes {
+        ModelFixes { cpu_connector_join: true, contact_tangent: true, wreck_real_mass: true, curvature_dynamics: true, wreck_end_stop: true, contact_episodes: true,
+            connector_barrier: true, brake_hold: true, heavy_brakes: true, barrier_soft_push: true, impact_reverse: true }
+    }
+    /// kernels/model_integrate.wgsl is applied (any of its flags on)
+    pub fn integrate_on(&self) -> bool { self.curvature_dynamics || self.wreck_end_stop || self.brake_hold || self.heavy_brakes || self.impact_reverse }
+    /// kernels/model_contacts.wgsl is applied (any of its flags on)
+    pub fn contacts_on(&self) -> bool { self.wreck_real_mass || self.contact_episodes || self.connector_barrier || self.barrier_soft_push || self.impact_reverse }
+}
+fn mf_consts(pairs: &[(&str, bool)]) -> String { pairs.iter().map(|(n, b)| format!("const MF_{n}: bool = {b};\n")).collect() }
 /// Model patches selected by GpuOptions (default off: the JS kernels unchanged) for the kernel file `file`.
 /// `file` "contacts" also covers kernels/resolve_fused.wgsl (contacts.wgsl + collidefns.wgsl included unchanged).
-pub fn model_patches(src: String, file: &str, cpu_connector_join: bool, contact_tangent: bool) -> String {
-    let src = if cpu_connector_join && file == "integrate" { patch_text(&src, "cpu_connector_join") } else { src };
-    if contact_tangent && file == "contacts" { patch_text(&src, "contact_tangent") } else { src }
+pub fn model_patches(src: String, file: &str, m: &ModelFixes) -> String {
+    match file {
+        "integrate" => {
+            let src = if m.cpu_connector_join { patch_text(&src, "cpu_connector_join") } else { src };
+            if !m.integrate_on() { return src; }
+            mf_consts(&[("HEAVY_BRAKES", m.heavy_brakes), ("BRAKE_HOLD", m.brake_hold), ("IMPACT_REVERSE", m.impact_reverse), ("WRECK_END_STOP", m.wreck_end_stop), ("CURVATURE", m.curvature_dynamics)])
+                + &patch_text(&src, "model_integrate")
+        }
+        "contacts" => {
+            let src = if m.contact_tangent { patch_text(&src, "contact_tangent") } else { src };
+            if !m.contacts_on() { return src; }
+            mf_consts(&[("WRECK_REAL_MASS", m.wreck_real_mass), ("IMPACT_REVERSE", m.impact_reverse), ("SOFT_PUSH", m.barrier_soft_push), ("EPISODES", m.contact_episodes), ("CONN_BARRIER", m.connector_barrier)])
+                + &patch_text(&src, "model_contacts")
+        }
+        _ => src,
+    }
 }
 /// Determinism patches selected by GpuOptions (off: the JS kernels unchanged) for the kernel file `file` (see
 /// `model_patches` for "contacts"): kernels/contact_order.wgsl (`deterministic_contacts`), kernels/spawn_order.wgsl
@@ -229,13 +264,15 @@ pub fn patch(src: &str) -> String {
 
 #[cfg(test)]
 mod tests {
+    use super::ModelFixes;
+    fn only(f: impl Fn(&mut ModelFixes)) -> ModelFixes { let mut m = ModelFixes::default(); f(&mut m); m }
     #[test]
     fn cpu_connector_join_applies() {
         let src = super::load("integrate");
-        assert_eq!(super::model_patches(src.clone(), "integrate", false, false), src);   // flag off: the JS kernel unchanged
-        let p = super::model_patches(src.clone(), "integrate", true, false);
+        assert_eq!(super::model_patches(src.clone(), "integrate", &ModelFixes::default()), src);   // flags off: the JS kernel unchanged
+        let p = super::model_patches(src.clone(), "integrate", &only(|m| m.cpu_connector_join = true));
         assert!(p.contains("if (sArr > sIn + 0.3 && P.hasLG != 0u)") && !p.contains("if (s > sIn + 0.3 && P.hasLG != 0u)"));
-        assert_eq!(super::model_patches(super::load("contacts"), "contacts", true, false), super::load("contacts"));
+        assert_eq!(super::model_patches(super::load("contacts"), "contacts", &only(|m| m.cpu_connector_join = true)), super::load("contacts"));
     }
     #[test]
     fn order_patches_apply() {
@@ -253,11 +290,40 @@ mod tests {
     #[test]
     fn contact_tangent_applies() {
         let src = super::load("contacts");
-        assert_eq!(super::model_patches(src.clone(), "contacts", false, false), src);
-        assert_eq!(super::model_patches(super::load("integrate"), "integrate", false, true), super::load("integrate"));
-        let p = super::model_patches(src.clone(), "contacts", false, true);
+        assert_eq!(super::model_patches(src.clone(), "contacts", &ModelFixes::default()), src);
+        assert_eq!(super::model_patches(super::load("integrate"), "integrate", &only(|m| m.contact_tangent = true)), super::load("integrate"));
+        let p = super::model_patches(src.clone(), "contacts", &only(|m| m.contact_tangent = true));
         assert!(p.contains("let tn = tx * c.nx + tz * c.nz;") && !p.contains("if (tl > 1e-6) {"));
         let f = super::resolve_includes(super::host_raw("resolve_fused"));
-        assert!(super::model_patches(f, "contacts", false, true).contains("let tn = tx * c.nx + tz * c.nz;"));
+        assert!(super::model_patches(f, "contacts", &only(|m| m.contact_tangent = true)).contains("let tn = tx * c.nx + tz * c.nz;"));
+    }
+    #[test]
+    fn model_and_order_patches_combine() {
+        // the model fixes and the determinism patches touch the same kernels: every combination applies
+        let det_on = crate::sim::GpuOptions::default();
+        let det_off = crate::sim::GpuOptions { deterministic_contacts: false, deterministic_spawn: false, deterministic_leaders: false, ..Default::default() };
+        for mf in [ModelFixes::default(), ModelFixes::default_model(), ModelFixes::all()] {
+            for o in [&det_on, &det_off] {
+                for f in ["contacts", "integrate", "spawn", "leaders", "courtesy", "junction", "jyield", "hash"] {
+                    let _ = super::order_patches(super::model_patches(super::load(f), f, &mf), f, o);
+                }
+                let fused = super::resolve_includes(super::host_raw("resolve_fused"));
+                let _ = super::order_patches(super::model_patches(fused, "contacts", &mf), "contacts", &crate::sim::GpuOptions { deterministic_spawn: false, deterministic_leaders: false, ..o.clone() });
+            }
+        }
+    }
+    #[test]
+    fn model_fixes_apply() {
+        // every patch applies to its file (and the fused resolve), each flag alone and all together
+        let all = ModelFixes::all();
+        let i = super::model_patches(super::load("integrate"), "integrate", &all);
+        assert!(i.contains("const MF_CURVATURE: bool = true;") && i.contains("MF_HEAVY_BRAKES && m > 5000.0"));
+        let c = super::model_patches(super::load("contacts"), "contacts", &all);
+        assert!(c.contains("const MF_EPISODES: bool = true;") && c.contains("fn connBarrier("));
+        let f = super::model_patches(super::resolve_includes(super::host_raw("resolve_fused")), "contacts", &all);
+        assert!(f.contains("fn connBarrier("));
+        let one: [fn(&mut ModelFixes); 9] = [|m| m.wreck_real_mass = true, |m| m.curvature_dynamics = true, |m| m.wreck_end_stop = true, |m| m.contact_episodes = true,
+            |m| m.connector_barrier = true, |m| m.brake_hold = true, |m| m.heavy_brakes = true, |m| m.barrier_soft_push = true, |m| m.impact_reverse = true];
+        for f in one { let m = only(f); for file in ["integrate", "contacts"] { let _ = super::model_patches(super::load(file), file, &m); } }
     }
 }

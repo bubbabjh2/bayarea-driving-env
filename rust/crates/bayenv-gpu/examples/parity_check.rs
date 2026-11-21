@@ -34,7 +34,7 @@ fn cmp(name: &str, js: &[u32], rs: &[u32], bad: &mut usize) {
 fn eq<T: PartialEq + std::fmt::Debug>(name: &str, js: T, rs: T, bad: &mut usize) { if js != rs { *bad += 1; println!("  {name}: MISMATCH js {js:?} rs {rs:?}"); } else { println!("  {name}: {rs:?}"); } }
 
 fn opts(cap: usize, start: f64) -> GpuOptions {
-    let mut o = GpuOptions { capacity: cap, start_time: start, refuel_budget_ms: f64::INFINITY, cpu_connector_join: false, contact_tangent: false, deterministic_contacts: false, deterministic_spawn: false, deterministic_events: false, deterministic_leaders: false, ..Default::default() };   // JS oracle: legacy model
+    let mut o = GpuOptions { capacity: cap, start_time: start, refuel_budget_ms: f64::INFINITY, deterministic_contacts: false, deterministic_spawn: false, deterministic_events: false, deterministic_leaders: false, ..GpuOptions::default().js_model() };   // JS oracle: legacy model
     o.features.accidents = true; o
 }
 
