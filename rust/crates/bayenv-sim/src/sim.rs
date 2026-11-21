@@ -7,7 +7,7 @@ use crate::population::Population;
 use crate::rng::Rng;
 use crate::spatial::{LaneIndex, SpatialHash};
 use crate::vehicle::*;
-use crate::world::{Conflict, World};
+use crate::world::World;
 use crate::fx::{HashMap, HashSet};
 use std::sync::Arc;
 
@@ -186,7 +186,6 @@ pub struct Sim {
     pub(crate) off_lane: crate::fx::ListMap<i32>,
     pub(crate) touch: HashSet<i64>,
     pub(crate) barrier_touch: HashSet<usize>, pub(crate) barrier_now: HashSet<usize>,
-    pub(crate) conf_cache: HashMap<usize, Arc<Vec<Conflict>>>,
     pub(crate) mv_into: Option<HashMap<u32, Vec<usize>>>,
     pub(crate) yield_by: Option<Vec<i32>>,
     pub(crate) creep_until: Vec<f64>, pub(crate) creep_ignore: Vec<i32>,
@@ -195,7 +194,6 @@ pub struct Sim {
     pub(crate) last_reroute: HashMap<usize, f64>,
     pub(crate) next_traffic: f64, pub(crate) next_reroute: f64, pub(crate) next_density: f64,
     pub(crate) edge_count_scratch: Vec<u16>, pub(crate) fwy: Vec<usize>, pub(crate) fwy_lane_km: f64,
-    pub(crate) seen_j: i32,
     pub(crate) near_buf: Vec<usize>,
     pub static_obstacles: Vec<usize>,
     pub obstacles: Vec<(usize, &'static str, i32, f64)>,
@@ -258,8 +256,8 @@ impl Sim {
             counters: Counters::default(), accum: Accum::default(), live: Live::default(), density: Density::default(), obstacle_rng: None, brake_every: (15.0, 40.0),
             spawned_keys: HashSet::default(), spawn_dirty: HashSet::default(), plan_prefetch: HashMap::default(), indexed: Vec::new(), pair_event: HashMap::default(), stuck_labelled: HashMap::default(), conn_cars: Default::default(), node_conn: Default::default(),
             passers: Default::default(), conflict_with: HashMap::default(), off_lane: Default::default(), touch: HashSet::default(), barrier_touch: HashSet::default(), barrier_now: HashSet::default(),
-            conf_cache: HashMap::default(), mv_into: Sim::build_moves_into(&g), yield_by: None, creep_until: Vec::new(), creep_ignore: Vec::new(), edge_speed: HashMap::default(), traffic_penalty: None,
-            last_reroute: HashMap::default(), next_traffic: 0.0, next_reroute: 0.0, next_density: start, edge_count_scratch: vec![0; ne], fwy, fwy_lane_km, seen_j: -1,
+            mv_into: Sim::build_moves_into(&g), yield_by: None, creep_until: Vec::new(), creep_ignore: Vec::new(), edge_speed: HashMap::default(), traffic_penalty: None,
+            last_reroute: HashMap::default(), next_traffic: 0.0, next_reroute: 0.0, next_density: start, edge_count_scratch: vec![0; ne], fwy, fwy_lane_km,
             near_buf: Vec::new(), static_obstacles: Vec::new(), obstacles: Vec::new(), profile: std::env::var("BAYENV_PROFILE").is_ok(), phase_ns: [0; 10], sub_ns: [0; 8], events: StepEvents::default(), event_log: Vec::new(), p2_reruns: 0, collided_last: Vec::new(), batch_policy: None,
             empty: opts.traffic_mode == TrafficMode::Empty, time: start, dt: opts.dt, step_count: 0, vs, rng, router, g, pop, opts,
         };

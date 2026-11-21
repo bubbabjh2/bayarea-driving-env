@@ -4,7 +4,6 @@ use crate::jm;
 use crate::sim::{f, r32, Sim};
 use crate::vehicle::*;
 use crate::world::Conflict;
-use std::sync::Arc;
 
 impl Sim {
     pub(crate) fn index_connectors(&mut self) {
@@ -330,6 +329,7 @@ impl Sim {
         (false, Some(-1))
     }
 
+    #[allow(dead_code)]
     pub(crate) fn yield_j(&mut self, i: usize, e: usize) -> bool {
         let (r, w) = self.yield_j_core(i, e);
         if let Some(v) = w { self.set_yield_by(i, v); }

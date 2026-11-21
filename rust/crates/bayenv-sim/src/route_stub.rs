@@ -3,7 +3,7 @@
 use crate::jm;
 use crate::sim::Router;
 use crate::world::World;
-use crate::fx::{HashMap, HashSet};
+use crate::fx::HashMap;
 use std::sync::Arc;
 
 pub struct AStar { g: Arc<World>, e_time: Vec<f64>, g_score: Vec<f64>, came: Vec<i32>, stamp: Vec<i32>, closed: Vec<u8>, gen: i32, max_speed: f64, weight: f64, junction_penalty: f64,
