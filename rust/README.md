@@ -112,9 +112,28 @@ scatter runs: after 200 steps every car has the same state and edge and 99.8 % a
 | JS GPU sim, Chrome, awaited `runSteps(20)` (events processed every batch) | 1.65 ms/step | 4.97 ms/step |
 | Rust, capacity 131072, before the dispatch optimisation | 1.60 ms/step | 4.91 ms/step |
 | Rust, capacity 131072 (indirect contact rounds) | 1.41 ms/step | 4.81 ms/step |
-| Rust, capacity = cars (default) | 1.12 ms/step (892 steps/s) | 4.66 ms/step (215 steps/s) |
-| Python `env.step(20)` | 1.11 ms/step (901 steps/s) | 4.63 ms/step (216 steps/s) |
-| Python `act` + `step(1)` + `observe(out=)` every step | 1.63 ms/step | 5.78 ms/step |
+| Rust, capacity = cars, before the GPU-step optimisations | 1.12 ms/step (892 steps/s) | 4.66 ms/step (215 steps/s) |
+| Rust, capacity = cars, GPU-step optimisations (default, bit-identical; see below) | 0.64 ms/step (1560 steps/s) | 3.50 ms/step (286 steps/s) |
+| Python `env.step(20)` (measured before the GPU-step optimisations) | 1.11 ms/step (901 steps/s) | 4.63 ms/step (216 steps/s) |
+| Python `act` + `step(1)` + `observe(out=)` every step (same) | 1.63 ms/step | 5.78 ms/step |
+
+GPU time per stage (`bench --profile`, timestamps per dispatch, ms per step), before -> after:
+
+| stage | 10k | 100k |
+|---|---|---|
+| contacts hash (clear, count, scan, scatter) | 0.058 -> 0.045 | 0.175 -> 0.22 |
+| barrier + detect | 0.047 -> 0.039 | 0.26 -> 0.30 |
+| resolve (contact rounds) | 0.30 -> 0.046 | 0.48 -> 0.19 |
+| lists + jlists | 0.094 -> 0.084 | 0.32 -> 0.38 |
+| leaders | 0.15 -> 0.13 | 1.00 -> 0.70 |
+| junctions (perceive, courtesy, yield) | 0.20 -> 0.175 | 1.23 -> 0.99 |
+| sense | 0.22 -> 0.090 | 0.80 -> 0.50 |
+| act + integrate | 0.11 -> 0.069 | 0.54 -> 0.47 |
+| whole step, one pass | 1.02 -> 0.63 | 4.47 -> 3.40 |
+
+(Machine shared with other GPU jobs: ±10-20 % between runs; rows are typical, `rust/BENCHMARKS.md` has the steps.)
+At 2,500 cars the step is 0.84 -> 0.46 ms. Small envs are latency-bound (each per-car kernel's longest thread), a dispatch
+itself costs ~1.2 µs (30 extra empty dispatches: +0.035 ms), so the remaining fixed cost is mostly kernel latency.
 
 The step is GPU-bound. Host time per batch is the encode plus one 260 KB io readback, and batch size barely matters (1.78
 ms/step at batch 1 vs 1.58 at batch 20, 10k cars, capacity 131072). Startup takes 0.5-0.8 s: world load 60 ms, then
@@ -122,10 +141,25 @@ kernel compile, the world blob (159 ms) and the scatter.
 
 ## WGSL / backend patches
 
-None. All 38 kernels (39 with obs v3) compile unchanged through naga. The only GPU code added is
-`crates/bayenv-gpu/kernels/contact_args.wgsl`, a one-thread helper. It writes the indirect dispatch size of the
-contact-resolve rounds from the contact count. Those kernels already return for `id >= count`, so results are
-bit-identical, and the JS behaviour is available with `GpuOptions.indirect_resolve = false`.
+The JS kernels of `src/gpu/kernels/` stay the oracle and compile unchanged through naga. GPU code of this crate lives
+in `crates/bayenv-gpu/kernels/` (each file's header says what it changes). Every option below is bit-identical to the
+JS dispatch structure (`--example opt_check`: veh / par / pose / obs inputs / stats after 200 steps at 10k and 400
+steps at 2k cars; `oracle_run` + `compare_state` against the unmodified host) and on by default; `GpuOptions` flags
+switch each back to the JS behaviour (env `BAYENV_GPU_OPTS=flag=0,...` in the examples):
+
+| flag | file | change |
+|---|---|---|
+| `indirect_resolve` | `contact_args.wgsl` | contact-resolve rounds dispatched by the contact count instead of contactCap |
+| `fused_resolve` | `resolve_fused.wgsl` | the 12 rounds x 3 phases + serial tail in one workgroup (barriers instead of 37 dispatches), stopping once every contact is resolved; parallel order-keeping compaction |
+| `sorted_order` | `sorted.wgsl`, `list_args.wgsl` | leaders / sense / junction.yield threads in lane-list order (entry renamed to a function, wrapper entry added by the host; indirect over lane entries + cap; every slot handled once) |
+| `fast_scan` | `scan4k.wgsl` | lane / cell starts at 4096 per workgroup, counts into accumulators the scan zeroes (no clear kernels; 12 -> 6 dispatches) |
+| `fast_search` | `patches.wgsl` | function patches applied to the resolved sources (`kernels::patch`, original text checked): binary instead of linear polyline segment search (`yAlongEdge`, `arcPointJ`, `connPointJ`; precondition: non-decreasing cumulative distances, checked on the world at creation), one-entry `hopMap` memo |
+| `zero_init_workgroup` (off) | - | no workgroup-memory zero fill (every kernel writes its workgroup variables first) |
+
+`GpuOptions.profile` (`bench --profile`) records GPU timestamps per dispatch for the first step of every batch
+(inside-pass timestamps when the adapter has them, else one pass per dispatch) plus the one-pass time of the second
+step (`GpuSim.profiler`, `crate::profile`). Diagnostics: `BAYENV_SORTED=a,b` (sorted kernels), `BAYENV_WG=k=64`,
+`BAYENV_NOPATCH=name`, `BAYENV_KDIR=dir` (replace a kernel source for experiments).
 
 ## Not ported yet (GPU host)
 

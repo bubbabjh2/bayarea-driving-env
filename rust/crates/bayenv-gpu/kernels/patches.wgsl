@@ -6,6 +6,7 @@
 // edge of the world blob / connector before this patch is used), so both find the same k and the results are
 // identical; log2(n) dependent loads instead of up to n. Same for the junction connector points (arcPointJ,
 // connPointJ: jSegK; the connector distances are checked too).
+// hopMap: a one-entry memo per invocation (identical: the hop tables do not change during a dispatch).
 //#orig yAlongEdge
 fn yAlongEdge(b: u32, n: u32, s: f32) -> f32 {
   var k = 0u;
@@ -99,5 +100,31 @@ fn connPointJ(m: u32, t: f32) -> GeoPt {
   var h = (1.0 - u) * a / al + u * b / bl; var hl = length(h); if (hl == 0.0) { hl = 1.0; }
   o.hx = h.x / hl; o.hz = h.y / hl;
   return o;
+}
+//#end
+//#orig hopMap
+fn hopMap(e: u32, en: u32) -> vec2i {
+  let t = eTo(e); let b0 = world[P.geoOff + e * GEO_W + 7u];
+  for (var q = outStart(t); q < outStart(t + 1u); q = q + 1u) {
+    if (outEdge(q) == en) { let h = world[P.hopOff + b0 + q - outStart(t)]; return vec2i(i32(h & 1u), i32(h >> 1u) - 64); }
+  }
+  return vec2i(0, 0);
+}
+//#end
+//#patch hopMap
+// one-entry memo of hopMap (per invocation; the hop tables are constant): mapLane is called per lane with the same
+// (e, en) pair inside the lane-end / lane-map loops
+var<private> hmKey: vec2u = vec2u(0xffffffffu, 0xffffffffu);
+var<private> hmVal: vec2i = vec2i(0, 0);
+fn hopMapRaw(e: u32, en: u32) -> vec2i {
+  let t = eTo(e); let b0 = world[P.geoOff + e * GEO_W + 7u];
+  for (var q = outStart(t); q < outStart(t + 1u); q = q + 1u) {
+    if (outEdge(q) == en) { let h = world[P.hopOff + b0 + q - outStart(t)]; return vec2i(i32(h & 1u), i32(h >> 1u) - 64); }
+  }
+  return vec2i(0, 0);
+}
+fn hopMap(e: u32, en: u32) -> vec2i {
+  if (hmKey.x != e || hmKey.y != en) { hmVal = hopMapRaw(e, en); hmKey = vec2u(e, en); }
+  return hmVal;
 }
 //#end
