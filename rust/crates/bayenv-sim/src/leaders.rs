@@ -102,6 +102,7 @@ impl Sim {
                 Some((p.gap.get(), p.leader.get(), p.cw.get(), p.reads.into_inner()))
             }).collect()
         } else { Vec::new() };
+        let tcommit = std::time::Instant::now();
         let mut reruns = 0u64;
         for i in 0..high {
             if self.vs.state[i] != STATE_DRIVING { continue; }
@@ -140,6 +141,7 @@ impl Sim {
                 if ov > 0.0 { vs.gap[i] = r32(f(vs.gap[i]) - jm::min(MERGE_ROOM, 2.0 + 4.0 * (ov + 0.3))); }
             }
         }
+        if self.profile { self.sub_ns[9] += tcommit.elapsed().as_nanos() as u64; }
         self.p2_reruns += reruns;
         self.courtesy();
         if self.opts.deadlock_break >= 1.0 { self.break_deadlocks(); }

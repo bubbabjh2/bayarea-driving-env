@@ -68,11 +68,13 @@ impl Sim {
         // state at the start of the pass. The ordered pass below only runs cars the scan flags, cars changed earlier in
         // the pass, and cars with a changed car near them (exact: everything else would find nothing).
         let par = self.opts.parallel && high >= 512;
+        let tscan = std::time::Instant::now();
         let scan: Vec<bool> = if par {
             use rayon::prelude::*;
             let me = &*self;
             (0..high).into_par_iter().with_min_len(64).map(|i| me.contact_scan(i)).collect()
         } else { Vec::new() };
+        if self.profile { self.sub_ns[8] += tscan.elapsed().as_nanos() as u64; }
         let mut touched = vec![false; if par { high } else { 0 }];
         let mut touched_list: Vec<usize> = Vec::new();
         for i in 0..high {
