@@ -35,7 +35,7 @@ fn main() {
         m(&|| Box::new(bayenv_sim::fuel::RouteStore::new(&e0.pop))));
     println!("  router fork {:.1} MB", m(&|| Box::new(w.nav_base.get().unwrap().fork())));
     let s = &e.sim;
-    let lanes = (s.lanes.lstart.capacity() + s.lanes.lend.capacity()) * 4 * 3 / 2 + s.g.edge_count * 4 + s.lanes.order.capacity() * 4 + s.lanes.ent_pos.capacity() * 4;
+    let lanes = s.lanes.se.capacity() * 12 + s.g.edge_count * 4 + s.lanes.order.capacity() * 4 + s.lanes.ent_pos.capacity() * 4;
     println!("world+pop+env0 {:.1} MB; one more env {:.1} MB at creation, {:.1} MB after {steps} steps (lane index ~{:.1} MB, vs capacity {})",
         mb(l1 - l0), mb(l2 - l1), mb(l3 - l1), lanes as f64 / 1048576.0, s.vs.capacity);
 }

@@ -81,12 +81,13 @@ impl SpatialHash {
 pub struct LaneIndex {
     /// block index per edge (u32::MAX = never used: every lane of the edge is empty)
     edge_blk: Vec<u32>,
-    pub lstart: Vec<i32>, pub lend: Vec<i32>, count: Vec<i32>, touched: Vec<i32>, pub order: Vec<i32>, pub ent_pos: Vec<i32>, n_touched: usize,
+    /// (start, end) of each key's range in `order` (one load for a lane query)
+    pub se: Vec<[i32; 2]>, count: Vec<i32>, touched: Vec<i32>, pub order: Vec<i32>, pub ent_pos: Vec<i32>, n_touched: usize,
 }
 
 impl LaneIndex {
     pub fn new(edge_count: usize, capacity: usize) -> Self {
-        LaneIndex { edge_blk: vec![u32::MAX; edge_count], lstart: Vec::new(), lend: Vec::new(), count: Vec::new(), touched: vec![0; capacity * 2], order: vec![0; capacity * 2], ent_pos: vec![0; capacity * MAX_OCC as usize], n_touched: 0 }
+        LaneIndex { edge_blk: vec![u32::MAX; edge_count], se: Vec::new(), count: Vec::new(), touched: vec![0; capacity * 2], order: vec![0; capacity * 2], ent_pos: vec![0; capacity * MAX_OCC as usize], n_touched: 0 }
     }
     /// slot of key `edge * MAX_LANES + lane` in the block arrays, allocating the edge's block
     #[inline]
@@ -94,9 +95,9 @@ impl LaneIndex {
         let e = k / MAX_LANES as usize;
         let mut b = self.edge_blk[e];
         if b == u32::MAX {
-            b = (self.lstart.len() / MAX_LANES as usize) as u32; self.edge_blk[e] = b;
-            let n = self.lstart.len() + MAX_LANES as usize;
-            self.lstart.resize(n, 0); self.lend.resize(n, 0); self.count.resize(n, 0);
+            b = (self.se.len() / MAX_LANES as usize) as u32; self.edge_blk[e] = b;
+            let n = self.se.len() + MAX_LANES as usize;
+            self.se.resize(n, [0, 0]); self.count.resize(n, 0);
         }
         b as usize * MAX_LANES as usize + k % MAX_LANES as usize
     }
@@ -109,7 +110,7 @@ impl LaneIndex {
         let b = self.edge_blk[edge as usize];
         if b == u32::MAX { return (0, 0); }
         let q = b as usize * MAX_LANES as usize + lane as usize;
-        (self.lstart[q], self.lend[q])
+        { let [a, b] = self.se[q]; (a, b) }
     }
     pub fn rebuild(&mut self, vs: &VehicleStore) {
         let high = vs.high;
@@ -118,7 +119,7 @@ impl LaneIndex {
         if self.order.len() < total { self.order = vec![0; total]; }
         if self.touched.len() < total { self.touched.resize(total, 0); }
         if self.ent_pos.len() < high * MAX_OCC as usize { self.ent_pos = vec![0; high * MAX_OCC as usize * 2]; }
-        for q in 0..self.n_touched { let k = self.slot(self.touched[q] as usize); self.lstart[k] = 0; self.lend[k] = 0; }
+        for q in 0..self.n_touched { let k = self.slot(self.touched[q] as usize); self.se[k] = [0, 0]; }
         let mut nt = 0usize;
         for i in 0..high {
             let st = vs.state[i]; if st != STATE_DRIVING && st != STATE_CRASHED { continue; }
@@ -129,18 +130,18 @@ impl LaneIndex {
         // load-bearing: the lane ranges laid out in key order (dropping this sort breaks the obs / v2 traces)
         self.touched[..nt].sort_unstable();
         let mut acc = 0i32;
-        for q in 0..nt { let k = self.slot(self.touched[q] as usize); self.lstart[k] = acc; acc += self.count[k]; self.lend[k] = self.lstart[k]; }
+        for q in 0..nt { let k = self.slot(self.touched[q] as usize); self.se[k] = [acc, acc]; acc += self.count[k]; }
         for i in 0..high {
             let st = vs.state[i]; if st != STATE_DRIVING && st != STATE_CRASHED { continue; }
             let base = vs.edge[i] as i64 * MAX_LANES as i64;
             let mut l = vs.lane_lo[i] as i64;
-            while l <= vs.lane_hi[i] as i64 { let k = self.slot((base + l) as usize); self.order[self.lend[k] as usize] = i as i32; self.lend[k] += 1; l += 1; }
+            while l <= vs.lane_hi[i] as i64 { let k = self.slot((base + l) as usize); self.order[self.se[k][1] as usize] = i as i32; self.se[k][1] += 1; l += 1; }
         }
         let s = &vs.s;
         for q in 0..nt {
             let key = self.touched[q] as usize;
             let k = self.slot(key);
-            let (a, b) = (self.lstart[k] as usize, self.lend[k] as usize);
+            let (a, b) = (self.se[k][0] as usize, self.se[k][1] as usize);
             let lane = (key % MAX_LANES as usize) as i64;
             for i in a + 1..b {
                 let v = self.order[i]; let sv = s[v as usize];
