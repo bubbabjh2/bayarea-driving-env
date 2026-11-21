@@ -205,4 +205,10 @@ impl Env {
         let bw = bayenv_world::World::load(data_dir).map_err(|e| e.to_string())?;
         Ok(Arc::new(World::from_bayenv(&bw)))
     }
+    /// load_world for scenario / synthetic / custom data dirs (no world-manifest sha check).
+    pub fn load_world_unverified(data_dir: &std::path::Path) -> Result<Arc<World>, String> {
+        let o = bayenv_world::LoadOptions { verify: false, ..Default::default() };
+        let bw = bayenv_world::World::load_with(data_dir, &o).map_err(|e| e.to_string())?;
+        Ok(Arc::new(World::from_bayenv(&bw)))
+    }
 }
