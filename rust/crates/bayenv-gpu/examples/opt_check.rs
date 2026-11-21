@@ -9,7 +9,7 @@ use std::sync::Arc;
 
 fn opts(cap: usize, var: &str, js: bool) -> GpuOptions {
     let mut o = GpuOptions { capacity: cap, ..Default::default() }; o.features.accidents = true;
-    if js { for f in ["indirect_resolve", "fused_resolve", "sorted_order", "fast_scan"] { o.set_flag(f, false).unwrap(); } o.zero_init_workgroup = true; }
+    if js { for f in ["indirect_resolve", "fused_resolve", "sorted_order", "fast_scan", "fast_search"] { o.set_flag(f, false).unwrap(); } o.zero_init_workgroup = true; }
     if let Ok(v) = std::env::var(var) { for kv in v.split(',').filter(|x| !x.is_empty()) {
         let (k, b) = kv.split_once('=').unwrap_or((kv, "1")); o.set_flag(k.trim(), b.trim() != "0").unwrap(); } }
     o

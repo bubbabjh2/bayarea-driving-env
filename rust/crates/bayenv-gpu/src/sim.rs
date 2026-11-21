@@ -56,6 +56,9 @@ pub struct GpuOptions {
     /// arrays). Every kernel here writes its workgroup variables before reading them (scan tmp, the integrate /
     /// act counters set by thread 0), so off gives identical results. JS (Chrome): on
     pub zero_init_workgroup: bool,
+    /// binary instead of linear polyline segment searches (kernels/patches.wgsl; identical when the cumulative
+    /// distances are non-decreasing, checked at creation). JS: off
+    pub fast_search: bool,
     /// lane / hash-cell starts with kernels/scan4k.wgsl (4096 per workgroup, the count clears folded into the
     /// scan: 12 -> 6 dispatches; identical starts). JS: off
     pub fast_scan: bool,
@@ -82,7 +85,7 @@ impl Features {
 impl GpuOptions {
     /// Set a host optimisation flag by name (indirect_resolve, fused_resolve, sorted_order, profile).
     pub fn set_flag(&mut self, name: &str, on: bool) -> Result<(), String> {
-        match name { "indirect_resolve" => self.indirect_resolve = on, "fused_resolve" => self.fused_resolve = on, "sorted_order" => self.sorted_order = on, "fast_scan" => self.fast_scan = on, "zero_init_workgroup" => self.zero_init_workgroup = on,
+        match name { "indirect_resolve" => self.indirect_resolve = on, "fused_resolve" => self.fused_resolve = on, "sorted_order" => self.sorted_order = on, "fast_scan" => self.fast_scan = on, "fast_search" => self.fast_search = on, "zero_init_workgroup" => self.zero_init_workgroup = on,
             "profile" => self.profile = on, _ => return Err(format!("unknown GpuOptions flag {name}")) }
         Ok(())
     }
@@ -101,7 +104,7 @@ impl Default for GpuOptions {
     fn default() -> Self {
         GpuOptions { capacity: 131072, dt: 0.05, start_time: 5.0 * 3600.0, seed: 1, obs: ObsMode::V2, steer_rate: false, decide_every: 1, features: Features::default(),
             controls: true, junctions: true, table_bits: 18, contact_cap: 131072, ev_cap: 16384, spawn_queue: 16384, op_cap: 16384, max_blocks: 4096, route_slack: 1 << 22,
-            resolve_rounds: 12, progress_weight: 1.0, jerk_weight: 0.5, jerk_reward: false, grade_obs: true, squeeze_delay: 15.0 * 60.0, deadlock_break: 0, reroute: true, keep_events: false, indirect_resolve: true, fused_resolve: true, sorted_order: true, fast_scan: true, zero_init_workgroup: false, profile: false, return_trips: true, refuel_budget_ms: 4.0 }
+            resolve_rounds: 12, progress_weight: 1.0, jerk_weight: 0.5, jerk_reward: false, grade_obs: true, squeeze_delay: 15.0 * 60.0, deadlock_break: 0, reroute: true, keep_events: false, indirect_resolve: true, fused_resolve: true, sorted_order: true, fast_scan: true, fast_search: true, zero_init_workgroup: false, profile: false, return_trips: true, refuel_budget_ms: 4.0 }
     }
 }
 
@@ -226,6 +229,8 @@ pub struct GpuSim {
     /// a submitted batch whose readback / events are processed lazily (`run_steps_async`, `sync`)
     pending: Option<Pending>,
     io_host: Vec<u32>,
+    /// opts.fast_search and the world's polylines allow it (checked at creation)
+    fast_search_ok: bool,
     /// stages(): build the JS dispatch list (peek_stages)
     js_stages: bool,
     /// timestamp profiler (opts.profile)
@@ -337,9 +342,10 @@ impl GpuSim {
             refuel_queue: Vec::new(), reroute_queue: Default::default(), last_reroute: HashMap::new(), lot: 0, new_pose: false, crashes: Vec::new(), active: Vec::new(),
             counters: Counters::default(), gpu_stats: [0; 64], events: Vec::new(), closed_key: None, closed_n: 0, closed_edges: Vec::new(),
             edge_speed_ema: HashMap::new(), edge_speed_order: Vec::new(), traffic_penalty: HashMap::new(), penalty_order: Vec::new(), pending_penalty: None, next_traffic: -1e9,
-            router: None, packer: None, out_staging: None, pending: None, staging, io_host: vec![0; io_words], profiler: None, js_stages: false, x: Default::default(), blob, gpu, opts,
+            router: None, packer: None, out_staging: None, pending: None, staging, io_host: vec![0; io_words], profiler: None, js_stages: false, fast_search_ok: false, x: Default::default(), blob, gpu, opts,
         };
         if !use_j { sim.blob.j_m = None; }
+        if sim.opts.fast_search { sim.fast_search_ok = sim.polylines_monotone(); if !sim.fast_search_ok { eprintln!("bayenv-gpu: fast_search off (an edge / connector polyline has decreasing cumulative distance)"); } }
         sim.blob.words = Vec::new();   // uploaded: no host copy kept (block writes go straight to the GPU)
         if sim.opts.profile {
             let f = sim.gpu.device.features();
@@ -357,12 +363,13 @@ impl GpuSim {
     fn j_m(&self) -> usize { self.blob.j_m.unwrap_or(0) }
 
     fn compile(&mut self) -> Result<(), String> {
-        let specs = kernels::specs(self.has_junctions(), self.opts.obs == ObsMode::V3);
+        let mut specs = kernels::specs(self.has_junctions(), self.opts.obs == ObsMode::V3);
+        for sp in specs.iter_mut() { sp.file = self.kernel_file(sp.file); }
         // compile in parallel (naga + Metal pipeline creation), results in spec order
         let gpu = &self.gpu; let obs = self.opts.obs; let cap = self.cap;
         let out: Vec<Result<Kernel, String>> = std::thread::scope(|s| {
-            let zi = self.opts.zero_init_workgroup;
-            let hs: Vec<_> = specs.iter().map(|sp| s.spawn(move || gpu.kernel_with(sp.label, &kernels::source(sp, obs, cap), sp.entry, zi))).collect();
+            let zi = self.opts.zero_init_workgroup; let fsr = self.fast_search_ok;
+            let hs: Vec<_> = specs.iter().map(|sp| s.spawn(move || { let src = kernels::source(sp, obs, cap); gpu.kernel_with(sp.label, &if fsr { kernels::patch(&src) } else { src }, sp.entry, zi) })).collect();
             hs.into_iter().map(|h| h.join().unwrap()).collect()
         });
         for (sp, k) in specs.iter().zip(out) { self.k.insert(sp.label, k?); }
@@ -373,8 +380,8 @@ impl GpuSim {
             for &(l, sl, file, entry, wg, on) in SORTED_KERNELS {
                 if !only.as_ref().map_or(on, |o| o.split(',').any(|x| x == l)) { continue; }
                 if !self.k.contains_key(l) { continue; }
-                let spec = kernels::KernelSpec { label: sl, file, entry, defines: true };
-                let src = kernels::sorted_source(&kernels::source(&spec, self.opts.obs, self.cap), entry, sorted_wg(l, wg));
+                let spec = kernels::KernelSpec { label: sl, file: self.kernel_file(file), entry, defines: true };
+                let src = kernels::sorted_source(&self.patched(kernels::source(&spec, self.opts.obs, self.cap)), entry, sorted_wg(l, wg));
                 self.k.insert(sl, self.gpu.kernel_with(sl, &src, &format!("{entry}_sorted"), self.opts.zero_init_workgroup)?);
             }
         }
@@ -382,7 +389,7 @@ impl GpuSim {
             for (l, e) in [("scan4k.first", "scanFirst"), ("scan4k.inPlace", "scanInPlace"), ("scan4k.add", "addSums")] { self.k.insert(l, self.gpu.kernel_with(l, kernels::host_raw("scan4k"), e, false)?); }
         }
         if self.opts.fused_resolve {
-            let src = defines::prefix(self.opts.obs, self.cap) + &format!("const RF_ROUNDS: u32 = {}u;\n", self.opts.resolve_rounds) + &kernels::resolve_includes(kernels::host_raw("resolve_fused"));
+            let src = defines::prefix(self.opts.obs, self.cap) + &format!("const RF_ROUNDS: u32 = {}u;\n", self.opts.resolve_rounds) + &self.patched(kernels::resolve_includes(kernels::host_raw("resolve_fused")));
             self.k.insert("contacts.resolveFused", self.gpu.kernel_with("contacts.resolveFused", &src, "resolveFused", self.opts.zero_init_workgroup)?);
         }
         Ok(())
@@ -630,6 +637,29 @@ impl GpuSim {
             }
         }
         if let Some(p) = &self.profiler { p.resolve(enc); }
+    }
+
+    fn patched(&self, src: String) -> String { if self.fast_search_ok { kernels::patch(&src) } else { src } }
+    /// fast_search precondition: every edge polyline's cumulative distance (pt.w) is non-decreasing.
+    fn polylines_monotone(&self) -> bool {
+        let w = &self.blob.words; let lo = self.blob.off.pts as usize;
+        if w.is_empty() { return false; }
+        let edges = (0..self.blob.e).all(|e| {
+            let (b, n) = (w[e * 16] as usize, w[e * 16 + 1] as usize);
+            (1..n).all(|k| f32::from_bits(w[lo + 4 * (b + k) + 3]) >= f32::from_bits(w[lo + 4 * (b + k - 1) + 3]))
+        });
+        // junction connectors: movW(m, 2) = first point, movW(m, 3) = count, point distance at jPts + 4 k + 3
+        let (mo, jp) = (self.blob.off.j_mov as usize, self.blob.off.j_pts as usize);
+        let conns = (0..self.blob.j_m.unwrap_or(0)).all(|m| {
+            let (f, n) = (w[mo + 9 * m + 2] as usize, w[mo + 9 * m + 3] as usize);
+            (1..n).all(|k| f32::from_bits(w[jp + 4 * (f + k) + 3]) >= f32::from_bits(w[jp + 4 * (f + k - 1) + 3]))
+        });
+        edges && conns
+    }
+
+    /// Source file of a kernel with the options (modified copies in crates/bayenv-gpu/kernels/).
+    fn kernel_file(&self, file: &'static str) -> &'static str {
+        file
     }
 
     /// scan4k levels: scanFirst, scanInPlace per upper level, then the adds top-down.

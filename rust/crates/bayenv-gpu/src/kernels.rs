@@ -28,7 +28,7 @@ pub const SOURCES: &[(&str, &str)] = &[
 
 pub fn raw(name: &str) -> &'static str {
     let n = name.trim_end_matches(".wgsl");
-    SOURCES.iter().find(|(k, _)| *k == n).map(|(_, s)| *s).unwrap_or_else(|| panic!("no kernel source {name}"))
+    SOURCES.iter().chain(HOST_SOURCES).find(|(k, _)| *k == n).map(|(_, s)| *s).unwrap_or_else(|| panic!("no kernel source {name}"))
 }
 
 /// `loadKernelSource(name)`: the file with every `// #include <file>` line replaced (recursively).
@@ -41,6 +41,7 @@ pub const HOST_SOURCES: &[(&str, &str)] = &[
     ("sorted", include_str!("../kernels/sorted.wgsl")),
     ("list_args", include_str!("../kernels/list_args.wgsl")),
     ("scan4k", include_str!("../kernels/scan4k.wgsl")),
+    ("patches", include_str!("../kernels/patches.wgsl")),
 ];
 
 /// Lane-list-order variant of a per-car kernel (kernels/sorted.wgsl): the entry `entry` of `src` becomes the
@@ -135,6 +136,41 @@ pub fn parse_bindings(code: &str) -> Vec<Decl> {
         while j < b.len() && b[j].is_ascii_whitespace() { j += 1; }
         let st = j; while j < b.len() && (b[j].is_ascii_alphanumeric() || b[j] == b'_') { j += 1; }
         out.push(Decl { group: g, binding: bi, space, access, name: code[st..j].to_string() }); i = j;
+    }
+    out
+}
+
+/// Text of the function `fn name(` in `src` (to its closing brace): (start, end) byte offsets.
+fn find_fn(src: &str, name: &str) -> Option<(usize, usize)> {
+    let a = src.find(&format!("fn {name}("))?;
+    let open = a + src[a..].find('{')?;
+    let mut depth = 0i32;
+    for (i, c) in src[open..].char_indices() {
+        if c == '{' { depth += 1; } else if c == '}' { depth -= 1; if depth == 0 { return Some((a, open + i + 1)); } }
+    }
+    None
+}
+fn sections<'a>(text: &'a str, tag: &str) -> Vec<(&'a str, String)> {
+    let mut out = Vec::new(); let mut cur: Option<(&str, Vec<&str>)> = None;
+    for line in text.lines() {
+        if let Some(n) = line.strip_prefix(tag) { cur = Some((n.trim(), Vec::new())); continue; }
+        if line.trim() == "//#end" { if let Some((n, l)) = cur.take() { out.push((n, l.join("\n"))); } continue; }
+        if let Some((_, l)) = cur.as_mut() { l.push(line); }
+    }
+    out
+}
+/// Apply kernels/patches.wgsl to a resolved kernel source: each patched function present in `src` is replaced
+/// (panics when its text differs from the original the patch was written for).
+pub fn patch(src: &str) -> String {
+    let text = host_raw("patches");
+    let origs = sections(text, "//#orig ");
+    let mut out = src.to_string();
+    for (name, body) in sections(text, "//#patch ") {
+        let Some((a, b)) = find_fn(&out, name) else { continue };
+        let orig = &origs.iter().find(|(n, _)| *n == name).unwrap_or_else(|| panic!("patch {name}: no //#orig")).1;
+        let norm = |x: &str| x.split_whitespace().collect::<Vec<_>>().join(" ");
+        assert_eq!(norm(&out[a..b]), norm(orig), "kernel patch {name}: the original function changed upstream");
+        out.replace_range(a..b, &body);
     }
     out
 }

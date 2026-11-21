@@ -77,6 +77,7 @@ Flags: `GpuOptions` (`set_flag`, env `BAYENV_GPU_OPTS` in the examples).
 | + contact resolve in one dispatch (`kernels/resolve_fused.wgsl`: 12 rounds x 3 phases with workgroup barriers in one workgroup, parallel order-keeping compaction; 37 -> 1 dispatches) | 0.88 (0.83) | 4.40 (4.21) | bit-identical | `fused_resolve`, on |
 | + lane-list thread order for leaders / sense / junction.yield (`kernels/sorted.wgsl`, indirect over lane entries + cap) | 0.88 (0.83) | 4.00 (3.81) | bit-identical | `sorted_order`, on |
 | + scans at 4096 per workgroup with the count clears folded in (`kernels/scan4k.wgsl`; counts into accumulators zeroed by the scan; 12 -> 6 dispatches) + no workgroup-memory zero fill (`zero_init_workgroup` off: naga's fill of a 16 KB array cost 0.3 ms per workgroup; every kernel writes its workgroup variables first) | 0.85 (0.815) | 3.92 (3.70) | bit-identical | `fast_scan` on, `zero_init_workgroup` off |
+| + binary polyline segment search (`kernels/patches.wgsl`: `yAlongEdge`, `arcPointJ`, `connPointJ` linear scans -> binary search; used by the grade obs, physics grade, connector poses; precondition non-decreasing cumulative distances, checked on the world at creation) | 0.68 (0.66) | 3.57 (3.41) | bit-identical | `fast_search`, on |
 
 Contacts per step: ~6 at 10k, ~520 at 100k, none left to the serial pass. Run-to-run the unmodified host is
 itself not bit-reproducible beyond ~200 steps (atomic orders: hash ranks, pair table, event order): after 1,000
