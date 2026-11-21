@@ -111,3 +111,22 @@ recording mock (`rust/tools/oracle/gpu_parity_mock.mjs`, same host code as in Ch
 | CommuterTable, 20k commuters | 5.9 s (worker threads) | 1.7 s (rayon) | |
 | streaming enqueue, 3,217 departures (A* at departure + arena) | 4,365 ms | 2,239 ms | serial in both; the browser uses a route-worker pool |
 | step with a population (3k cars driving, gas 0.3, batches of 10) | 2.48 ms/step (Chrome) | 1.43 ms/step | GPU-bound; host frame < 0.1 ms without refuel plans |
+
+## Python per-step overhead and multi-env (after the kernel optimisations, ae5ab49+)
+
+`rust/crates/bayenv-py/examples/bench_loop.py` (scatter, seed 11, gas 0.3, capacity = cars). The machine was shared with
+other sessions (load average 12-21), so times are noisy (repeat-run spread ~±15 %); best of 3 below.
+
+| call | 10k cars | 100k cars |
+|---|---|---|
+| Rust `run_steps(20)` per step | 0.66 ms | 3.58 ms |
+| Rust `run_steps(1)` | 1.07 ms | 3.94 ms |
+| Python `step(20)` per step | 0.75 ms | 3.96 ms |
+| Python `act` + `step(1)` + `observe(out=)` (before `step_observe`: 1.63 / 5.78 ms with the old kernels) | 1.73 ms | 7.35 ms |
+| Python `step_observe(A, 1, out=)` (one submit, one wait) | 1.05-1.20 ms | 7.0 ms |
+| Python `VecEnv(4 x 10k).step_observe` | 3.78 ms per call = 1,059 env-steps/s, 10.6 M car-steps/s | |
+| Python `VecEnv(16 x 2.5k).step_observe` | 10.3 ms per call = 1,548 env-steps/s | |
+
+Per-call cost of a synchronous step at 10k cars: ~0.4 ms on top of the GPU time (host prep, submit, completion latency).
+At 100k cars the 28 MB observation copy (GPU -> staging -> numpy) dominates `step_observe` (~3 ms); `step(k)` without
+observations returns after the submit.
