@@ -21,13 +21,7 @@ Survey, 3D Elevation Program (public domain). See NOTICE.
 
 ## Known limitations & disclaimers
 
-**Simulation**
-* **No background traffic.** The built-in rule-based driver was removed, so your policy drives every car. For dense
-  traffic use the GPU sim (~4.7 ms/step at 100k cars, 1.47 ms at 10k); the CPU sim is slow at full scale.
-* **Crash rate is about 10⁴× real-world**, and dense traffic tends to gridlock at junction boxes and wrecks.
-* **Every command is delayed** by a per-driver reaction time of 0.6–1.8 s, which destabilises naive controllers.
-  Do not add your own delay.
-* **`step()` returns no reward.** Compute it from `env.sim.signalsFor(slot)` with `src/sim/reward.js`.
+**Loading**
 * **First real-map load takes ~90 s and 6–10 GB RAM** unless `data/junctions.bin` is pre-built. Build it once with
   `npm run build:junctions` (or `node --max-old-space-size=14000 tools/build_junctions.mjs data/`; see `docs/WORLD-BUILD.md`).
 
