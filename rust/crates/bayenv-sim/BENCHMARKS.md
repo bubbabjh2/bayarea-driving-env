@@ -103,6 +103,14 @@ rem_pio2, spatial-hash queries, lead_base, lane geometry (offset_point, y_along,
 * Python VecEnv(cpu, v2) 14 x 2k: step(1) ~1.4 ms, step_observe ~1.5 ms (actions + observation copy ~0.1-0.2 ms),
   observe ~0.05 ms; 14 x 20k: step(1) ~20 ms, observe ~0.25 ms.
 
+* **Per-step synchronisation (the RL loop steps every env once per call):** bench_vec BENCH_SYNC=1 (one pool pass
+  per step, like the Python VecEnv) vs each env running its steps in one task, real 2k, 14 threads, under the lock at
+  load ~15: **14 envs 9.9 -> 6.3 M agent-steps/s (-37 %), 28 envs 10.8 -> 8.6 M (-20 %)**. Every step waits for the
+  slowest env (an efficiency core or a descheduled thread); more envs per thread let work stealing balance the cores.
+  For training: use n_envs >= 2 x pool threads (28 envs on 14 threads: +37 % agent-steps/s over 14 envs in the
+  synchronised loop), and step_observe(k > 1) where the policy repeats actions. A Python profile of 14 x 2k shows
+  ~57 % of all thread samples waiting (rayon idle / spin) for the same reason.
+
 | training-path change | result |
 |---|---|
 | CPU v2 observation rows kept for driving cars only (no full n_slots x 70 zero-fill + copy per step; no double zeroing in VecEnv.observe) | neutral within noise (identical Python results: sha256 of obs + events) |
