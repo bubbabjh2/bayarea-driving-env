@@ -17,6 +17,7 @@ pub mod controls;
 pub mod extras;
 pub mod graph;
 pub mod hops;
+pub mod jsjson;
 pub mod jsmath;
 pub mod junctions;
 pub mod junctions_build;

@@ -45,3 +45,43 @@ fn lane_geometry_matches_js() {
     c!("laneW", f32, lg.lane_w); c!("laneWEnd", f32, lg.lane_w_end);
     assert_eq!(fail, 0, "lane geometry differs from the JS dump");
 }
+
+#[test]
+fn junctions_match_js_file() {
+    let data = root().join("data"); let refd = root().join("rust/oracle/ref");
+    if !data.join("roads.meta.json").exists() || !refd.join("junctions.bin").exists() || !data.join("controls.json").exists() {
+        eprintln!("skip: no data / rust/oracle/ref/junctions.bin (copy of npm run build:junctions output) / data/controls.json"); return;
+    }
+    use bayenv_world::jsjson;
+    use bayenv_world::junctions_build::{build_junctions_full, crosswalk_legs, ControlLegs};
+    let main = RoadSet::load(&data, "roads.meta.json").unwrap();
+    let local = RoadSet::load(&data, "roads-local.meta.json").unwrap();
+    let g = graph_from_road_sets(&main, Some(&local));
+    let lg = bayenv_world::lanes_build::build_lane_geometry(&g);
+    // legs as tools/build_junctions.mjs computes them (the JSON of the reference build: rust/oracle/ref/controls.json)
+    let ctl = jsjson::parse(&std::fs::read_to_string(refd.join("controls.json")).unwrap()).unwrap();
+    let cw = jsjson::parse(&std::fs::read_to_string(data.join("crosswalks.json")).unwrap()).unwrap();
+    let controls: Vec<ControlLegs> = ctl.get("controls").unwrap().as_arr().unwrap().iter().map(|c| ControlLegs {
+        node: c.get("node").and_then(|v| v.as_f64()).unwrap_or(f64::NAN), ty: c.get("type").and_then(|v| v.as_str()).unwrap_or("").into(),
+        all_way: c.get("allWay").map_or(false, |v| v.truthy()),
+        approach_edges: c.get("approaches").unwrap().as_arr().unwrap().iter().filter_map(|a| a.get("edge").and_then(|v| v.as_f64())).filter(|&e| e >= 0.0).map(|e| e as u32).collect(),
+    }).collect();
+    let points: Vec<[f64; 2]> = cw.get("points").unwrap().as_arr().unwrap().iter().map(|p| { let a = p.as_arr().unwrap(); [a[0].as_f64().unwrap(), a[1].as_f64().unwrap()] }).collect();
+    let legs = crosswalk_legs(&g, Some(&controls), Some(&points));
+    let t = Instant::now();
+    let (j, st) = build_junctions_full(&lg, &g, Some(&legs));
+    eprintln!("buildJunctions (rust): {:.0} ms; {:?}", t.elapsed().as_secs_f64() * 1e3, st);
+    let p = Pack::open(&refd, "junctions.meta.json").unwrap();
+    let mut fail = 0;
+    macro_rules! c { ($name:literal, $t:ty, $v:expr) => {{
+        let js = p.req::<$t>($name).unwrap(); let (bad, first) = bits_eq::<$t>(&js, &$v);
+        if bad > 0 { fail += 1; }
+        eprintln!("{} j.{:8} {:>9} elems, {} mismatches{}", if bad == 0 { "OK  " } else { "FAIL" }, $name, js.len(), bad, first.map_or(String::new(), |i| format!(" (first at {i})")));
+    }}; }
+    c!("mouthS", f32, j.mouth_s); c!("goreS", f32, j.gore_s); c!("jNode", u32, j.j_node); c!("jFirstM", u32, j.j_first_m); c!("jCountM", u32, j.j_count_m);
+    c!("jFirstC", u32, j.j_first_c); c!("jCountC", u32, j.j_count_c); c!("jFirstH", u32, j.j_first_h); c!("jCountH", u32, j.j_count_h);
+    c!("mInfo", u32, j.m_info); c!("mF", f32, j.m_f); c!("pts", f32, j.pts); c!("conf", u32, j.conf); c!("confS", f32, j.conf_s); c!("hull", f32, j.hull);
+    assert_eq!(p.meta["crossingFix"], j.crossing_fix.clone().unwrap(), "crossingFix stats");
+    assert_eq!(std::fs::read(refd.join("junctions.bin")).unwrap(), j.to_bin(), "junctions.bin bytes");
+    assert_eq!(fail, 0);
+}
