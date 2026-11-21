@@ -121,7 +121,9 @@ pop.place_obstacles(count=40, seed=3); pop.place_wrecks(10); pop.reset_day()
   uses k = 1 and constant actions, and matches rows by agent. Both backends report a barrier (kerb) scrape once, when
   it starts: the GPU's `barrier` kernel tracks F_WALL / F_WALL_PREV, and the CPU tracks `_barrierTouch`. Expected
   aggregate differences are differences between the JS CPU and JS GPU models, not port bugs: each Rust backend is
-  bit-exact to its JS original (CPU) or within float tolerance (GPU). See `docs/cpu-vs-gpu.md`.
+  bit-exact to its JS original (CPU) or within float tolerance (GPU). See `docs/cpu-vs-gpu.md`. The kerb-strike gap
+  is a JS-GPU bug (`docs/kerb-investigation.md`). `--cpu-connector-join` runs the GPU with the fix, and
+  `--spawn-default` gives spawning GPU cars the CPU's first-step default action.
 * Gymnasium-style wrapper: `crates/bayenv-py/examples/gym_wrapper.py` (one observation and action row per car; the
   environment defines no reward). Benchmark: `crates/bayenv-py/examples/bench.py`.
 
@@ -210,6 +212,7 @@ switch each back to the JS behaviour (env `BAYENV_GPU_OPTS=flag=0,...` in the ex
 | `sorted_order` | `sorted.wgsl`, `list_args.wgsl` | leaders / sense / junction.yield threads in lane-list order (entry renamed to a function, wrapper entry added by the host; indirect over lane entries + cap; every slot handled once) |
 | `fast_scan` | `scan4k.wgsl` | lane / cell starts at 4096 per workgroup, counts into accumulators the scan zeroes (no clear kernels; 12 -> 6 dispatches) |
 | `fast_search` | `patches.wgsl` | function patches applied to the resolved sources (`kernels::patch`, original text checked): binary instead of linear polyline segment search (`yAlongEdge`, `arcPointJ`, `connPointJ`; precondition: non-decreasing cumulative distances, checked on the world at creation), one-entry `hopMap` memo |
+| `cpu_connector_join` (off) | `cpu_connector_join.wgsl` | **model change, not bit-identical**: junction connector entry as in the CPU sim (`sArrive`, not the end-of-step `s`); fixes the GPU kerb strikes, `docs/kerb-investigation.md`. Python `Env(..., cpu_connector_join=True)` |
 | `zero_init_workgroup` (off) | - | no workgroup-memory zero fill (every kernel writes its workgroup variables first) |
 
 `GpuOptions.profile` (`bench --profile`) records GPU timestamps per dispatch for the first step of every batch

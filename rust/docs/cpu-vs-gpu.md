@@ -22,9 +22,13 @@ What this means:
 * **Spawning and the trip schedule are identical:** same population, same departure step.
 * **Kerb strikes** are the largest difference. Both report a strike once, when it starts. On the GPU, cars driving
   blind (steer 0) leave the lane, hit the kerb and bounce back far more often: about 5 separate strikes per car over
-  the run, at a median Δv of 2 km/h. The CPU does this rarely. This is a dynamics difference of the GPU model
-  (f32, 10 ms physics sub-steps, its own lateral integration in `integrate.wgsl` / `physics.wgsl`), not a repeated
-  report.
+  the run, at a median Δv of 2 km/h. The CPU does this rarely. **Root cause: a JS-GPU bug** in the junction connector
+  entry (`integrate.wgsl:228` tests the end-of-step `s`, `vehicle.js:368` the start-of-step `sArrive`), which gives
+  almost every car entering a junction box a constant heading offset of up to 0.09 rad. See `kerb-investigation.md`.
+  `GpuOptions.cpu_connector_join` / `Env(..., cpu_connector_join=True)` (default off) fixes it. With the fix the
+  numbers are: contacts 17 / 10, crashed 28 / 31 (27 common), missed exits 120 / 123 (116 common), violations
+  1,627 / 1,625. With `compare_backends.py --spawn-default` as well, crashed is 28 / 27 (26 on the same step) and
+  violations 1,627 / 1,627.
 * **Crashes, missed exits and violations** depend on where the cars drift, so their counts and timing diverge with
   the trajectories (same order of magnitude, different agents).
 * For training, treat the backends as two related environments. Compare policies within one backend. Use the

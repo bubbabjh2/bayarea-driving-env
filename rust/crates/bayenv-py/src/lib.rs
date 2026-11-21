@@ -166,7 +166,7 @@ impl Env {
     /// Env(data_dir, n_cars=10000, seed=1, backend="gpu" | "cpu", capacity=None, obs="v2", dt=0.05, start_time=None (gpu 05:00, cpu first departure - 60 s),
     ///     accidents=True, collisions=True, fuel=True, controls=True, junctions=True, steer="position", decide_every=1,
     ///     keep_events=False, population=None, pop_seed=42, streaming=False, return_trips=True, stations=True,
-    ///     refuel_budget_ms=None)
+    ///     refuel_budget_ms=None, cpu_connector_join=False)
     /// Loads the world (~0.1 s warm), builds the GPU buffers and scatters `n_cars` cars at rest on random routes
     /// (seeded; the JS GPUSim.scatter placement). Actions start at [0, 0, 0] for every slot.
     /// population=N (gpu): instead of the scatter, N commuters (src/sim/population.js, seed pop_seed, generated natively,
@@ -176,14 +176,16 @@ impl Env {
     /// n_slots = capacity (default min(N, 131072) rounded up to 1024); slot_trip() maps slots to trips.
     /// refuel_budget_ms: wall-clock budget per step() call for refuel plans (default: none, every plan at once =
     /// deterministic; the JS default is 4 ms).
+    /// cpu_connector_join (gpu): model patch, junction connector entry as in the CPU sim (rust/docs/kerb-investigation.md;
+    /// default off = the JS GPU kernels).
     #[new]
     #[pyo3(signature = (data_dir, n_cars=10000, seed=1, backend="gpu", capacity=None, obs="v2", dt=0.05, start_time=None,
         accidents=true, collisions=true, fuel=true, controls=true, junctions=true, steer="position", decide_every=1, keep_events=false,
-        population=None, pop_seed=42.0, streaming=false, return_trips=true, stations=true, refuel_budget_ms=None, crash_share=false))]
+        population=None, pop_seed=42.0, streaming=false, return_trips=true, stations=true, refuel_budget_ms=None, crash_share=false, cpu_connector_join=false))]
     #[allow(clippy::too_many_arguments)]
     fn new(py: Python<'_>, data_dir: &str, n_cars: usize, seed: u32, backend: &str, capacity: Option<usize>, obs: &str, dt: f64, start_time: Option<f64>,
            accidents: bool, collisions: bool, fuel: bool, controls: bool, junctions: bool, steer: &str, decide_every: u32, keep_events: bool,
-           population: Option<usize>, pop_seed: f64, streaming: bool, return_trips: bool, stations: bool, refuel_budget_ms: Option<f64>, crash_share: bool) -> PyResult<Env> {
+           population: Option<usize>, pop_seed: f64, streaming: bool, return_trips: bool, stations: bool, refuel_budget_ms: Option<f64>, crash_share: bool, cpu_connector_join: bool) -> PyResult<Env> {
         if backend == "cpu" {
             let cobs = match obs { "v2" => CpuObs::V2, "v3" => CpuObs::V3, "flat" => CpuObs::Flat, "none" => CpuObs::None, _ => return Err(PyValueError::new_err("obs must be 'v2', 'v3', 'flat' or 'none'")) };
             // CPU reference sim (crate bayenv-sim): commuter population (population.js, n_cars commuters, seed),
@@ -215,7 +217,7 @@ impl Env {
         let res: Result<(Arc<World>, GpuSim, usize), String> = py.detach(move || {
             let world = Arc::new(World::load_with(&data, &LoadOptions::default()).map_err(|e| format!("world: {e}"))?);
             let mut o = GpuOptions { capacity: cap, dt, start_time: start_time.unwrap_or(18000.0), seed, obs: obs_mode, steer_rate, decide_every, controls, junctions, keep_events, record_share: crash_share,
-                return_trips, refuel_budget_ms: refuel_budget_ms.unwrap_or(f64::INFINITY), ..Default::default() };
+                return_trips, refuel_budget_ms: refuel_budget_ms.unwrap_or(f64::INFINITY), cpu_connector_join, ..Default::default() };
             o.features.accidents = accidents; o.features.collisions = collisions; o.features.fuel = fuel;
             let mut sim = bayenv_gpu::env::create(world.clone(), o)?;
             match population {
@@ -602,10 +604,10 @@ impl VecEnv {
 #[pymethods]
 impl VecEnv {
     #[new]
-    #[pyo3(signature = (data_dir, n_envs, n_cars=1000, seed=1, capacity=None, obs="v2", dt=0.05, start_time=None, accidents=true, collisions=true, fuel=true, backend="gpu"))]
+    #[pyo3(signature = (data_dir, n_envs, n_cars=1000, seed=1, capacity=None, obs="v2", dt=0.05, start_time=None, accidents=true, collisions=true, fuel=true, backend="gpu", cpu_connector_join=false))]
     #[allow(clippy::too_many_arguments)]
     fn new(py: Python<'_>, data_dir: &str, n_envs: usize, n_cars: usize, seed: u32, capacity: Option<usize>, obs: &str, dt: f64, start_time: Option<f64>,
-           accidents: bool, collisions: bool, fuel: bool, backend: &str) -> PyResult<VecEnv> {
+           accidents: bool, collisions: bool, fuel: bool, backend: &str, cpu_connector_join: bool) -> PyResult<VecEnv> {
         if backend == "cpu" {
             let cobs = match obs { "v2" => CpuObs::V2, "v3" => CpuObs::V3, "flat" => CpuObs::Flat, "none" => CpuObs::None, _ => return Err(PyValueError::new_err("obs must be 'v2', 'v3', 'flat' or 'none'")) };
             let data = data_dir.to_string();
@@ -625,7 +627,7 @@ impl VecEnv {
         let data = data_dir.to_string();
         let res: Result<(Vec<GpuSim>, usize), String> = py.detach(move || {
             let world = Arc::new(World::load(&data).map_err(|e| format!("world: {e}"))?);
-            let mut o = GpuOptions { capacity: cap, dt, start_time, obs: obs_mode, ..Default::default() };
+            let mut o = GpuOptions { capacity: cap, dt, start_time, obs: obs_mode, cpu_connector_join, ..Default::default() };
             o.features.accidents = accidents; o.features.collisions = collisions; o.features.fuel = fuel;
             let mut sims = bayenv_gpu::env::create_many(world, &o, n_envs)?;
             let mut placed = usize::MAX;

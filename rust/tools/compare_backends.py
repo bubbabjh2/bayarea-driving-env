@@ -1,6 +1,12 @@
 """CPU vs GPU events on the same scenario, k = 1 (rust/README.md "CPU vs GPU events").
 
-    python rust/tools/compare_backends.py data [n_commuters=5000] [steps=3000] [start=25200] [seed=42]
+    python rust/tools/compare_backends.py data [n_commuters=5000] [steps=3000] [start=25200] [seed=42] [--cpu-connector-join]
+
+--cpu-connector-join: GPU model patch GpuOptions.cpu_connector_join (junction connector entry as in the CPU sim,
+rust/docs/kerb-investigation.md); default off = the JS GPU kernels.
+--spawn-default: GPU rows of slots that are not driving get the CPU sim's default action [0, 0, 0.3]. The CPU applies
+an action only to cars driving when act() is called, so a car spawning during a step brakes (default action) on its
+first decision; the GPU holds the slot's row (gas 0.3). This shifts the CPU trajectories by ~2 steps (harness only).
 
 Same population (population.js, `seed`), same start time and dt (0.05), every driving car commanded [0, 0.3, 0]
 every step on both backends. Events are matched by (agent, kind) and by step (exact and within ±20 steps); arrivals
@@ -10,6 +16,8 @@ import sys, collections
 import numpy as np
 import bayenv
 
+cj = "--cpu-connector-join" in sys.argv; sd = "--spawn-default" in sys.argv
+sys.argv = [a for a in sys.argv if a not in ("--cpu-connector-join", "--spawn-default")]
 data = sys.argv[1] if len(sys.argv) > 1 else "data"
 n = int(sys.argv[2]) if len(sys.argv) > 2 else 5000
 steps = int(sys.argv[3]) if len(sys.argv) > 3 else 3000
@@ -19,11 +27,12 @@ KIND = {1: "arrived", 2: "crashed", 3: "contact", 4: "stranded", 5: "cleared", 6
 
 def run(backend):
     if backend == "cpu": env = bayenv.Env(data, n_cars=n, seed=seed, backend="cpu", start_time=start, obs="none")
-    else: env = bayenv.Env(data, n_cars=n, seed=seed, population=n, pop_seed=float(seed), start_time=start, obs="none")
+    else: env = bayenv.Env(data, n_cars=n, seed=seed, population=n, pop_seed=float(seed), start_time=start, obs="none", cpu_connector_join=cj)
     rows = collections.defaultdict(list); late = {}
     for t in range(steps):
         m = env.n_slots if backend == "cpu" else env.capacity
         A = np.zeros((m, 3), np.float32); A[:, 1] = 0.3
+        if sd and backend == "gpu": A[env.state()["state"][:m] != 1] = (0.0, 0.0, 0.3)
         env.act(A); env.step(1)
         e = env.events()
         for k, a, s, lb in zip(e["kind"], e["agent"], e["step"], e["late_by"]):
@@ -32,7 +41,7 @@ def run(backend):
     return rows, late, env.stats()
 
 cpu, cl, cs = run("cpu"); gpu, gl, gs = run("gpu")
-print(f"{n} commuters, {steps} steps from t={start:.0f}, k=1")
+print(f"{n} commuters, {steps} steps from t={start:.0f}, k=1, gpu cpu_connector_join={cj}, spawn_default={sd}")
 for k, name in KIND.items():
     c = {key: v for key, v in cpu.items() if key[1] == k}; g = {key: v for key, v in gpu.items() if key[1] == k}
     if not c and not g: continue
