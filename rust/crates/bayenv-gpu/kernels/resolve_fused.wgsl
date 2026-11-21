@@ -4,6 +4,8 @@
 //    RF_ROUNDS rounds with storageBarrier + workgroupBarrier between the phases instead of dispatch boundaries.
 //    The phase bodies are those of ownClear / ownMin / resolveRound (same isDone / prio / resolveOne), so every
 //    round resolves the same set of contacts, and the contacts resolved in one round share no car.
+//  * rounds stop early once every contact is done (rfLeft = contacts this round could not resolve; the later
+//    rounds would skip them all), and none run without contacts;
 //  * the serial tail of resolve() (compaction of the contacts left, keeping list order) is a workgroup prefix
 //    sum (same order, same result); the insertion sort, the serial resolveOne loop and the diagnostics are the
 //    original code, run by thread 0.
@@ -14,6 +16,8 @@ const RF_WG: u32 = 256u;
 var<workgroup> rfScan: array<u32, 256>;
 var<workgroup> rfM: u32;
 var<workgroup> rfN: u32;
+var<workgroup> rfLeft: atomic<u32>;
+var<workgroup> rfLeftU: u32;
 
 fn rfOwnClear(k: u32) {
   let o = 4u + k * 8u;
@@ -32,7 +36,7 @@ fn rfRound(k: u32) {
   let o = 4u + k * 8u;
   if (isDone(o)) { return; }
   let key = prio(k);
-  if (atomicLoad(&contacts[ccBase() + atomicLoad(&contacts[o])]) != key || atomicLoad(&contacts[ccBase() + atomicLoad(&contacts[o + 1u])]) != key) { return; }
+  if (atomicLoad(&contacts[ccBase() + atomicLoad(&contacts[o])]) != key || atomicLoad(&contacts[ccBase() + atomicLoad(&contacts[o + 1u])]) != key) { atomicAdd(&rfLeft, 1u); return; }
   resolveOne(k);
   atomicStore(&contacts[o + 2u], bitcast<u32>(2.0));
 }
@@ -43,12 +47,17 @@ fn resolveFused(@builtin(local_invocation_index) li: u32) {
   let n = workgroupUniformLoad(&rfN);   // uniform: the barriers below sit in loops over n
   let chunks = (n + RF_WG - 1u) / RF_WG;
   for (var r = 0u; r < RF_ROUNDS; r = r + 1u) {
+    if (n == 0u) { break; }
+    if (li == 0u) { atomicStore(&rfLeft, 0u); }
     for (var c = 0u; c < chunks; c = c + 1u) { let k = c * RF_WG + li; if (k < n) { rfOwnClear(k); } }
     storageBarrier(); workgroupBarrier();
     for (var c = 0u; c < chunks; c = c + 1u) { let k = c * RF_WG + li; if (k < n) { rfOwnMin(k); } }
     storageBarrier(); workgroupBarrier();
     for (var c = 0u; c < chunks; c = c + 1u) { let k = c * RF_WG + li; if (k < n) { rfRound(k); } }
     storageBarrier(); workgroupBarrier();
+    // every contact done: the remaining rounds would do nothing
+    if (li == 0u) { rfLeftU = atomicLoad(&rfLeft); }
+    if (workgroupUniformLoad(&rfLeftU) == 0u) { break; }
   }
   // order-preserving compaction of the contacts not done (resolve(): m = number kept)
   if (li == 0u) { rfM = 0u; }
