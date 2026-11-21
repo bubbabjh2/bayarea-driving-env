@@ -1,0 +1,13 @@
+[package]
+name = "bayenv-jsmath"
+version = "0.1.0"
+edition = "2021"
+license.workspace = true
+description = "Bit-exact ports of the JavaScript (Node 22 / V8 12.4) Math.* functions used by the driving env."
+
+[dependencies]
+
+[features]
+# Reproduce an fdlibm build compiled WITHOUT fp-contraction (e.g. x86-64 node).
+# Default (off) reproduces arm64 node, whose clang build fuses a*b+c into FMA.
+no-fma = []

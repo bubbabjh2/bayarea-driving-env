@@ -5,6 +5,7 @@ members = [
     "crates/bayenv-sim",
     "crates/bayenv-gpu",
     "crates/bayenv-py",
+    "crates/bayenv-jsmath",
 ]
 
 [workspace.package]
@@ -16,6 +17,7 @@ repository = "https://github.com/bubbabjh2/bayarea-driving-env"
 [workspace.dependencies]
 bayenv-world = { path = "crates/bayenv-world" }
 bayenv-sim = { path = "crates/bayenv-sim" }
+bayenv-jsmath = { path = "crates/bayenv-jsmath" }
 bayenv-gpu = { path = "crates/bayenv-gpu" }
 memmap2 = "=0.9.12"
 bytemuck = { version = "=1.25.2", features = ["derive", "extern_crate_alloc"] }
