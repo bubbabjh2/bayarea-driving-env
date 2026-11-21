@@ -6,6 +6,7 @@ logs/
 data/dem/raw/
 data/dem/ground/
 data/build/
+data/scenarios/*/build/
 
 
 

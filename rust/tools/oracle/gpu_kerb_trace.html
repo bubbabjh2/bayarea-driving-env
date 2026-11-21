@@ -1,0 +1,44 @@
+<!doctype html><html><head><meta charset="utf-8"><title>gpu kerb trace</title></head><body><pre id="out"></pre>
+<script type="module">
+// JS GPU per-step trace for rust/docs/kerb-investigation.md: GPUSim on the real world with the commuter population of
+// gpu_parity_mock.mjs (pop pack at /__in/pop.{json,bin}), constant actions [steer 0, gas 0.3, brake 0], batch 1. After
+// every step: per-step counts (driving cars, cars with a frozen heading offset |headingRel| > 1e-3 at yaw rate 0 and
+// steer 0, cars touching a barrier = F_WALL) and the trace of slots [0, nTrace): edge, s, lat, headingRel, yawRate, vLat,
+// steerAngle, speed (f32). PUT to /__out/<name>.counts.json and /__out/<name>.trace.bin.
+// Query: ?steps=1200&cap=32768&start=25200&ntrace=256&name=jskerb
+import { GPUSim } from '../../../src/gpu/gpuSim.js';
+import { initGPU } from '../../../src/gpu/device.js';
+import { loadWorld } from '../../../src/sim/data.js';
+import { loadPopulationPack } from '../../../src/gpu/popPack.js';
+const q = new URLSearchParams(location.search);
+const steps = +(q.get('steps') || 1200), cap = +(q.get('cap') || 32768), start = +(q.get('start') || 25200), nTrace = +(q.get('ntrace') || 256), name = q.get('name') || 'jskerb';
+const log = (s) => { console.log(s); document.getElementById('out').textContent += s + '\n'; };
+const res = { ok: false };
+try {
+  const world = await loadWorld({ base: new URL('../../../data/', location.href) });
+  const gpu = await initGPU();
+  const sim = await GPUSim.create(world.graph, { gpu, capacity: cap, obs: 'v2', startTime: start, features: { accidents: true, fuel: true, collisions: true, laneChanges: true }, controls: world.controls, fuelWorkers: 0, refuelBudgetMs: 1e12 });
+  const A = new Float32Array(sim.cap * 3); for (let i = 0; i < sim.cap; i++) A[3 * i + 1] = 0.3; sim.setActions(A);
+  const pop = await loadPopulationPack(new URL('/__in/pop', location.href).href); pop.meta = {}; sim.setPopulation(pop, { stations: world.stations });
+  const F = [0, 1, 4, 5, 34, 33, 6, 2];   // veh words: edge s lat headingRel yawRate vLat steerAngle speed
+  const trace = new Float32Array(steps * nTrace * F.length), counts = [];
+  for (let k = 0; k < steps; k++) {
+    await sim.runSteps(1);
+    const st = await sim.readState(), W = st.veh.W, u = st.veh.u, f = st.veh.f;
+    let driving = 0, frozen = 0, wall = 0;
+    for (let i = 0; i < sim.cap; i++) {
+      if (u[i * W + 7] !== 1) continue;
+      driving++;
+      if (Math.abs(f[i * W + 5]) > 1e-3 && f[i * W + 34] === 0 && f[i * W + 6] === 0) frozen++;
+      if (u[i * W + 10] & 2048) wall++;
+    }
+    counts.push([driving, frozen, wall]);
+    for (let i = 0; i < nTrace; i++) for (let j = 0; j < F.length; j++) trace[(k * nTrace + i) * F.length + j] = j === 0 ? u[i * W] : f[i * W + F[j]];
+  }
+  await fetch(`/__out/${name}.trace.bin`, { method: 'PUT', body: new Uint8Array(trace.buffer) });
+  await fetch(`/__out/${name}.counts.json`, { method: 'PUT', body: JSON.stringify({ counts, slotTrip: Array.from(sim.slotTrip.subarray(0, nTrace)) }) });
+  res.last = counts[counts.length - 1]; res.adapter = gpu.adapterName; res.ok = true;
+  log(JSON.stringify(res));
+} catch (e) { res.error = String(e && e.stack || e); log('ERROR ' + res.error); }
+window.__result = res; window.__done = true; document.title = res.ok ? 'PASS' : 'FAIL';
+</script></body></html>

@@ -69,6 +69,23 @@ Measured (Apple M-series laptop): CPU real world, 2,000-commuter population at ~
 ~20–100 cars on the road (≈55k agent-steps/s; cost scales with active cars); synthetic 300 agents ~6,500
 steps/s. GPU real world: 10k cars 1.47 ms/step, 100k cars 4.68 ms/step.
 
+## Rust / Python (branch `rust`, `rust/`)
+
+A native host for the GPU sim: the unchanged WGSL kernels run through wgpu (Metal / Vulkan / DX12) from Rust or
+Python, with no browser. The world loader, lane geometry, junction builder, router and world packer are ported to Rust
+and match the JS bit for bit. `npm run build:junctions` output is byte-identical: 6.3 s in Rust vs ~90 s in JS. The world
+loads in ~60 ms. Per-car state agrees with the JS GPU sim to float tolerance (`rust/README.md`).
+
+```python
+import numpy as np, bayenv          # cd rust/crates/bayenv-py && maturin develop --release
+env = bayenv.Env("data", n_cars=10000, seed=11)
+env.act(np.tile(np.float32([0, 0.3, 0]), (env.n_slots, 1)))   # [steer, gas, brake] per car
+env.step(20)                        # 20 steps in one GPU submit
+obs, st = env.observe(), env.state()  # float32 (n, 70); dict of per-car numpy arrays
+```
+
+Measured (Apple M4 Max): 10k cars 1.12 ms/step, 100k cars 4.66 ms/step (`rust/BENCHMARKS.md`).
+
 ## Data and coordinates
 
 `data/roads*.bin` + `*.meta.json` (schema `data/roads.schema.md`), `controls.*`, `stations.*`, `crossings.json`,

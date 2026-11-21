@@ -1,0 +1,21 @@
+[package]
+name = "bayenv-py"
+description = "Python bindings (module `bayenv`) for the CPU and GPU Bay Area driving sims"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+
+[lib]
+name = "_bayenv"
+crate-type = ["cdylib"]
+
+[dependencies]
+bayenv-world.workspace = true
+bayenv-sim.workspace = true
+bayenv-gpu.workspace = true
+pyo3 = { workspace = true, features = ["abi3-py39"] }
+numpy.workspace = true
+bytemuck.workspace = true
+rayon.workspace = true
+wgpu.workspace = true
