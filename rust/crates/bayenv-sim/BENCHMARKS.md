@@ -73,6 +73,7 @@ rem_pio2, spatial-hash queries, lead_base, lane geometry (offset_point, y_along,
 | LaneIndex per-key arrays in per-edge blocks (key layout and order unchanged) | -25.6 MB per env |
 | junction moves_into map once per world (World::mv_into) | -24 MB per env |
 | router: one search graph per world (World::nav_base) + search state per worker thread (ThreadNavRouter) | -36 MB per env |
+| interleaved vehicle dynamics in single-threaded phase A: 2 or 4 consecutive cars' substeps alternate (step_dynamics2 / 4; each car's ops unchanged) | real 2k single thread ~3,900 -> 4,300 (2-wide) / 4,350 (4-wide) steps/s (+11-12 %); VecEnv 14 x real 2k 6.6 -> 7.5 / 7.6 M agent-steps/s (+15 %), 14 x real 20k 4.27 -> 4.61 / 4.62 M (+8 %) (load 6-16, lock) |
 | rejected: fixed-point skip in step_dynamics (reuse a substep when (u, v, r, steer, sl, ax) repeat bitwise) | only 0.8 % (2k) / 1.4 % (20k) of substeps repeat |
 | rejected: periodic re-ordering of cars by edge / lane for locality | slot order is semantic (slot-order commits, contact pass order, event order) |
 | not pursued: allocation-free step | 0.35 allocations per car-step (73 per step at 2k, 701 at 20k): < 1 % of step time |
