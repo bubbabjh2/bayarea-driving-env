@@ -40,6 +40,7 @@ pub fn load(name: &str) -> String { resolve_includes(raw(name)) }
 pub const HOST_SOURCES: &[(&str, &str)] = &[
     ("contact_args", include_str!("../kernels/contact_args.wgsl")),
     ("step_mark", include_str!("../kernels/step_mark.wgsl")),
+    ("collided", include_str!("../kernels/collided.wgsl")),
     ("resolve_fused", include_str!("../kernels/resolve_fused.wgsl")),
     ("sorted", include_str!("../kernels/sorted.wgsl")),
     ("list_args", include_str!("../kernels/list_args.wgsl")),

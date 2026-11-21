@@ -342,6 +342,8 @@ impl GpuSim {
         gpu.buffer("cargs", 16, wgpu::BufferUsages::STORAGE | wgpu::BufferUsages::INDIRECT | wgpu::BufferUsages::COPY_DST, Some(bytemuck::cast_slice(&[1024u32, 1, 1, 0])));
         gpu.buffer("largs", 64, wgpu::BufferUsages::STORAGE | wgpu::BufferUsages::INDIRECT | wgpu::BufferUsages::COPY_DST, Some(bytemuck::cast_slice(&[1u32, 1, 1, 0, 1, 1, 1, 0, 1, 1, 1, 0, 1, 1, 1, 0])));
         gpu.uniform("listArgsP", 16); gpu.write("listArgsP", bytemuck::cast_slice(&[blob.k as u32, cap as u32, 0, 0]), 0);
+        gpu.storage("cflag", (cap * 8) as u64, None, wgpu::BufferUsages::empty());
+        gpu.uniform("collidedP", 16); gpu.write("collidedP", bytemuck::cast_slice(&[cap as u32, 0, 0, 0]), 0);
         gpu.uniform("contactArgsP", 16); gpu.write("contactArgsP", bytemuck::cast_slice(&[opts.contact_cap as u32, 0, 0, 0]), 0);
         let staging = gpu.device.create_buffer(&wgpu::BufferDescriptor { label: Some("staging"), size: (io_words * 4) as u64, usage: wgpu::BufferUsages::MAP_READ | wgpu::BufferUsages::COPY_DST, mapped_at_creation: false });
         let mut sim = GpuSim {
@@ -387,6 +389,7 @@ impl GpuSim {
         self.k.insert("contactArgs", self.gpu.kernel("contactArgs", kernels::host_raw("contact_args"), "main")?);
         { let code = crate::defines::prefix(self.opts.obs, self.cap) + &kernels::load("common") + "\n" + kernels::host_raw("step_mark");
           self.k.insert("stepMark", self.gpu.kernel("stepMark", &code, "stepMark")?); }
+        self.k.insert("collided", self.gpu.kernel("collided", kernels::host_raw("collided"), "main")?);
         if self.opts.sorted_order {
             self.k.insert("listArgs", self.gpu.kernel("listArgs", kernels::host_raw("list_args"), "main")?);
             let only = std::env::var("BAYENV_SORTED").ok();   // diagnostics: comma list of kernels to sort
@@ -414,7 +417,7 @@ impl GpuSim {
         for (k, n) in [("P", "params"), ("io", "io"), ("world", "world"), ("routes", "routes"), ("veh", "veh"), ("par", "par"), ("ring", "ring"), ("pose", "pose"),
             ("counts", "counts"), ("starts", "counts"), ("items", "items"), ("order", "order"), ("vidx", "vidx"), ("claim", "claim"), ("laneClaim", "laneClaim"),
             ("queue", "queue"), ("ops", "ops"), ("inputs", "inputs"), ("actions", "actions"), ("agents", "agents"), ("edgeCount", "edgeCount"), ("edgeSpeed", "edgeSpeed"),
-            ("telemetry", "telemetry"), ("ctl", "ctl"), ("CA", "contactArgsP"), ("LA", "listArgsP"), ("largs", "largs"), ("cargs", "cargs"), ("hcounts", "hcounts"), ("hstarts", "hcounts"), ("hitems", "hitems"), ("hidx", "hidx"), ("contacts", "contacts")] { r.insert(k, b(n)); }
+            ("telemetry", "telemetry"), ("ctl", "ctl"), ("CA", "contactArgsP"), ("CC", "collidedP"), ("vehw", "veh"), ("cflag", "cflag"), ("LA", "listArgsP"), ("largs", "largs"), ("cargs", "cargs"), ("hcounts", "hcounts"), ("hstarts", "hcounts"), ("hitems", "hitems"), ("hidx", "hidx"), ("contacts", "contacts")] { r.insert(k, b(n)); }
         r
     }
 
@@ -606,6 +609,7 @@ impl GpuSim {
         if f.policy {
             if self.opts.obs != ObsMode::None { stage = "sense"; push!("sense", "sense", g(cap as usize, 128)); }
             if self.opts.obs == ObsMode::V3 { stage = "perceive"; push!("perceive", "perceive", g(cap as usize, 64)); }
+            if !js { stage = "collided"; push!("collided", "collided", g(cap as usize, 256)); }
             stage = "act"; push!("act", "act", g(cap as usize, 128));
         }
         stage = "integrate"; push!("integrate", "integrate", g(cap as usize, 256));
@@ -731,7 +735,7 @@ impl GpuSim {
         let op_count = self.flush_ops();
         self.write_params(op_count);
         let mut enc = self.gpu.device.create_command_encoder(&Default::default());
-        if n > 0 { self.encode(&mut enc, n, op_count); }
+        if n > 0 { enc.clear_buffer(&self.gpu.get("cflag"), 0, None); self.encode(&mut enc, n, op_count); }   // per-batch collided-at-sense counts
         // io: header + the first EV_FAST events (the rest, rarely needed, is read after the map)
         let fast = (io::EVDATA + 4 * EV_FAST.min(self.opts.ev_cap)) * 4;
         enc.copy_buffer_to_buffer(&self.gpu.get("io"), 0, &self.staging, 0, fast as u64);
