@@ -5,6 +5,10 @@ use crate::sim::{f, r32, Sim};
 use crate::vehicle::*;
 use crate::world::Conflict;
 
+/// lane-index walks stopped by walk_limit (see Sim::walk_limit)
+pub static WALK_CYCLES: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+static WALK_DUMPED: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+
 impl Sim {
     pub(crate) fn index_connectors(&mut self) {
         let g = self.gw();
@@ -21,6 +25,32 @@ impl Sim {
         }
     }
 
+    /// Lane-index walks (`behind` / `ahead` chains) take at most this many steps: a walk on a consistent index visits
+    /// each index entry once. The index is built before integrate; walks after it (the observation, as in the JS) can
+    /// follow entries of cars that changed lane / edge since, and such a walk can cycle (the JS would never return).
+    /// A walk that reaches the limit stops as if no further car were found; a walk that ends never reaches it.
+    #[inline]
+    pub(crate) fn walk_limit(&self) -> usize { self.vs.high * crate::vehicle::MAX_OCC as usize + 1 }
+    /// A walk hit walk_limit: counted (WALK_CYCLES), state dumped once to $BAYENV_WALK_DUMP when set.
+    #[cold]
+    pub(crate) fn walk_cycle(&self, what: &str, i: usize, edge: usize, lane: i32) {
+        WALK_CYCLES.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+        let Ok(path) = std::env::var("BAYENV_WALK_DUMP") else { return };
+        if WALK_DUMPED.swap(true, std::sync::atomic::Ordering::Relaxed) { return; }
+        let vs = &self.vs;
+        // the walk again, recording its slots (bounded)
+        let mut seq = Vec::new();
+        let mut jj = self.lanes.last(edge as i32, lane);
+        while jj >= 0 && seq.len() < 64 { seq.push(jj as usize); jj = self.lanes.behind(vs, jj as usize, lane); }
+        let car = |k: usize| serde_json::json!({ "slot": k, "edge": vs.edge[k], "lane": vs.lane[k], "lane_lo": vs.lane_lo[k], "lane_hi": vs.lane_hi[k],
+            "conn": vs.conn[k], "state": vs.state[k], "s": vs.s[k], "indexed_edge": self.indexed.get(k).copied(),
+            "ent_pos": &self.lanes.ent_pos[k * crate::vehicle::MAX_OCC as usize..(k + 1) * crate::vehicle::MAX_OCC as usize] });
+        let (a, b) = self.lanes.range(edge as i32, lane);
+        let d = serde_json::json!({ "what": what, "step": self.step_count, "time": self.time, "car": car(i), "walk_edge": edge, "walk_lane": lane,
+            "range": [a, b], "order": &self.lanes.order[a..b.max(a)], "walk": seq.iter().map(|&k| car(k)).collect::<Vec<_>>() });
+        let _ = std::fs::write(&path, serde_json::to_string_pretty(&d).unwrap());
+        eprintln!("bayenv-sim: lane-index walk cycle ({what}, slot {i}, edge {edge} lane {lane}, step {}); state dumped to {path}", self.step_count);
+    }
     #[inline]
     pub(crate) fn signed(&self, j: usize) -> bool { let vs = &self.vs; (vs.ctl_type[j] == 1 || vs.ctl_type[j] == 2) && vs.ctl_dist[j] < 60.0 }
     #[inline]
@@ -289,7 +319,11 @@ impl Sim {
             if !sight {
                 let vs = &self.vs;
                 let mut jj = self.lanes.last(o_in as i32, o_lane);
-                while jj >= 0 && vs.conn[jj as usize] >= 0 { jj = self.lanes.behind(vs, jj as usize, o_lane); }
+                let mut steps = 0usize;
+                while jj >= 0 && vs.conn[jj as usize] >= 0 {
+                    jj = self.lanes.behind(vs, jj as usize, o_lane);
+                    steps += 1; if steps > self.walk_limit() { self.walk_cycle("yield_j", i, o_in, o_lane); jj = -1; }
+                }
                 if jj < 0 || jj as usize == i || vs.state[jj as usize] != STATE_DRIVING { continue; }
                 let ju = jj as usize;
                 let rj = &vs.routes[ju]; let pj = vs.route_pos[ju] as usize;
@@ -363,7 +397,9 @@ impl Sim {
         };
         let mut jj = self.lanes.last(o_in as i32, o_lane);
         let mut n = 0;
+        let mut steps = 0usize;
         while jj >= 0 && n < 3 {
+            steps += 1; if steps > self.walk_limit() { self.walk_cycle("see_approach", i, o_in, o_lane); break; }
             let ju = jj as usize;
             if self.vs.conn[ju] < 0 {
                 let d2 = jm::max(0.0, g.e_s_stop[o_in] - f(self.vs.s[ju]) - f(self.vs.hl[ju]));
@@ -388,7 +424,9 @@ impl Sim {
             let (in_e, in_l) = (j.info(m2, 0) as i32, j.info(m2, 1) as i32);
             let mut q = self.lanes.last(in_e, in_l);
             let mut c = 0;
+            let mut steps = 0usize;
             while q >= 0 && c < 2 {
+                steps += 1; if steps > self.walk_limit() { self.walk_cycle("see_approach_up", i, in_e as usize, in_l); break; }
                 let qu = q as usize;
                 if self.vs.conn[qu] < 0 {
                     let d2 = base + len2 + jm::max(0.0, s_in2 - f(self.vs.s[qu])) - f(self.vs.hl[qu]);

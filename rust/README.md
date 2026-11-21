@@ -101,6 +101,14 @@ pop.place_obstacles(count=40, seed=3); pop.place_wrecks(10); pop.reset_day()
   cause A). **Earlier checkpoints trained on the JS CPU sim (and on bayenv-sim before this default) saw that behaviour.**
   The JS-oracle checks (`trace_check`, `v2_check`, the obs / events / population traces and the JS-port tests, all via
   `SimOpts::js()` / `harness::sim_opts_from`) run with it `false`.
+* **CPU model fix (default since ENV-REQUESTS #15):** `SimOpts.lane_index_snapshot = true`: lane-index `ahead` /
+  `behind` read a car as it was indexed (its edge and lanes at the index rebuild). The JS reads the car's current edge
+  / lane_lo; in the observation (after integrate, on the index built before it) a car that crossed onto another edge
+  can make `behind` return the car itself, and the junction-yield scan (`_yieldJ`) never returns: a hang the JS has
+  too. With the fix those walks stay inside one lane range. The sim state is unchanged by it (it only reaches
+  observations: 20 of 3,632 v2 rows of the real-2k oracle run differ); `SimOpts::js()` (all JS-oracle checks) has it
+  `false`. In both modes the lane-index walks also stop after `high * MAX_OCC + 1` steps (`Sim::walk_limit`,
+  counted in `junction::WALK_CYCLES`, state dumped to `$BAYENV_WALK_DUMP`), so no state can hang a run.
 * `step_observe(actions, k=1, out=arr)`: actions upload, k steps and the observation copy in one submit and one wait
   (the fused RL step). `step(k)` returns right after the submit; the readback and events are processed by the next
   call (same results, the Python side overlaps with the GPU). `sync()` waits explicitly.

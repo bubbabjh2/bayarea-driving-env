@@ -40,6 +40,11 @@ pub struct SimOpts {
     /// re-plans one step late, so at the connector exit the next-box lookup sees the stale route and the late box
     /// entry is re-projected (headingRel += dh); rust/docs/crash-divergence.md "Cause A".
     pub replan_at_missed_event: bool,
+    /// Model fix (default ON; false = the JS): lane-index ahead / behind use the slot's edge and lanes at the index
+    /// rebuild (spatial.rs LaneIndex::snapshot). The JS reads the slot's current edge / lane_lo; after integrate (in the
+    /// observation) a car that crossed onto another edge can make `behind` return the car itself and the junction-yield
+    /// scan loop for ever (ENV-REQUESTS #15). Walks also stop at Sim::walk_limit, so neither mode can hang.
+    pub lane_index_snapshot: bool,
     /// single-threaded integrate: two cars at a time with interleaved vehicle dynamics (identical results; A/B switch)
     pub batch_dynamics: bool,
 }
@@ -54,7 +59,7 @@ impl Pose { fn of(c: &Car, g: &World) -> Pose { let mut pc = *c; pc.update_pose(
 impl SimOpts {
     /// The JS sim's model (oracle checks, trace_check / v2_check, JS-port tests): Default with the model fixes off
     /// (replan_at_missed_event = false). Checkpoints trained on the JS CPU sim saw this model.
-    pub fn js() -> SimOpts { SimOpts { replan_at_missed_event: false, ..SimOpts::default() } }
+    pub fn js() -> SimOpts { SimOpts { replan_at_missed_event: false, lane_index_snapshot: false, ..SimOpts::default() } }
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -67,7 +72,7 @@ impl Default for SimOpts {
             cell_size: 25.0, table_bits: 18, leader_lookahead: 250.0, merge_lookahead: 80.0, lane_end_lookahead: 450.0, control_lookahead: 250.0,
             reroute: true, reroute_sight: 2000.0, squeeze_delay: 900.0, squeeze_speed: 3.0, density_interval: 60.0, path_sight: 0.0,
             deadlock_break: 0.0, spawn_lane_route: 0.0, junction_sight: 0.0, position_mode: true, traffic_mode: TrafficMode::Full, fuel: true,
-            seed: 1.0, wrecks: 0, default_action: Action { steer: Some(0.0), steer_rate: None, gas: 0.0, brake: 0.3 }, fuel_cfg: Default::default(), slot_pool: 0, parallel: false, replan_at_missed_event: true, batch_dynamics: true }
+            seed: 1.0, wrecks: 0, default_action: Action { steer: Some(0.0), steer_rate: None, gas: 0.0, brake: 0.3 }, fuel_cfg: Default::default(), slot_pool: 0, parallel: false, replan_at_missed_event: true, batch_dynamics: true, lane_index_snapshot: true }
     }
 }
 
@@ -276,7 +281,7 @@ impl Sim {
         let stations = if opts.fuel && !g.stations.is_empty() { Some(crate::fuel::StationNetwork::new(&g, opts.fuel_cfg.clone())) } else { None };
         let start = opts.start_time;
         let mut sim = Sim {
-            hash: SpatialHash::new(opts.cell_size, opts.table_bits, cap), lanes: LaneIndex::new(ne, cap), drivers: vec![Driver::None; cap], actions: vec![None; cap],
+            hash: SpatialHash::new(opts.cell_size, opts.table_bits, cap), lanes: { let mut l = LaneIndex::new(ne, cap); l.snapshot = opts.lane_index_snapshot; l }, drivers: vec![Driver::None; cap], actions: vec![None; cap],
             routes: crate::fuel::RouteStore::new(&pop), stations, learners, outcome: vec![0; n_c], outcome_back: vec![0; n_c], commuter_fuel,
             fitness: vec![0.0; n_c], actual_arrival: vec![-1.0; n_c], late_by: vec![0.0; n_c], early_by: vec![0.0; n_c],
             trips, trip_ptr: 0, pending: Vec::new(), lot: Vec::new(), crashes: Vec::new(), active: Vec::new(), edge_crashes: HashMap::default(), edge_has_crash: vec![0; ne],
