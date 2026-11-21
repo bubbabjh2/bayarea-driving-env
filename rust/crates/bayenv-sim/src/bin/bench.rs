@@ -12,5 +12,6 @@ fn main() {
     let t = std::time::Instant::now();
     for _ in 0..steps { agent_steps += env.driving().count(); pol.act(&mut env); env.step(1); }
     let s = t.elapsed().as_secs_f64();
+    if env.sim.profile { let names = ["spawn","hash","contacts","lanes","leaders","controls","drive","integrate","scenes","traffic"]; let tot: u64 = env.sim.phase_ns.iter().sum(); for (k, n) in names.iter().enumerate() { eprintln!("{n:10} {:6.1}%  {:8.3} ms/step", 100.0 * env.sim.phase_ns[k] as f64 / tot as f64, env.sim.phase_ns[k] as f64 / 1e6 / (steps + warm) as f64); } }
     println!("{{\"dir\":\"{dir}\",\"steps\":{steps},\"stepsPerSec\":{:.1},\"agentStepsPerSec\":{:.0},\"meanAgents\":{:.1}}}", steps as f64 / s, agent_steps as f64 / s, agent_steps as f64 / steps as f64);
 }

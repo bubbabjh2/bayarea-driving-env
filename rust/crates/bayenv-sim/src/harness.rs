@@ -25,7 +25,7 @@ pub fn sim_opts_from(v: &Value) -> SimOpts {
     o.path_sight = n("pathSight", 0.0); o.deadlock_break = n("deadlockBreak", 0.0); o.spawn_lane_route = n("spawnLaneRoute", 0.0); o.junction_sight = n("junctionSight", 0.0);
     o.position_mode = v["actionMode"].as_str() != Some("rate");
     o.traffic_mode = match v["trafficMode"].as_str() { Some("sparse") => TrafficMode::Sparse, Some("empty") => TrafficMode::Empty, _ => TrafficMode::Full };
-    o.fuel = n("fuel", 1.0) != 0.0; o.seed = n("seed", 1.0); o.wrecks = n("wrecks", 0.0) as usize; o.slot_pool = n("slotPool", 0.0) as usize;
+    o.fuel = n("fuel", 1.0) != 0.0; o.parallel = std::env::var("BAYENV_PAR").is_ok(); o.seed = n("seed", 1.0); o.wrecks = n("wrecks", 0.0) as usize; o.slot_pool = n("slotPool", 0.0) as usize;
     o
 }
 
@@ -106,6 +106,16 @@ pub fn check(dir: &str, max: usize, verbose: bool) -> (usize, Vec<Mismatch>, f64
     let mut rec = 0usize;
     let t0 = std::time::Instant::now();
     let mut sim_time = 0.0;
+    // env.observe({v3: true}) records (trace.mjs --obs 1): compared after each recorded step's store
+    let obs_rec = if tr.has("obs.n") {
+        let names: Vec<String> = tr.meta["obsFields"].as_array().expect("obsFields").iter().map(|v| v.as_str().unwrap().to_string()).collect();
+        assert_eq!(names, crate::obs::OBS_FIELDS.iter().map(|s| s.to_string()).collect::<Vec<_>>(), "trace obsFields != obs::OBS_FIELDS");
+        if tr.meta["obsUndefined"].as_u64().unwrap_or(0) > 0 && verbose { eprintln!("warning: {} undefined JS obs values (recorded as NaN)", tr.meta["obsUndefined"]); }
+        Some((tr.u32s("obs.n"), tr.i32s("obs.slot"), tr.f64s("obs.scalars"), tr.f32s("obs.v3")))
+    } else { None };
+    let (mut obs_off, mut obs_time, mut obs_agents) = (0usize, 0.0f64, 0usize);
+    let mut obs = crate::obs::Obs::default();
+    let mut v3 = [0f32; crate::obs::OBS3];
     for k in 1..=steps {
         pol.act(&mut env);
         let ts = std::time::Instant::now();
@@ -137,8 +147,36 @@ pub fn check(dir: &str, max: usize, verbose: bool) -> (usize, Vec<Mismatch>, f64
                 }
             }
         }
+        if let Some((on, oslot, osc, ov3)) = &obs_rec {
+            let slots = crate::obs::driving_slots(&env.sim);
+            let n = on[rec - 1] as usize;
+            if slots.len() != n { bad.push(Mismatch { step: k, field: "obs.n".into(), slot: 0, js: n as f64, rust: slots.len() as f64 }); return (k, bad, sim_time); }
+            const NF: usize = crate::obs::OBS_N;
+            for (r, &i) in slots.iter().enumerate() {
+                let q = obs_off + r;
+                if oslot[q] as usize != i { bad.push(Mismatch { step: k, field: "obs.slot".into(), slot: r, js: oslot[q] as f64, rust: i as f64 }); return (k, bad, sim_time); }
+                let ts = std::time::Instant::now();
+                crate::obs::observe_one(&mut env.sim, i, &mut obs, Some(&mut v3));
+                obs_time += ts.elapsed().as_secs_f64(); obs_agents += 1;
+                let sc = obs.scalars(i, env.sim.vs.commuter[i]);
+                for (fi, (&x, &y)) in osc[q * NF..(q + 1) * NF].iter().zip(sc.iter()).enumerate() {
+                    if x.to_bits() != y.to_bits() && !(x.is_nan() && y.is_nan()) {
+                        bad.push(Mismatch { step: k, field: format!("obs.{}", crate::obs::OBS_FIELDS[fi]), slot: i, js: x, rust: y });
+                        if bad.len() >= max { return (k, bad, sim_time); }
+                    }
+                }
+                for (d, (&x, &y)) in ov3[q * crate::obs::OBS3..(q + 1) * crate::obs::OBS3].iter().zip(v3.iter()).enumerate() {
+                    if x.to_bits() != y.to_bits() && !(x.is_nan() && y.is_nan()) {
+                        bad.push(Mismatch { step: k, field: format!("obs.v3[{d}]"), slot: i, js: x as f64, rust: y as f64 });
+                        if bad.len() >= max { return (k, bad, sim_time); }
+                    }
+                }
+            }
+            obs_off += n;
+        }
         if !bad.is_empty() { return (k, bad, sim_time); }
     }
+    if verbose && obs_agents > 0 { eprintln!("observe: {obs_agents} agent-observations checked, {:.0} ns/agent (fill_obs + fill_obs3 + signals)", obs_time * 1e9 / obs_agents as f64); }
     if verbose { eprintln!("wall {:.2}s (sim {:.3}s) for {steps} steps", t0.elapsed().as_secs_f64(), sim_time); }
     (steps, bad, sim_time)
 }

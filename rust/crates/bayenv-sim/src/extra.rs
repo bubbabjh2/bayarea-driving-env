@@ -6,7 +6,7 @@ use crate::rng::Rng;
 use crate::sim::{f, r32, Driver, Response, Sim, FAIL_STRANDED};
 use crate::vehicle::*;
 use crate::world::World;
-use std::collections::{HashMap, HashSet};
+use crate::fx::{HashMap, HashSet};
 
 pub const CTRL_SIGNAL: i8 = 0;
 pub const CTRL_STOP: i8 = 1;
@@ -71,7 +71,7 @@ pub fn state_of(g: &World, a: usize, mv: i8, t: f64) -> (i8, i8, f64, f64) {
 
 impl Sim {
     pub(crate) fn control_obs(&mut self) {
-        let g = self.g.clone();
+        let g = self.gw();
         let cc = g.controls.as_ref().unwrap();
         let look = self.opts.control_lookahead;
         for i in 0..self.vs.high {
@@ -134,7 +134,7 @@ impl Sim {
     }
 
     pub(crate) fn missed_exits(&mut self) {
-        let g = self.g.clone();
+        let g = self.gw();
         let list = std::mem::take(&mut self.vs.missed);
         let mut keep = Vec::new();
         for (i, m) in list {
@@ -157,9 +157,9 @@ impl Sim {
     }
 
     pub(crate) fn traffic_sample(&mut self) {
-        let g = self.g.clone();
-        let mut sum: HashMap<i32, f64> = HashMap::new();
-        let mut cnt: HashMap<i32, f64> = HashMap::new();
+        let g = self.gw();
+        let mut sum: HashMap<i32, f64> = HashMap::default();
+        let mut cnt: HashMap<i32, f64> = HashMap::default();
         for i in 0..self.vs.high {
             if self.vs.state[i] != STATE_DRIVING { continue; }
             let e = self.vs.edge[i];
@@ -174,7 +174,7 @@ impl Sim {
             if nv > 0.95 * lim { false } else { *v = nv; true }
         });
         for (e, sv) in &sum { let m = sv / cnt[e]; let nv = match ema.get(e) { None => m, Some(&old) => 0.5 * old + 0.5 * m }; ema.insert(*e, nv); }
-        let pen = self.traffic_penalty.get_or_insert_with(HashMap::new);
+        let pen = self.traffic_penalty.get_or_insert_with(HashMap::default);
         pen.clear();
         for (&e, &v) in ema.iter() {
             let eu = e as usize;
@@ -184,8 +184,8 @@ impl Sim {
     }
 
     pub(crate) fn reroute_blocked(&mut self) {
-        let g = self.g.clone();
-        let mut closed: HashSet<i32> = HashSet::new();
+        let g = self.gw();
+        let mut closed: HashSet<i32> = HashSet::default();
         for &ri in &self.active {
             let r = &self.crashes[ri];
             if r.response != Response::Active || r.squeeze { continue; }
@@ -241,7 +241,7 @@ impl Sim {
 
     pub(crate) fn sample_density(&mut self) {
         if self.fwy.is_empty() { return; }
-        let g = self.g.clone();
+        let g = self.gw();
         let cnt = &mut self.edge_count_scratch;
         for i in 0..self.vs.high { let st = self.vs.state[i]; if st == STATE_DRIVING || st == STATE_CRASHED { let e = self.vs.edge[i] as usize; if cnt[e] < 65535 { cnt[e] += 1; } } }
         let (mut cars, mut df, mut peak) = (0.0, 0.0, 0.0);
@@ -265,14 +265,14 @@ impl Sim {
 
     // ---------------------------------------------------------------- obstacles
     fn obstacle_alloc(&mut self, type_idx: u8, route: &[i32], lane: i32) -> usize {
-        let g = self.g.clone();
+        let g = self.gw();
         let s = self.vs.alloc(&g, AllocArgs { type_idx, traits: DEFAULT_TRAITS, route, commuter: -1, leg: 0, time: self.time, learner: false, dt: self.dt, step: self.step_count, lane });
         self.ensure_slot(s);
         s
     }
 
     pub fn place_wrecks(&mut self, n: usize) {
-        let g = self.g.clone();
+        let g = self.gw();
         let cand: Vec<usize> = (0..g.edge_count).filter(|&e| g.e_rank[e] >= 3 && g.e_length[e] > 150.0).collect();
         for _ in 0..n {
             if cand.is_empty() { break; }
@@ -288,7 +288,7 @@ impl Sim {
     }
 
     fn static_car(&mut self, type_idx: u8, e: usize, s: f64, lat: f64, conn: i32) -> usize {
-        let g = self.g.clone();
+        let g = self.gw();
         let slot = self.obstacle_alloc(type_idx, &[e as i32], 0);
         let vs = &mut self.vs;
         vs.s[slot] = r32(s); vs.lat[slot] = r32(lat); vs.conn[slot] = conn; vs.update_lanes(slot, &g, e);
@@ -301,7 +301,7 @@ impl Sim {
     /// placeStaticObstacles([{edge, at, lane | lat, type}]) and scenarios/load.js placeScenarioObstacles (scenario = true:
     /// s clamped to [1, length - 1], lane width from the lane geometry at s).
     pub fn place_static_obstacles(&mut self, list: &[(i32, f64, Option<i32>, Option<f64>, u8)], scenario: bool) -> Vec<usize> {
-        let g = self.g.clone();
+        let g = self.gw();
         let mut out = Vec::new();
         for &(edge, at, lane, lat, ty) in list {
             if edge < 0 || edge as usize >= g.edge_count { continue; }
@@ -317,10 +317,10 @@ impl Sim {
 
     /// placeObstacles({count, kinds, seed, slowKmh, brakeEvery, allowSingleLane})
     pub fn place_obstacles(&mut self, count: usize, kinds: &[&'static str], seed: f64, slow_kmh: (f64, f64), brake_every: (f64, f64), allow1: bool) {
-        let g = self.g.clone();
+        let g = self.gw();
         let mut r = Rng::new(seed);
         self.brake_every = brake_every;
-        let mut pools: HashMap<&'static str, Vec<usize>> = HashMap::new();
+        let mut pools: HashMap<&'static str, Vec<usize>> = HashMap::default();
         let mut pool = |k: &'static str| -> Vec<usize> {
             if let Some(p) = pools.get(k) { return p.clone(); }
             let mut out = Vec::new();
@@ -417,9 +417,9 @@ impl Sim {
 
     // ---------------------------------------------------------------- stuck labelling
     pub(crate) fn stuck_cause(&mut self, i: usize) -> &'static str {
-        let g = self.g.clone();
+        let g = self.gw();
         let vs = &self.vs;
-        let mut seen: HashSet<usize> = HashSet::new();
+        let mut seen: HashSet<usize> = HashSet::default();
         let (mut k, mut n) = (i, 0);
         while vs.state[k] == STATE_DRIVING && vs.leader[k] >= 0 && !seen.contains(&k) && { n += 1; n - 1 < 200 } {
             let l = vs.leader[k] as usize;
@@ -449,7 +449,7 @@ impl Sim {
     /// ctx.yieldRequired(i, e, dist)
     pub(crate) fn yield_required(&mut self, i: usize, e: usize, dist: f64) -> bool {
         if self.empty { return false; }
-        let g = self.g.clone();
+        let g = self.gw();
         if g.j.is_some() {
             let r = self.yield_j(i, e);
             if r && self.creep_until.len() > i && self.creep_until[i] > self.time && self.yield_by.as_ref().map(|y| y[i]) == Some(self.creep_ignore[i]) { return false; }
@@ -511,7 +511,7 @@ impl Sim {
         if self.stations.is_none() || self.vs.refuel_state[i] != 0 { return false; }
         let remaining = f(self.vs.route_total[i]) - f(self.vs.route_dist[i]);
         if !self.stations.as_ref().unwrap().needs_fuel(self.vs.type_idx[i] as usize, f(self.vs.fuel[i]), f(self.vs.tank[i]), remaining) { return false; }
-        let g = self.g.clone();
+        let g = self.gw();
         let route = self.vs.routes[i].clone();
         let rp = self.vs.route_pos[i] as usize;
         let goal = g.e_to[route[route.len() - 1] as usize];
@@ -557,7 +557,7 @@ impl Sim {
     }
 
     pub(crate) fn leave_stations(&mut self) {
-        let g = self.g.clone();
+        let g = self.gw();
         let lot = std::mem::take(&mut self.lot);
         let mut keep = Vec::new();
         for i in lot {

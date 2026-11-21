@@ -8,17 +8,17 @@ use std::sync::Arc;
 
 impl Sim {
     pub(crate) fn index_connectors(&mut self) {
-        let g = self.g.clone();
+        let g = self.gw();
         let j = g.j.as_ref().unwrap();
-        if self.conn_cars.len() > 50000 { self.conn_cars.clear(); } else { for l in self.conn_cars.values_mut() { l.clear(); } }
-        if self.node_conn.len() > 50000 { self.node_conn.clear(); } else { for l in self.node_conn.values_mut() { l.clear(); } }
+        if self.conn_cars.len() > 50000 { self.conn_cars.clear(); } else { self.conn_cars.reset_lists(); }
+        if self.node_conn.len() > 50000 { self.node_conn.clear(); } else { self.node_conn.reset_lists(); }
         let vs = &self.vs;
         for i in 0..vs.high {
             let m = vs.conn[i];
             if m < 0 || (vs.state[i] != STATE_DRIVING && vs.state[i] != STATE_CRASHED) { continue; }
-            self.conn_cars.entry(m as usize).or_default().push(i);
+            self.conn_cars.push(m as usize, i);
             let node = g.e_to[j.info(m as usize, 0) as usize] as usize;
-            self.node_conn.entry(node).or_default().push(i);
+            self.node_conn.push(node, i);
         }
     }
 
@@ -34,7 +34,7 @@ impl Sim {
     /// _conflicts(m): world conflicts + same-junction movements whose paths pass within 4.2 m (cached).
     pub(crate) fn conflicts(&mut self, m: usize) -> Arc<Vec<Conflict>> {
         if let Some(c) = self.conf_cache.get(&m) { return c.clone(); }
-        let g = self.g.clone();
+        let g = self.gw();
         let j = g.j.as_ref().unwrap();
         let base = j.conflicts_of(m);
         let mut c: Vec<Conflict> = base.to_vec();
@@ -61,7 +61,7 @@ impl Sim {
     fn stuck_in(&self, k: usize) -> bool { let vs = &self.vs; vs.speed[k] < 0.3 && vs.stopped_since[k] >= 0.0 && self.time - f(vs.stopped_since[k]) > 20.0 }
 
     pub(crate) fn junction(&mut self, i: usize) {
-        let g = self.g.clone();
+        let g = self.gw();
         let j = g.j.as_ref().unwrap();
         let e = self.vs.edge[i] as usize;
         let hl = f(self.vs.hl[i]);
@@ -163,7 +163,7 @@ impl Sim {
     }
 
     pub(crate) fn node_bodies(&mut self, i: usize, e: usize) {
-        let g = self.g.clone();
+        let g = self.gw();
         let j = g.j.as_ref().unwrap();
         let (hl, hw) = (f(self.vs.hl[i]), f(self.vs.hw[i]));
         let mut check = |s: &mut Sim, node: usize| {
@@ -200,7 +200,7 @@ impl Sim {
     }
 
     pub(crate) fn converge_bodies(&mut self, i: usize, e: usize) {
-        let g = self.g.clone();
+        let g = self.gw();
         let d_node = g.e_length[e] - f(self.vs.s[i]);
         if d_node > 150.0 { return; }
         let rp = self.vs.route_pos[i] as usize;
@@ -243,7 +243,7 @@ impl Sim {
 
     /// _yieldJ(i, e): must slot i wait at the mouth of e's junction?
     pub(crate) fn yield_j(&mut self, i: usize, e: usize) -> bool {
-        let g = self.g.clone();
+        let g = self.gw();
         let j = g.j.as_ref().unwrap();
         if self.vs.conn[i] >= 0 || !(g.e_s_stop[e] < g.e_length[e]) { return false; }
         let rp = self.vs.route_pos[i] as usize;
@@ -329,9 +329,9 @@ impl Sim {
 
     fn moves_into(&mut self, e: usize) -> Vec<usize> {
         if self.mv_into.is_none() {
-            let g = self.g.clone();
+            let g = self.gw();
             let j = g.j.as_ref().unwrap();
-            let mut m2: std::collections::HashMap<u32, Vec<usize>> = Default::default();
+            let mut m2: crate::fx::HashMap<u32, Vec<usize>> = Default::default();
             for m in 0..j.move_count { m2.entry(j.info(m, 2)).or_default().push(m); }
             self.mv_into = Some(m2);
         }
@@ -339,7 +339,7 @@ impl Sim {
     }
 
     fn see_approach(&mut self, i: usize, o_in: usize, o_lane: i32, o_out: i32, first: &dyn Fn(&Sim, usize, f64) -> bool) -> bool {
-        let g = self.g.clone();
+        let g = self.gw();
         let j = g.j.as_ref().unwrap();
         let r = 80.0;
         let ok = |s: &Sim, jj: usize, rp1: usize| -> bool {
@@ -391,7 +391,7 @@ impl Sim {
     }
 
     pub(crate) fn path_bodies(&mut self, i: usize) {
-        let g = self.g.clone();
+        let g = self.gw();
         let jo = g.j.as_ref();
         let v = f(self.vs.speed[i]);
         let d_max = jm::min(80.0, 10.0 + 1.5 * v + v * v / 8.0);
@@ -479,7 +479,7 @@ impl Sim {
 
     #[allow(dead_code)]
     pub(crate) fn box_busy_j(&mut self, i: usize, e: usize) -> bool {
-        let g = self.g.clone();
+        let g = self.gw();
         let j = g.j.as_ref().unwrap();
         if self.vs.conn[i] >= 0 || !(g.e_s_stop[e] < g.e_length[e]) { return false; }
         let rp = self.vs.route_pos[i] as usize;

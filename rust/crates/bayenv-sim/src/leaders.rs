@@ -56,7 +56,7 @@ impl Sim {
     }
 
     pub(crate) fn find_leaders(&mut self) {
-        let g = self.g.clone();
+        let g = self.gw();
         let high = self.vs.high;
         let look = self.opts.leader_lookahead;
         let zip_look = self.opts.merge_lookahead;
@@ -65,14 +65,14 @@ impl Sim {
             return;
         }
         if g.j.is_some() { self.index_connectors(); }
-        for l in self.off_lane.values_mut() { l.clear(); }
+        self.off_lane.reset_lists();
         if self.off_lane.len() > 20000 { self.off_lane.clear(); }
         for i in 0..high {
             let st = self.vs.state[i];
-            if (st == STATE_DRIVING || st == STATE_CRASHED) && self.vs.lane_hi[i] < self.vs.lane_lo[i] { self.off_lane.entry(self.vs.edge[i]).or_default().push(i); }
+            if (st == STATE_DRIVING || st == STATE_CRASHED) && self.vs.lane_hi[i] < self.vs.lane_lo[i] { self.off_lane.push(self.vs.edge[i], i); }
         }
-        for l in self.passers.values_mut() { l.clear(); }
-        for i in 0..high { if self.vs.pass_wreck[i] >= 0 && self.vs.state[i] == STATE_DRIVING { self.passers.entry(self.vs.edge[i]).or_default().push(i); } }
+        self.passers.reset_lists();
+        for i in 0..high { if self.vs.pass_wreck[i] >= 0 && self.vs.state[i] == STATE_DRIVING { self.passers.push(self.vs.edge[i], i); } }
         if self.passers.len() > 5000 { self.passers.clear(); }
         for i in 0..high {
             if self.vs.state[i] != STATE_DRIVING { continue; }
@@ -196,7 +196,7 @@ impl Sim {
     }
 
     fn courtesy(&mut self) {
-        let g = self.g.clone();
+        let g = self.gw();
         for k in 0..self.vs.high {
             let vs = &self.vs;
             if vs.state[k] != STATE_DRIVING || vs.conn[k] >= 0 || vs.speed[k] > 6.0 { continue; }
@@ -258,7 +258,7 @@ impl Sim {
     }
 
     pub(crate) fn lane_end(&mut self, i: usize) {
-        let g = self.g.clone();
+        let g = self.gw();
         let vs = &mut self.vs;
         let rp = vs.route_pos[i] as usize;
         vs.lane_end_dist[i] = 1e9; vs.lane_end_side[i] = 0;
@@ -338,7 +338,7 @@ impl Sim {
     }
 
     fn opposing(&mut self, i: usize, e: usize) {
-        let g = self.g.clone();
+        let g = self.gw();
         let er = g.e_rev[e] as usize;
         let li = g.e_lanes[er] - 1;
         let hl = f(self.vs.hl[i]);
@@ -391,6 +391,6 @@ impl Sim {
         }
         if let Some(mine) = self.passers.get(&(e as i32)) { for &p in mine { if p != i && f(vs.s[p]) > zone_start - 10.0 { return; } } }
         self.vs.pass_wreck[i] = k as i32; self.counters.wreck_passes += 1;
-        self.passers.entry(e as i32).or_default().push(i);
+        self.passers.push(e as i32, i);
     }
 }
