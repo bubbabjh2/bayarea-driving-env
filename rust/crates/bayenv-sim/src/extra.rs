@@ -225,6 +225,7 @@ impl Sim {
         let sight = self.opts.reroute_sight;
         let mut budget = 200;
         let mut i = 0;
+        let mut cands: Vec<(usize, i32, i32, bool)> = Vec::new();
         while i < self.vs.high && budget > 0 {
             let vs = &self.vs;
             if vs.state[i] != STATE_DRIVING || vs.conn[i] >= 0 || vs.refuel_state[i] != 0 { i += 1; continue; }
@@ -245,23 +246,31 @@ impl Sim {
             budget -= 1;
             let goal = g.e_to[route[route.len() - 1] as usize];
             if g.e_to[e] == goal { i += 1; continue; }
-            let route = route.clone();
-            let path = self.router.route(g.e_to[e], goal, if closed_std.is_empty() { None } else { Some(&closed_std) }, pen_std.as_ref());
+            cands.push((i, g.e_to[e], goal, slow));
+            i += 1;
+        }
+        // all queries of this pass at once (no query depends on an earlier car's new route: candidacy only reads the
+        // car's own state, and avoid / penalty queries never touch the router's cache), applied in slot order
+        let queries: Vec<(i32, i32)> = cands.iter().map(|c| (c.1, c.2)).collect();
+        let paths = self.router.route_batch(&queries, if closed_std.is_empty() { None } else { Some(&closed_std) }, pen_std.as_ref());
+        for (k, &(i, _, _, slow)) in cands.iter().enumerate() {
+            let path = paths[k].clone();
+            let rp = self.vs.route_pos[i] as usize;
+            let route = self.vs.routes[i].clone();
             if slow {
                 if let Some(p) = &path {
                     let pm = pen.as_ref().unwrap();
                     let cost = |pp: &[i32]| { let mut t = 0.0; for &x in pp { let xu = x as usize; t += g.e_length[xu] / g.e_speed[xu] + pm.get(&x).copied().unwrap_or(0.0); } t };
-                    if cost(p) > cost(&route[rp + 1..]) - 60.0 { i += 1; continue; }
+                    if cost(p) > cost(&route[rp + 1..]) - 60.0 { continue; }
                 }
             }
-            let Some(path) = path.filter(|p| !p.is_empty() && !p.iter().any(|x| closed.contains(x))) else { self.counters.reroute_failed += 1; i += 1; continue };
+            let Some(path) = path.filter(|p| !p.is_empty() && !p.iter().any(|x| closed.contains(x))) else { self.counters.reroute_failed += 1; continue };
             let mut edges = Vec::with_capacity(1 + path.len()); edges.push(route[rp]); edges.extend_from_slice(&path);
             let s_on = self.vs.s[i];
             self.set_route(i, &edges, 0);
             self.vs.route_dist[i] = s_on;
             if self.vs.target_lane[i] >= 0 { self.vs.target_lane[i] = self.vs.lane[i]; }
             self.counters.reroutes += 1;
-            i += 1;
         }
         if self.last_reroute.len() > 100000 { self.last_reroute.clear(); }
     }
