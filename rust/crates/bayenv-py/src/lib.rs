@@ -18,7 +18,9 @@ use pyo3::prelude::*;
 use pyo3::types::PyDict;
 use std::sync::Arc;
 
-enum Backend { Gpu(Box<GpuSim>), Cpu(Box<std::sync::Mutex<bayenv_sim::env::Env>>) }
+mod cpu;
+use cpu::{CpuBackend, CpuObs};
+enum Backend { Gpu(Box<GpuSim>), Cpu(Box<std::sync::Mutex<CpuBackend>>) }
 
 /// Multi-agent driving env (every car is an agent; slot i = car i).
 #[pyclass(module = "bayenv._bayenv")]
@@ -33,7 +35,11 @@ struct Env {
 
 fn gpu_mut(env: &mut Env) -> &mut GpuSim { match &mut env.backend { Backend::Gpu(s) => s, Backend::Cpu(_) => panic!("gpu-only call on the cpu backend") } }
 fn gpu_ref(env: &Env) -> &GpuSim { match &env.backend { Backend::Gpu(s) => s, Backend::Cpu(_) => panic!("gpu-only call on the cpu backend") } }
-fn cpu_only(env: &Env) -> Option<std::sync::MutexGuard<'_, bayenv_sim::env::Env>> { match &env.backend { Backend::Cpu(e) => Some(e.lock().unwrap()), _ => None } }
+fn cpu_backend(env: &Env) -> Option<std::sync::MutexGuard<'_, CpuBackend>> { match &env.backend { Backend::Cpu(e) => Some(e.lock().unwrap()), _ => None } }
+/// the CPU env behind the lock
+struct CpuGuard<'a>(std::sync::MutexGuard<'a, CpuBackend>);
+impl<'a> std::ops::Deref for CpuGuard<'a> { type Target = bayenv_sim::env::Env; fn deref(&self) -> &Self::Target { &self.0.env } }
+fn cpu_only(env: &Env) -> Option<CpuGuard<'_>> { cpu_backend(env).map(CpuGuard) }
 fn py_sync(sim: &mut GpuSim) { sim.sync(); }
 
 #[pymethods]
@@ -59,8 +65,8 @@ impl Env {
     fn new(py: Python<'_>, data_dir: &str, n_cars: usize, seed: u32, backend: &str, capacity: Option<usize>, obs: &str, dt: f64, start_time: Option<f64>,
            accidents: bool, collisions: bool, fuel: bool, controls: bool, junctions: bool, steer: &str, decide_every: u32, keep_events: bool,
            population: Option<usize>, pop_seed: f64, streaming: bool, return_trips: bool, stations: bool, refuel_budget_ms: Option<f64>, crash_share: bool) -> PyResult<Env> {
-        let obs_mode = match obs { "v2" => ObsMode::V2, "v3" => ObsMode::V3, "none" => ObsMode::None, _ => return Err(PyValueError::new_err("obs must be 'v2', 'v3' or 'none'")) };
         if backend == "cpu" {
+            let cobs = match obs { "v2" => CpuObs::V2, "v3" => CpuObs::V3, "flat" => CpuObs::Flat, "none" => CpuObs::None, _ => return Err(PyValueError::new_err("obs must be 'v2', 'v3', 'flat' or 'none'")) };
             // CPU reference sim (crate bayenv-sim): commuter population (population.js, n_cars commuters, seed),
             // cars spawn on their trip schedule; slots = sim vehicle slots (0..high)
             let data = data_dir.to_string(); let fuel_on = fuel;
@@ -75,8 +81,9 @@ impl Env {
             });
             let (world, env) = res.map_err(PyRuntimeError::new_err)?;
             let _ = (accidents, collisions, controls, junctions, steer, decide_every, keep_events, capacity);
-            return Ok(Env { backend: Backend::Cpu(Box::new(std::sync::Mutex::new(env))), world, rows: 0, obs_size: 0, cap: 0 });
+            return Ok(Env { backend: Backend::Cpu(Box::new(std::sync::Mutex::new(CpuBackend::new(env, cobs)))), world, rows: 0, obs_size: cobs.width(), cap: 0 });
         }
+        let obs_mode = match obs { "v2" => ObsMode::V2, "v3" => ObsMode::V3, "none" => ObsMode::None, _ => return Err(PyValueError::new_err("obs must be 'v2', 'v3' or 'none'")) };
         if backend != "gpu" { return Err(PyValueError::new_err("backend must be 'gpu' or 'cpu'")); }
         // scatter fills slots 0..n_cars and nothing spawns later: size the slot pool to the cars (identical results,
         // every per-slot kernel dispatch shrinks); pass capacity= for headroom
@@ -118,7 +125,13 @@ impl Env {
     #[pyo3(signature = (out=None))]
     fn observe<'py>(&mut self, py: Python<'py>, out: Option<Bound<'py, PyArray2<f32>>>) -> PyResult<Bound<'py, PyArray2<f32>>> {
         if let Backend::Gpu(sim) = &mut self.backend { py_sync(sim); }
-        if cpu_only(self).is_some() { return Err(PyNotImplementedError::new_err("observe() on backend='cpu': the CPU observation encoder is not exposed yet; use state()")); }
+        if let Backend::Cpu(e) = &mut self.backend {
+            let e = e.get_mut().unwrap(); let (n, w) = (e.n_slots(), e.obs.width());
+            if w == 0 { return Err(PyRuntimeError::new_err("created with obs='none'")); }
+            let arr = match out { Some(a) => { if a.shape() != [n, w] { return Err(PyValueError::new_err("out has the wrong shape (n_slots, obs_size)")); } a } None => PyArray2::<f32>::zeros(py, [n, w], false) };
+            { let mut rw = arr.readwrite(); let sl = rw.as_slice_mut().map_err(|_| PyValueError::new_err("out must be C-contiguous"))?; py.detach(|| e.observe_into(sl)); }
+            return Ok(arr);
+        }
         if self.obs_size == 0 { return Err(PyRuntimeError::new_err("created with obs='none'")); }
         let arr = match out {
             Some(a) => { if a.shape() != [self.rows, self.obs_size] { return Err(PyValueError::new_err("out has the wrong shape")); } a }
@@ -139,7 +152,7 @@ impl Env {
     fn act(&mut self, actions: PyReadonlyArray2<'_, f32>, offset: usize) -> PyResult<()> {
         if actions.shape()[1] != 3 { return Err(PyValueError::new_err("actions must have shape (N, 3)")); }
         if let Backend::Cpu(e) = &mut self.backend {
-            let e = e.get_mut().unwrap();
+            let e = &mut e.get_mut().unwrap().env;
             let sl = actions.as_slice().map_err(|_| PyValueError::new_err("actions must be C-contiguous float32"))?;
             let n = actions.shape()[0];
             for i in 0..n { let slot = offset + i; if slot < e.sim.vs.high && e.sim.vs.state[slot] == bayenv_sim::vehicle::STATE_DRIVING {
@@ -165,7 +178,7 @@ impl Env {
     /// `out` = preallocated array to fill.
     #[pyo3(signature = (actions=None, k=1, out=None))]
     fn step_observe<'py>(&mut self, py: Python<'py>, actions: Option<PyReadonlyArray2<'py, f32>>, k: usize, out: Option<Bound<'py, PyArray2<f32>>>) -> PyResult<Bound<'py, PyArray2<f32>>> {
-        if cpu_only(self).is_some() { return Err(PyNotImplementedError::new_err("gpu backend only")); }
+        if cpu_only(self).is_some() { if let Some(a) = actions { self.act(a, 0)?; } self.step(py, k); return self.observe(py, out); }
         if self.obs_size == 0 { return Err(PyRuntimeError::new_err("created with obs='none'")); }
         if let Some(a) = actions { self.act(a, 0)?; }
         let arr = match out {
@@ -191,13 +204,18 @@ impl Env {
     /// clears it at each decision). For k-step batches count the steps per slot from events() rows (kind 2/3, `step`).
     fn state<'py>(&mut self, py: Python<'py>) -> PyResult<Bound<'py, PyDict>> {
         if let Some(e) = cpu_only(self) {
-            let v = &e.sim.vs; let n = v.high; let d = PyDict::new(py);
-            macro_rules! put { ($($name:literal => $f:ident),*) => { $( d.set_item($name, PyArray1::from_vec(py, v.$f[..n].to_vec()))?; )* } }
-            put!("edge" => edge, "s" => s, "speed" => speed, "accel" => accel, "lat" => lat, "heading_rel" => heading_rel, "steer" => steer_angle, "state" => state, "flags" => flags,
-                 "lane" => lane, "gas" => gas, "brake" => brake, "yaw_rate" => yaw_rate, "v_lat" => v_lat, "x" => x, "y" => y, "z" => z, "heading" => heading);
+            let d = PyDict::new(py);
+            for (name, col) in e.state_columns() {
+                match name {
+                    "edge" | "route_pos" | "lane" | "commuter" | "leader" => d.set_item(name, PyArray1::from_vec(py, col.iter().map(|&x| x as i32).collect::<Vec<i32>>()))?,
+                    "state" | "flags" => d.set_item(name, PyArray1::from_vec(py, col.iter().map(|&x| x as u8).collect::<Vec<u8>>()))?,
+                    "collided" => d.set_item(name, PyArray1::from_vec(py, col.iter().map(|&x| x != 0.0).collect::<Vec<bool>>()))?,
+                    _ => d.set_item(name, PyArray1::from_vec(py, col.iter().map(|&x| x as f32).collect::<Vec<f32>>()))?,
+                }
+            }
+            let v = &e.sim.vs; let n = v.high;
             d.set_item("crashed", PyArray1::from_vec(py, v.state[..n].iter().map(|&s| s == bayenv_sim::vehicle::STATE_CRASHED).collect::<Vec<bool>>()))?;
             d.set_item("disabled", PyArray1::from_vec(py, v.flags[..n].iter().map(|&f| f & bayenv_sim::vehicle::FLAG_DISABLED != 0).collect::<Vec<bool>>()))?;
-            d.set_item("collided", PyArray1::from_vec(py, v.flags[..n].iter().map(|&f| f & bayenv_sim::vehicle::FLAG_COLLIDED != 0).collect::<Vec<bool>>()))?;
             return Ok(d);
         }
         if let Backend::Gpu(sim) = &mut self.backend { py_sync(sim); }
@@ -260,11 +278,7 @@ impl Env {
 
     /// Aggregates: GPU stats (driving, arrived, ...) and host counters (crashes, contacts, scenes, ...).
     fn stats<'py>(&mut self, py: Python<'py>) -> PyResult<Bound<'py, PyDict>> {
-        if let Some(e) = cpu_only(self) { let d = PyDict::new(py); let v = &e.sim.vs;
-            d.set_item("driving", (0..v.high).filter(|&i| v.state[i] == bayenv_sim::vehicle::STATE_DRIVING).count())?;
-            d.set_item("crashed_on_scene", (0..v.high).filter(|&i| v.state[i] == bayenv_sim::vehicle::STATE_CRASHED).count())?;
-            let oc = e.outcomes(); for (k, code) in [("arrived", 1u8), ("crash", 2), ("stranded", 3), ("stuck", 4)] { d.set_item(k, oc.iter().filter(|&&o| o == code).count())?; }
-            d.set_item("time", e.sim.time)?; return Ok(d); }
+        if let Some(e) = cpu_only(self) { let d = PyDict::new(py); for (k, v) in e.stats() { d.set_item(k, v)?; } return Ok(d); }
         if let Backend::Gpu(g) = &mut self.backend { py_sync(g); } let sim = gpu_ref(self); let s = sim.stats(); let c = &sim.counters; let d = PyDict::new(py);
         use L::stat as S;
         for (k, v) in [("driving", s[S::LIVE_DRIVING] as u64), ("crashed_on_scene", s[S::LIVE_CRASHED] as u64), ("arrived", s[S::ARRIVED] as u64), ("spawned", s[S::SPAWNED] as u64),
@@ -294,7 +308,7 @@ impl Env {
     /// share (fault share, needs crash_share=True), late_by (arrived, populations: arrival - workStart s),
     /// progress_m (route metres at the event), trip_m / trip_s (arrived). Missing values are NaN.
     fn events<'py>(&mut self, py: Python<'py>) -> PyResult<Bound<'py, PyDict>> {
-        if cpu_only(self).is_some() { return Err(PyNotImplementedError::new_err("events() on backend='cpu': pending (same shape)")); }
+        if let Backend::Cpu(e) = &mut self.backend { let r = e.get_mut().unwrap().env.take_records(); return events_dict(py, &r, None); }
         let r = gpu_mut(self).take_records();
         events_dict(py, &r, None)
     }
@@ -389,15 +403,29 @@ impl Env {
 /// Arrays carry a leading env axis: act((E, N, 3)), step_observe -> (E, N, obs_size), crash_flags -> (E, N).
 /// Env i uses seed + i. All envs are submitted together and waited on once per step call.
 #[pyclass(module = "bayenv._bayenv")]
-struct VecEnv { sims: Vec<GpuSim>, rows: usize, obs_size: usize }
+struct VecEnv { sims: Vec<GpuSim>, cpu: Vec<std::sync::Mutex<CpuBackend>>, rows: usize, obs_size: usize }
 
 #[pymethods]
 impl VecEnv {
     #[new]
-    #[pyo3(signature = (data_dir, n_envs, n_cars=1000, seed=1, capacity=None, obs="v2", dt=0.05, start_time=18000.0, accidents=true, collisions=true, fuel=true))]
+    #[pyo3(signature = (data_dir, n_envs, n_cars=1000, seed=1, capacity=None, obs="v2", dt=0.05, start_time=None, accidents=true, collisions=true, fuel=true, backend="gpu"))]
     #[allow(clippy::too_many_arguments)]
-    fn new(py: Python<'_>, data_dir: &str, n_envs: usize, n_cars: usize, seed: u32, capacity: Option<usize>, obs: &str, dt: f64, start_time: f64,
-           accidents: bool, collisions: bool, fuel: bool) -> PyResult<VecEnv> {
+    fn new(py: Python<'_>, data_dir: &str, n_envs: usize, n_cars: usize, seed: u32, capacity: Option<usize>, obs: &str, dt: f64, start_time: Option<f64>,
+           accidents: bool, collisions: bool, fuel: bool, backend: &str) -> PyResult<VecEnv> {
+        if backend == "cpu" {
+            let cobs = match obs { "v2" => CpuObs::V2, "v3" => CpuObs::V3, "flat" => CpuObs::Flat, "none" => CpuObs::None, _ => return Err(PyValueError::new_err("obs must be 'v2', 'v3', 'flat' or 'none'")) };
+            let data = data_dir.to_string();
+            let res: Result<Vec<bayenv_sim::env::Env>, String> = py.detach(move || {
+                let world = World::load(&data).map_err(|e| format!("world: {e}"))?;
+                let sw = Arc::new(bayenv_sim::world::World::from_bayenv(&world));
+                use rayon::prelude::*;
+                (0..n_envs).into_par_iter().map(|i| make_cpu_env(&sw, &data, n_cars, (seed + i as u32) as f64, dt, start_time, fuel)).collect()
+            });
+            let envs = res.map_err(PyRuntimeError::new_err)?;
+            let _ = (capacity, accidents, collisions);
+            return Ok(VecEnv { sims: Vec::new(), cpu: envs.into_iter().map(|e| std::sync::Mutex::new(CpuBackend::new(e, cobs))).collect(), rows: 0, obs_size: cobs.width() });
+        }
+        let start_time = start_time.unwrap_or(18000.0);
         let obs_mode = match obs { "v2" => ObsMode::V2, "v3" => ObsMode::V3, "none" => ObsMode::None, _ => return Err(PyValueError::new_err("obs must be 'v2', 'v3' or 'none'")) };
         let cap = capacity.unwrap_or(((n_cars + 1023) / 1024 * 1024).max(1024)).max(n_cars);
         let data = data_dir.to_string();
@@ -412,15 +440,24 @@ impl VecEnv {
         });
         let (sims, rows) = res.map_err(PyRuntimeError::new_err)?;
         let obs_size = if obs_mode == ObsMode::None { 0 } else { sims[0].obs_size };
-        Ok(VecEnv { sims, rows, obs_size })
+        Ok(VecEnv { sims, cpu: Vec::new(), rows, obs_size })
     }
-    #[getter] fn n_envs(&self) -> usize { self.sims.len() }
-    #[getter] fn n_slots(&self) -> usize { self.rows }
+    #[getter] fn n_envs(&self) -> usize { if self.cpu.is_empty() { self.sims.len() } else { self.cpu.len() } }
+    /// rows per env (CPU: the largest env's slot count; observe / crash_flags pad the others)
+    #[getter] fn n_slots(&self) -> usize { if self.cpu.is_empty() { self.rows } else { self.cpu.iter().map(|e| e.lock().unwrap().n_slots()).max().unwrap_or(0) } }
+    /// CPU: slot count of each env
+    fn env_slots(&self) -> Vec<usize> { if self.cpu.is_empty() { vec![self.rows; self.sims.len()] } else { self.cpu.iter().map(|e| e.lock().unwrap().n_slots()).collect() } }
     #[getter] fn obs_size(&self) -> usize { self.obs_size }
-    #[getter] fn time(&self) -> f64 { self.sims[0].time }
+    #[getter] fn time(&self) -> f64 { if self.cpu.is_empty() { self.sims[0].time } else { self.cpu[0].lock().unwrap().env.sim.time } }
 
     /// actions float32 (E, N, 3)
     fn act(&mut self, actions: numpy::PyReadonlyArray3<'_, f32>) -> PyResult<()> {
+        if !self.cpu.is_empty() {
+            let sh = actions.shape(); if sh[0] != self.cpu.len() || sh[2] != 3 { return Err(PyValueError::new_err("actions must have shape (n_envs, N, 3)")); }
+            let sl = actions.as_slice().map_err(|_| PyValueError::new_err("actions must be C-contiguous float32"))?; let per = sh[1] * 3;
+            for (i, e) in self.cpu.iter_mut().enumerate() { e.get_mut().unwrap().env.act_rows(&sl[i * per..(i + 1) * per], 0); }
+            return Ok(());
+        }
         let sh = actions.shape();
         if sh[0] != self.sims.len() || sh[2] != 3 || sh[1] > self.rows.max(sh[1]) { return Err(PyValueError::new_err("actions must have shape (n_envs, N, 3)")); }
         let sl = actions.as_slice().map_err(|_| PyValueError::new_err("actions must be C-contiguous float32"))?;
@@ -430,13 +467,23 @@ impl VecEnv {
     }
     /// k steps in every env (one submit per env, one wait).
     #[pyo3(signature = (k=1))]
-    fn step(&mut self, py: Python<'_>, k: usize) { let sims = &mut self.sims; py.detach(|| bayenv_gpu::env::step_many(sims, k, Vec::new(), Vec::new())); }
+    fn step(&mut self, py: Python<'_>, k: usize) {
+        if !self.cpu.is_empty() { use rayon::prelude::*; let c = &mut self.cpu; py.detach(|| c.par_iter_mut().for_each(|e| e.get_mut().unwrap().step(k))); return; }
+        let sims = &mut self.sims; py.detach(|| bayenv_gpu::env::step_many(sims, k, Vec::new(), Vec::new())); }
 
     /// Optional actions (E, N, 3) -> k steps in every env -> observations (E, n_slots, obs_size).
     #[pyo3(signature = (actions=None, k=1, out=None))]
     fn step_observe<'py>(&mut self, py: Python<'py>, actions: Option<numpy::PyReadonlyArray3<'py, f32>>, k: usize, out: Option<Bound<'py, numpy::PyArray3<f32>>>) -> PyResult<Bound<'py, numpy::PyArray3<f32>>> {
         if self.obs_size == 0 { return Err(PyRuntimeError::new_err("created with obs='none'")); }
         if let Some(a) = actions { self.act(a)?; }
+        if !self.cpu.is_empty() {
+            self.step(py, k);
+            let (e, d) = (self.cpu.len(), self.obs_size); let r = self.n_slots();
+            let arr = match out { Some(a) => { if a.shape() != [e, r, d] { return Err(PyValueError::new_err("out has the wrong shape (n_envs, n_slots, obs_size)")); } a } None => numpy::PyArray3::<f32>::zeros(py, [e, r, d], false) };
+            { let mut rw = arr.readwrite(); let sl = rw.as_slice_mut().map_err(|_| PyValueError::new_err("out must be C-contiguous"))?; let c = &mut self.cpu;
+              if r > 0 { py.detach(|| { use rayon::prelude::*; sl.par_chunks_mut(r * d).zip(c.par_iter_mut()).for_each(|(o, e)| { let e = e.get_mut().unwrap(); let n = e.n_slots(); o.fill(0.0); e.observe_into(&mut o[..n * d]); }); }); } }
+            return Ok(arr);
+        }
         let (e, r, d) = (self.sims.len(), self.rows, self.obs_size);
         let arr = match out { Some(a) => { if a.shape() != [e, r, d] { return Err(PyValueError::new_err("out has the wrong shape")); } a } None => numpy::PyArray3::<f32>::zeros(py, [e, r, d], false) };
         {
@@ -448,6 +495,9 @@ impl VecEnv {
     }
     /// crash flags (E, n_slots) bool
     fn crash_flags<'py>(&mut self, py: Python<'py>) -> PyResult<Bound<'py, numpy::PyArray2<bool>>> {
+        if !self.cpu.is_empty() { let r = self.n_slots(); let e = self.cpu.len(); let mut out = vec![false; e * r];
+            for (i, c) in self.cpu.iter().enumerate() { for (j, f) in c.lock().unwrap().env.crash_flags().into_iter().enumerate() { out[i * r + j] = f; } }
+            return Ok(numpy::PyArray1::from_vec(py, out).reshape([e, r])?); }
         let (e, n) = (self.sims.len(), self.rows); let mut out = vec![false; e * n];
         let sims = &self.sims;
         py.detach(|| for (i, s) in sims.iter().enumerate() { let mut w = vec![0u32; n * L::VEH_WORDS]; s.read_into("veh", 0, bytemuck::cast_slice_mut(&mut w));
@@ -457,15 +507,23 @@ impl VecEnv {
     /// Per-slot events of every env since the last call (Env.events() columns + `env`).
     fn events<'py>(&mut self, py: Python<'py>) -> PyResult<Bound<'py, PyDict>> {
         let mut all = bayenv_gpu::events::EventLog::default(); let mut envs = Vec::new();
-        for (i, s) in self.sims.iter_mut().enumerate() {
-            let r = s.take_records(); envs.extend(std::iter::repeat(i as i32).take(r.len()));
+        let logs: Vec<bayenv_gpu::events::EventLog> = if self.cpu.is_empty() { self.sims.iter_mut().map(|s| s.take_records()).collect() } else { self.cpu.iter_mut().map(|e| e.get_mut().unwrap().env.take_records()).collect() };
+        for (i, r) in logs.into_iter().enumerate() { envs.extend(std::iter::repeat(i as i32).take(r.len()));
             all.step.extend(r.step); all.time.extend(r.time); all.kind.extend(r.kind); all.slot.extend(r.slot); all.agent.extend(r.agent); all.other.extend(r.other);
             all.dv_kmh.extend(r.dv_kmh); all.other_dv_kmh.extend(r.other_dv_kmh); all.share.extend(r.share); all.late_by.extend(r.late_by);
             all.progress_m.extend(r.progress_m); all.trip_m.extend(r.trip_m); all.trip_s.extend(r.trip_s);
         }
         events_dict(py, &all, Some(envs))
     }
-    fn __repr__(&self) -> String { format!("bayenv.VecEnv(n_envs={}, n_slots={}, obs_size={})", self.sims.len(), self.rows, self.obs_size) }
+    fn __repr__(&self) -> String { format!("bayenv.VecEnv(backend='{}', n_envs={}, n_slots={}, obs_size={})", if self.cpu.is_empty() { "gpu" } else { "cpu" }, self.n_envs(), self.n_slots(), self.obs_size) }
+}
+
+/// One CPU env on a shared (converted) world: population.js commuters (n, seed), external actions.
+fn make_cpu_env(sw: &Arc<bayenv_sim::world::World>, data: &str, n_cars: usize, seed: f64, dt: f64, start_time: Option<f64>, fuel: bool) -> Result<bayenv_sim::env::Env, String> {
+    let pop = Arc::new(bayenv_sim::population::Population::generate_like_env(sw, "real", n_cars, seed, Some(std::path::Path::new(data)))?);
+    let mut opts = bayenv_sim::sim::SimOpts::default(); opts.dt = dt; opts.seed = seed; opts.fuel = fuel;
+    let cfg = bayenv_sim::env::EnvConfig { opts, start_time, static_obstacles: Vec::new(), scenario_obstacles: Vec::new(), obstacles: None };
+    Ok(bayenv_sim::env::Env::new(sw.clone(), pop, cfg, Box::new(|w| bayenv_sim::harness::router_for(&w))))
 }
 
 fn events_dict<'py>(py: Python<'py>, r: &bayenv_gpu::events::EventLog, env: Option<Vec<i32>>) -> PyResult<Bound<'py, PyDict>> {
