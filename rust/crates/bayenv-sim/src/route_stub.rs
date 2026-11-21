@@ -47,7 +47,7 @@ impl Heap {
 }
 
 impl Router for AStar {
-    fn route(&mut self, start: i32, goal: i32, avoid: Option<&HashSet<i32>>, penalty: Option<&HashMap<i32, f64>>) -> Option<Vec<i32>> {
+    fn route(&mut self, start: i32, goal: i32, avoid: Option<&std::collections::HashSet<i32>>, penalty: Option<&std::collections::HashMap<i32, f64>>) -> Option<Vec<i32>> {
         if start == goal { return Some(Vec::new()); }
         let g = self.g.clone();
         let key = start as i64 * g.node_count as i64 + goal as i64;
@@ -116,13 +116,17 @@ impl NavRouter {
         g.in_start = w.in_start.iter().map(|&x| x as u32).collect(); g.in_edges = w.in_edges.iter().map(|&x| x as u32).collect();
         g.banned_hops = w.banned_hops.iter().map(|(&k, v)| (k as u64, v.iter().map(|&x| x as u32).collect())).collect();
         g.bounds = bayenv_world::graph::Bounds { min_x: w.bounds.0, max_x: w.bounds.1, min_z: w.bounds.2, max_z: w.bounds.3 };
+        NavRouter::from_sim_graph(&g, weight)
+    }
+    /// makeRouter(graph, { weight }) directly over the shared graph (no World copy).
+    pub fn from_sim_graph(g: &bayenv_world::graph::SimGraph, weight: f64) -> NavRouter {
         let o = bayenv_world::nav::router::RouterOpts { weight, ..Default::default() };
-        NavRouter { r: bayenv_world::nav::router::Router::new(&g, &o), avoid: Vec::new(), pen: Vec::new() }
+        NavRouter { r: bayenv_world::nav::router::Router::new(g, &o), avoid: Vec::new(), pen: Vec::new() }
     }
 }
 
 impl Router for NavRouter {
-    fn route(&mut self, start: i32, goal: i32, avoid: Option<&HashSet<i32>>, penalty: Option<&HashMap<i32, f64>>) -> Option<Vec<i32>> {
+    fn route(&mut self, start: i32, goal: i32, avoid: Option<&std::collections::HashSet<i32>>, penalty: Option<&std::collections::HashMap<i32, f64>>) -> Option<Vec<i32>> {
         let to_i = |p: Vec<u32>| p.into_iter().map(|x| x as i32).collect::<Vec<i32>>();
         if avoid.is_none() && penalty.is_none() { return self.r.route(start as usize, goal as usize).map(to_i); }
         self.avoid.clear(); self.pen.clear();

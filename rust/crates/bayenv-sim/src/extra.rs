@@ -217,6 +217,9 @@ impl Sim {
         }
         let pen = match &self.traffic_penalty { Some(p) if !p.is_empty() => Some(p.clone()), _ => None };
         if closed.is_empty() && pen.is_none() { return; }
+        // the Router trait takes std maps (shared with bayenv-gpu); membership tests only, so the hasher is irrelevant
+        let closed_std: std::collections::HashSet<i32> = closed.iter().copied().collect();
+        let pen_std: Option<std::collections::HashMap<i32, f64>> = pen.as_ref().map(|p| p.iter().map(|(&k, &v)| (k, v)).collect());
         let sight = self.opts.reroute_sight;
         let mut budget = 200;
         let mut i = 0;
@@ -241,7 +244,7 @@ impl Sim {
             let goal = g.e_to[route[route.len() - 1] as usize];
             if g.e_to[e] == goal { i += 1; continue; }
             let route = route.clone();
-            let path = self.router.route(g.e_to[e], goal, if closed.is_empty() { None } else { Some(&closed) }, pen.as_ref());
+            let path = self.router.route(g.e_to[e], goal, if closed_std.is_empty() { None } else { Some(&closed_std) }, pen_std.as_ref());
             if slow {
                 if let Some(p) = &path {
                     let pm = pen.as_ref().unwrap();

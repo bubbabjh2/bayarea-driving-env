@@ -14,12 +14,18 @@
 //! changes a route (A* is deterministic per (start, goal)), only the weight matters. The default router is
 //! bayenv_world::nav::router::Router through [`crate::route_stub::NavRouter`].
 //!
+//! The generator is generic over [`PopGraph`] (a [`PlanGraph`] supertrait), implemented for the sim's [`World`] and
+//! for `bayenv_world::graph::SimGraph`, so the GPU host generates directly on the shared graph (no World copy).
+//! Both impls expose the same values (SimGraph u32 / u8 integers widened), so output is bit-identical.
+//!
 //! Not ported (throw in JS-only paths / unused by env.js): `region` filters, `cfg.router`, `snapTolerance` overrides.
 use crate::jm;
 use crate::population::Population;
 use crate::rng::{hash_seed, Rng};
 use crate::sim::Router;
+use crate::fuel::PlanGraph;
 use crate::world::World;
+use bayenv_world::graph::SimGraph;
 use rayon::prelude::*;
 use serde_json::Value;
 use std::sync::Arc;
@@ -40,6 +46,56 @@ const REALISM_P_CROSS: f64 = 0.05;
 /// roadGraph.js HIGHWAY_RANK of the default homeClasses ['residential', 'tertiary', 'living_street']
 pub const DEFAULT_HOME_RANKS: [i32; 3] = [1, 3, 0];
 const R_EARTH: f64 = 6371008.8;
+
+/// The graph queries population generation needs, on top of [`PlanGraph`] (edge from / to / length / speed, node x / z).
+pub trait PopGraph: PlanGraph {
+    fn node_count(&self) -> usize;
+    fn edge_count(&self) -> usize;
+    /// node x / z coordinates (length node_count)
+    fn nx(&self) -> &[f64];
+    fn nz(&self) -> &[f64];
+    /// roadGraph.js HIGHWAY_RANK of the edge
+    fn edge_rank(&self, e: usize) -> i32;
+    /// CSR out adjacency: `out_edge(q)` for q in `out_range(n)`
+    fn out_range(&self, n: usize) -> std::ops::Range<usize>;
+    fn out_edge(&self, q: usize) -> usize;
+    /// CSR in adjacency: `in_edge(q)` for q in `in_range(n)`
+    fn in_range(&self, n: usize) -> std::ops::Range<usize>;
+    fn in_edge(&self, q: usize) -> usize;
+}
+impl PopGraph for World {
+    #[inline] fn node_count(&self) -> usize { self.node_count }
+    #[inline] fn edge_count(&self) -> usize { self.edge_count }
+    #[inline] fn nx(&self) -> &[f64] { &self.nx }
+    #[inline] fn nz(&self) -> &[f64] { &self.nz }
+    #[inline] fn edge_rank(&self, e: usize) -> i32 { self.e_rank[e] }
+    #[inline] fn out_range(&self, n: usize) -> std::ops::Range<usize> { self.out_start[n] as usize..self.out_start[n + 1] as usize }
+    #[inline] fn out_edge(&self, q: usize) -> usize { self.out_edges[q] as usize }
+    #[inline] fn in_range(&self, n: usize) -> std::ops::Range<usize> { self.in_start[n] as usize..self.in_start[n + 1] as usize }
+    #[inline] fn in_edge(&self, q: usize) -> usize { self.in_edges[q] as usize }
+}
+impl<G: PopGraph + ?Sized> PopGraph for Arc<G> {
+    #[inline] fn node_count(&self) -> usize { (**self).node_count() }
+    #[inline] fn edge_count(&self) -> usize { (**self).edge_count() }
+    #[inline] fn nx(&self) -> &[f64] { (**self).nx() }
+    #[inline] fn nz(&self) -> &[f64] { (**self).nz() }
+    #[inline] fn edge_rank(&self, e: usize) -> i32 { (**self).edge_rank(e) }
+    #[inline] fn out_range(&self, n: usize) -> std::ops::Range<usize> { (**self).out_range(n) }
+    #[inline] fn out_edge(&self, q: usize) -> usize { (**self).out_edge(q) }
+    #[inline] fn in_range(&self, n: usize) -> std::ops::Range<usize> { (**self).in_range(n) }
+    #[inline] fn in_edge(&self, q: usize) -> usize { (**self).in_edge(q) }
+}
+impl PopGraph for SimGraph {
+    #[inline] fn node_count(&self) -> usize { self.node_count }
+    #[inline] fn edge_count(&self) -> usize { self.edge_count }
+    #[inline] fn nx(&self) -> &[f64] { &self.nx }
+    #[inline] fn nz(&self) -> &[f64] { &self.nz }
+    #[inline] fn edge_rank(&self, e: usize) -> i32 { self.rank[e] as i32 }
+    #[inline] fn out_range(&self, n: usize) -> std::ops::Range<usize> { self.out_start[n] as usize..self.out_start[n + 1] as usize }
+    #[inline] fn out_edge(&self, q: usize) -> usize { self.out_edges[q] as usize }
+    #[inline] fn in_range(&self, n: usize) -> std::ops::Range<usize> { self.in_start[n] as usize..self.in_start[n + 1] as usize }
+    #[inline] fn in_edge(&self, q: usize) -> usize { self.in_edges[q] as usize }
+}
 
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub enum Departures { Curve, Spec }
@@ -66,7 +122,7 @@ impl Axis {
         Axis::finish(project_lat_lon(cfg.san_jose, proj), project_lat_lon(cfg.san_francisco, proj), project_lat_lon(cfg.san_mateo_bridge_mid, proj))
     }
     /// synthAxis(graph): long axis = -z, bay centreline x = mid of the bounds.
-    pub fn synth(w: &World) -> Axis {
+    pub fn synth<G: PopGraph + ?Sized>(w: &G) -> Axis {
         let (min_x, max_x, min_z, max_z) = node_bounds(w);
         Axis::finish(P2 { x: 0.0, z: max_z }, P2 { x: 0.0, z: min_z }, P2 { x: 0.5 * (min_x + max_x), z: 0.5 * (min_z + max_z) })
     }
@@ -216,11 +272,12 @@ pub fn js_num_str(x: f64) -> String {
     if e.starts_with('-') { format!("{m}e{e}") } else { format!("{m}e+{e}") }
 }
 
-fn node_bounds(w: &World) -> (f64, f64, f64, f64) {
-    if w.node_count == 0 { return (0.0, 0.0, 0.0, 0.0); }
+fn node_bounds<G: PopGraph + ?Sized>(w: &G) -> (f64, f64, f64, f64) {
+    let (nx, nz) = (w.nx(), w.nz());
+    if w.node_count() == 0 { return (0.0, 0.0, 0.0, 0.0); }
     let (mut min_x, mut max_x, mut min_z, mut max_z) = (f64::INFINITY, f64::NEG_INFINITY, f64::INFINITY, f64::NEG_INFINITY);
-    for i in 0..w.node_count {
-        let (x, z) = (w.nx[i], w.nz[i]);
+    for i in 0..w.node_count() {
+        let (x, z) = (nx[i], nz[i]);
         if x < min_x { min_x = x; } if x > max_x { max_x = x; } if z < min_z { min_z = z; } if z > max_z { max_z = z; }
     }
     (min_x, max_x, min_z, max_z)
@@ -230,20 +287,19 @@ fn prefix_sums(w: &[f64]) -> Vec<f64> { let mut acc = 0.0; w.iter().map(|&x| { a
 #[inline] fn clip(v: f64, lo: f64, hi: f64) -> f64 { if v < lo { lo } else if v > hi { hi } else { v } }
 
 /// route.js largestSCC (iterative Kosaraju): 1 for nodes of the largest strongly connected component.
-pub fn largest_scc(g: &World) -> Vec<u8> {
-    let n = g.node_count;
-    let (os, oe, is, ie) = (&g.out_start, &g.out_edges, &g.in_start, &g.in_edges);
+pub fn largest_scc<G: PopGraph + ?Sized>(g: &G) -> Vec<u8> {
+    let n = g.node_count();
     let mut order = vec![0usize; n]; let mut on = 0;
     let mut vis = vec![0u8; n];
-    let mut stack_n = vec![0usize; n]; let mut stack_i = vec![0i32; n];
+    let mut stack_n = vec![0usize; n]; let mut stack_i = vec![0usize; n];
     for s in 0..n {
         if vis[s] != 0 { continue; }
-        let mut sp: isize = 0; stack_n[0] = s; stack_i[0] = os[s]; vis[s] = 1;
+        let mut sp: isize = 0; stack_n[0] = s; stack_i[0] = g.out_range(s).start; vis[s] = 1;
         while sp >= 0 {
             let k = sp as usize; let nd = stack_n[k];
-            if stack_i[k] < os[nd + 1] {
-                let m = g.e_to[oe[stack_i[k] as usize] as usize] as usize; stack_i[k] += 1;
-                if vis[m] == 0 { vis[m] = 1; sp += 1; stack_n[sp as usize] = m; stack_i[sp as usize] = os[m]; }
+            if stack_i[k] < g.out_range(nd).end {
+                let m = g.edge_to(g.out_edge(stack_i[k])) as usize; stack_i[k] += 1;
+                if vis[m] == 0 { vis[m] = 1; sp += 1; stack_n[sp as usize] = m; stack_i[sp as usize] = g.out_range(m).start; }
             } else { order[on] = nd; on += 1; sp -= 1; }
         }
     }
@@ -255,7 +311,7 @@ pub fn largest_scc(g: &World) -> Vec<u8> {
         let mut sp: isize = 0; let mut size = 0; st[0] = s; comp[s] = nc;
         while sp >= 0 {
             let nd = st[sp as usize]; sp -= 1; size += 1;
-            for i in is[nd]..is[nd + 1] { let m = g.e_from[ie[i as usize] as usize] as usize; if comp[m] < 0 { comp[m] = nc; sp += 1; st[sp as usize] = m; } }
+            for i in g.in_range(nd) { let m = g.edge_from(g.in_edge(i)) as usize; if comp[m] < 0 { comp[m] = nc; sp += 1; st[sp as usize] = m; } }
         }
         if size > best_size { best_size = size; best = nc; }
         nc += 1;
@@ -267,7 +323,8 @@ pub fn largest_scc(g: &World) -> Vec<u8> {
 pub struct NearestNode { min_x: f64, min_z: f64, cols: i64, rows: i64, start: Vec<u32>, items: Vec<u32> }
 const CELL: f64 = 250.0;
 impl NearestNode {
-    pub fn new(w: &World) -> NearestNode {
+    pub fn new<G: PopGraph + ?Sized>(w: &G) -> NearestNode {
+        let (nx, nz, nn) = (w.nx(), w.nz(), w.node_count());
         let (min_x, max_x, min_z, max_z) = node_bounds(w);
         let cols = jm::max(1.0, jm::ceil((max_x - min_x) / CELL) + 1.0) as i64;
         let rows = jm::max(1.0, jm::ceil((max_z - min_z) / CELL) + 1.0) as i64;
@@ -278,16 +335,17 @@ impl NearestNode {
             (cz as i64 * cols + cx as i64) as usize
         };
         let mut start = vec![0u32; nc + 1];
-        for i in 0..w.node_count { start[cell_of(w.nx[i], w.nz[i]) + 1] += 1; }
+        for i in 0..nn { start[cell_of(nx[i], nz[i]) + 1] += 1; }
         for i in 0..nc { start[i + 1] += start[i]; }
         let mut fill = start[..nc].to_vec();
-        let mut items = vec![0u32; w.node_count];
-        for i in 0..w.node_count { let c = cell_of(w.nx[i], w.nz[i]); items[fill[c] as usize] = i as u32; fill[c] += 1; }
+        let mut items = vec![0u32; nn];
+        for i in 0..nn { let c = cell_of(nx[i], nz[i]); items[fill[c] as usize] = i as u32; fill[c] += 1; }
         NearestNode { min_x, min_z, cols, rows, start, items }
     }
     /// nearestNode(x, z, filter): -1 if none.
-    pub fn nearest(&self, w: &World, x: f64, z: f64, filter: impl Fn(usize) -> bool) -> i32 {
-        if w.node_count == 0 { return -1; }
+    pub fn nearest<G: PopGraph + ?Sized>(&self, w: &G, x: f64, z: f64, filter: impl Fn(usize) -> bool) -> i32 {
+        if w.node_count() == 0 { return -1; }
+        let (nx, nz) = (w.nx(), w.nz());
         let cx0 = jm::floor((x - self.min_x) / CELL) as i64; let cz0 = jm::floor((z - self.min_z) / CELL) as i64;
         let (mut best, mut best_d) = (-1i32, f64::INFINITY);
         let max_r = self.cols.max(self.rows) + 1;
@@ -295,7 +353,7 @@ impl NearestNode {
             for i in self.start[c]..self.start[c + 1] {
                 let k = self.items[i as usize] as usize;
                 if !filter(k) { continue; }
-                let (dx, dz) = (w.nx[k] - x, w.nz[k] - z);
+                let (dx, dz) = (nx[k] - x, nz[k] - z);
                 let d = dx * dx + dz * dz;   // JS `**2` (fdlibm pow: y == 2 -> x * x)
                 if d < *best_d { *best_d = d; *best = k as i32; }
             }
@@ -360,13 +418,13 @@ pub struct Context {
 }
 
 impl Context {
-    pub fn new(g: &World, cfg: &PopConfig) -> Result<Context, String> {
+    pub fn new<G: PopGraph + ?Sized>(g: &G, cfg: &PopConfig) -> Result<Context, String> {
         let scc = largest_scc(g);
         let (mut homes, mut all) = (Vec::new(), Vec::new());
         // nodeLowRank (roadGraph.js): min rank over the edges touching the node (127 if none)
-        let mut low = vec![127i32; g.node_count];
-        for e in 0..g.edge_count { let r = g.e_rank[e]; for k in [g.e_from[e] as usize, g.e_to[e] as usize] { if r < low[k] { low[k] = r; } } }
-        for i in 0..g.node_count {
+        let mut low = vec![127i32; g.node_count()];
+        for e in 0..g.edge_count() { let r = g.edge_rank(e); for k in [g.edge_from(e) as usize, g.edge_to(e) as usize] { if r < low[k] { low[k] = r; } } }
+        for i in 0..g.node_count() {
             if scc[i] == 0 { continue; }
             all.push(i as i32);
             if cfg.home_ranks.contains(&low[i]) { homes.push(i as i32); }
@@ -381,12 +439,12 @@ impl Context {
     }
 }
 
-fn route_length(g: &World, r: &[i32]) -> f64 { let mut l = 0.0; for &e in r { l += g.e_length[e as usize]; } l }
+fn route_length<G: PopGraph + ?Sized>(g: &G, r: &[i32]) -> f64 { let mut l = 0.0; for &e in r { l += g.edge_length(e as usize); } l }
 
 /// population.js generateCommuter (pure function of (cfg.seed, id) given the graph and router).
-pub fn generate_commuter(g: &World, cfg: &PopConfig, ctx: &Context, router: &mut dyn Router, id: usize) -> Result<Rec, String> {
+pub fn generate_commuter<G: PopGraph + ?Sized>(g: &G, cfg: &PopConfig, ctx: &Context, router: &mut dyn Router, id: usize) -> Result<Rec, String> {
     let mut rng = Rng::from_u32(hash_seed(&format!("{}:{}", ctx.seed_str, id)));
-    let (nx, nz) = (&g.nx, &g.nz);
+    let (nx, nz) = (g.nx(), g.nz());
     let ax = &ctx.axis;
     let (sj, dd, u, v, mid) = (ax.sj, ax.d, ax.u, ax.v, ax.mid);
     let realism = cfg.mix == Mix::Realism;
@@ -447,7 +505,7 @@ pub fn generate_commuter(g: &World, cfg: &PopConfig, ctx: &Context, router: &mut
     }
     let Best { work, route: route_out, l, d, ok } = best.unwrap();
     let route_back = if cfg.return_trips { router.route(work, home, None, None).unwrap_or_default() } else { Vec::new() };
-    let mut tt = 0.0; for &e in &route_out { let e = e as usize; tt += g.e_length[e] / (g.e_speed[e] * cfg.travel_speed_factor); }
+    let mut tt = 0.0; for &e in &route_out { let e = e as usize; tt += g.edge_length(e) / (g.edge_speed(e) * cfg.travel_speed_factor); }
     let slack = rng.range(cfg.slack_min, cfg.slack_max);
     let (work_start, depart);
     if cfg.departures == Departures::Curve {
@@ -495,7 +553,7 @@ pub fn assemble(recs: &[Rec], return_trips: bool) -> Generated {
 /// generatePopulation(graph, cfg) with `make_router()` per worker (each must behave like makeRouter(graph, { weight: cfg.astarWeight })).
 /// `threads`: None = the current rayon pool, Some(1) = serial on this thread, Some(k) = a dedicated k-thread pool.
 /// Output does not depend on the thread count.
-pub fn generate_population_with<R: Router, F: Fn() -> R + Sync>(g: &World, cfg: &PopConfig, make_router: F, threads: Option<usize>) -> Result<Generated, String> {
+pub fn generate_population_with<G: PopGraph + Sync + ?Sized, R: Router + Send, F: Fn() -> R + Sync>(g: &G, cfg: &PopConfig, make_router: F, threads: Option<usize>) -> Result<Generated, String> {
     let ctx = Context::new(g, cfg)?;
     let (a, b) = cfg.range.unwrap_or((0, cfg.n));
     let recs: Vec<Rec> = if threads == Some(1) || b - a < 64 {
@@ -530,7 +588,14 @@ pub fn generate_population_with<R: Router, F: Fn() -> R + Sync>(g: &World, cfg: 
 /// generatePopulation with the default router (bayenv_world::nav via route_stub::NavRouter, weight = cfg.astarWeight).
 pub fn generate_population(g: &Arc<World>, cfg: &PopConfig, threads: Option<usize>) -> Result<Generated, String> {
     let w = cfg.astar_weight;
-    generate_population_with(g, cfg, || crate::route_stub::NavRouter::new(g, w), threads)
+    generate_population_with(&**g, cfg, || crate::route_stub::NavRouter::new(g, w), threads)
+}
+
+/// generatePopulation directly on the shared graph (bayenv_world::World::graph): same output as
+/// [`generate_population`] on the sim World built from it, without the World copy.
+pub fn generate_population_sim_graph(g: &SimGraph, cfg: &PopConfig, threads: Option<usize>) -> Result<Generated, String> {
+    let w = cfg.astar_weight;
+    generate_population_with(g, cfg, || crate::route_stub::NavRouter::from_sim_graph(g, w), threads)
 }
 
 /// scenarioPopulation options (src/scenarios/load.js).
@@ -540,7 +605,7 @@ impl Default for ScenarioOpts { fn default() -> Self { ScenarioOpts { seed: None
 
 /// scenarioPopulation(graph, scenario, opts): `scenario` is the parsed scenario.json; `router` must behave like
 /// makeRouter(graph, { weight: 1 }).
-pub fn scenario_population_with(g: &World, scenario: &Value, o: &ScenarioOpts, router: &mut dyn Router) -> Result<Generated, String> {
+pub fn scenario_population_with<G: PopGraph + ?Sized>(g: &G, scenario: &Value, o: &ScenarioOpts, router: &mut dyn Router) -> Result<Generated, String> {
     let seed = o.seed.or_else(|| scenario.get("seed").and_then(|s| s.as_f64())).unwrap_or(1.0);
     let cfg = PopConfig { seed, n: 0, return_trips: false, ..Default::default() };
     let seed_str = js_num_str(seed);
@@ -564,7 +629,7 @@ pub fn scenario_population_with(g: &World, scenario: &Value, o: &ScenarioOpts, r
         if !okr { return Err(format!("scenario {name}: trip {ti} ({from} -> {to}) has no route")); }
         if let Some(rt) = t.get("route").and_then(|v| v.as_array()) { r = rt.iter().map(|x| num(x) as i32).collect(); }
         let (mut l, mut tt) = (0.0, 0.0);
-        for &e in &r { let e = e as usize; l += g.e_length[e]; tt += g.e_length[e] / (g.e_speed[e] * cfg.travel_speed_factor); }
+        for &e in &r { let e = e as usize; l += g.edge_length(e); tt += g.edge_length(e) / (g.edge_speed(e) * cfg.travel_speed_factor); }
         let dep = t["depart"].as_array().ok_or("trip depart")?;
         let (d0, d1) = (num(&dep[0]), num(&dep[1]));
         let types: Option<Vec<u8>> = t.get("types").and_then(|v| v.as_array()).map(|a| a.iter().map(|x| num(x) as u8).collect());
@@ -591,6 +656,12 @@ pub fn scenario_population_with(g: &World, scenario: &Value, o: &ScenarioOpts, r
 /// scenarioPopulation with the default router (bayenv_world::nav via route_stub::NavRouter, weight 1).
 pub fn scenario_population(g: &Arc<World>, scenario: &Value, o: &ScenarioOpts) -> Result<Generated, String> {
     let mut r = crate::route_stub::NavRouter::new(g, 1.0);
+    scenario_population_with(&**g, scenario, o, &mut r)
+}
+
+/// scenarioPopulation directly on the shared graph (NavRouter::from_sim_graph, weight 1).
+pub fn scenario_population_sim_graph(g: &SimGraph, scenario: &Value, o: &ScenarioOpts) -> Result<Generated, String> {
+    let mut r = crate::route_stub::NavRouter::from_sim_graph(g, 1.0);
     scenario_population_with(g, scenario, o, &mut r)
 }
 
