@@ -3,16 +3,17 @@
 //! round half up, `|0` / `>>>0`, typed-array stores).
 pub use std::f64::consts::PI;
 
-#[inline(always)] pub fn sin(x: f64) -> f64 { x.sin() }
-#[inline(always)] pub fn cos(x: f64) -> f64 { x.cos() }
-#[inline(always)] pub fn tan(x: f64) -> f64 { x.tan() }
-#[inline(always)] pub fn atan(x: f64) -> f64 { x.atan() }
-#[inline(always)] pub fn atan2(y: f64, x: f64) -> f64 { y.atan2(x) }
-#[inline(always)] pub fn acos(x: f64) -> f64 { x.acos() }
-#[inline(always)] pub fn exp(x: f64) -> f64 { x.exp() }
-#[inline(always)] pub fn log(x: f64) -> f64 { x.ln() }
-#[inline(always)] pub fn tanh(x: f64) -> f64 { x.tanh() }
-#[inline(always)] pub fn hypot(a: f64, b: f64) -> f64 { a.hypot(b) }
+#[inline(always)] pub fn sin(x: f64) -> f64 { bayenv_jsmath::sin(x) }
+#[inline(always)] pub fn cos(x: f64) -> f64 { bayenv_jsmath::cos(x) }
+#[inline(always)] pub fn tan(x: f64) -> f64 { bayenv_jsmath::tan(x) }
+#[inline(always)] pub fn atan(x: f64) -> f64 { bayenv_jsmath::atan(x) }
+#[inline(always)] pub fn atan2(y: f64, x: f64) -> f64 { bayenv_jsmath::atan2(y, x) }
+#[inline(always)] pub fn acos(x: f64) -> f64 { bayenv_jsmath::acos(x) }
+#[inline(always)] pub fn exp(x: f64) -> f64 { bayenv_jsmath::exp(x) }
+#[inline(always)] pub fn log(x: f64) -> f64 { bayenv_jsmath::log(x) }
+#[inline(always)] pub fn tanh(x: f64) -> f64 { bayenv_jsmath::tanh(x) }
+#[inline(always)] pub fn hypot3(a: f64, b: f64, c: f64) -> f64 { bayenv_jsmath::hypot3(a, b, c) }
+#[inline(always)] pub fn hypot(a: f64, b: f64) -> f64 { bayenv_jsmath::hypot(a, b) }
 
 /// Math.max(a, b): NaN if either is NaN; max(+0, -0) = +0.
 #[inline(always)]
