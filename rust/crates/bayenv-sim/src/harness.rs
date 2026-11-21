@@ -194,12 +194,14 @@ pub fn check(dir: &str, max: usize, verbose: bool) -> (usize, Vec<Mismatch>, f64
 /// Router used by the harness: the shared bayenv_world::nav Router (BAYENV_ROUTER=stub selects the local route.js port).
 pub fn router_for(w: &Arc<World>) -> Box<dyn crate::sim::Router> {
     if std::env::var("BAYENV_ROUTER").as_deref() == Ok("stub") { return Box::new(crate::route_stub::AStar::new(w.clone(), 1.25)); }
-    let r = crate::route_stub::NavRouter::new(w, 1.25);
+    // one search graph per world, shared by every env on it
     if std::env::var("BAYENV_PAR").map(|v| !v.is_empty()).unwrap_or(false) {
+        let r = w.nav_base.get_or_init(|| crate::route_stub::NavRouter::new(w, 1.25)).fork();
         let g = std::sync::Arc::new(crate::route_stub::sim_graph_of(w));
         return Box::new(r.with_pool(g, rayon::current_num_threads()));
     }
-    Box::new(r)
+    // single-threaded envs (VecEnv): search state per worker thread, not per env
+    Box::new(crate::route_stub::ThreadNavRouter::new(w.clone()))
 }
 
 fn obstacle_spec(v: &Value) -> Option<crate::env::ObstacleSpec> {
