@@ -60,6 +60,11 @@ fn jsmath_matches_v8_dump() {
             let p = o + i * 24;
             let (a, b, want) = (f64_at(p), f64_at(p + 8), f64_at(p + 16));
             let got = eval(&name, a, b).unwrap_or_else(|| panic!("unknown function {name} in dump"));
+            // the two-lane kernels (jsmath_x2) on this input paired with its neighbour must give the same bits
+            let nb = if i + 1 < n { f64_at(o + (i + 1) * 24) } else { a };
+            let x2 = match name.as_str() { "tanh" => Some(bayenv_world::jsmath_x2::tanh_x2([a, nb])[0]), "atan" => Some(bayenv_world::jsmath_x2::atan_x2([nb, a])[1]),
+                "expm1" => Some(bayenv_world::jsmath_x2::expm1_x2([a, nb])[0]), _ => None };
+            let got = match x2 { Some(v) if v.to_bits() != got.to_bits() && !(v.is_nan() && got.is_nan()) => f64::from_bits(got.to_bits() ^ 1), _ => got };
             if got.to_bits() != want.to_bits() && !(got.is_nan() && want.is_nan()) {
                 bad += 1;
                 first.get_or_insert((a, b, got, want));

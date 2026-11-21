@@ -39,4 +39,11 @@ fn per_fn() {
         let lat = t.elapsed().as_secs_f64() * 1e9 / n as f64;
         println!("{name:5} throughput {thr:5.2} ns/call, latency {lat:5.2} ns/call  [{acc:.2e} {x:.2e}]");
     }
+    let x2s: [(&str, fn([f64; 2]) -> [f64; 2], f64); 2] = [("tanh_x2", bayenv_world::jsmath_x2::tanh_x2, 0.8), ("atan_x2", bayenv_world::jsmath_x2::atan_x2, 0.05)];
+    for (name, f, scale) in x2s {
+        let t = Instant::now(); let mut acc = 0.0;
+        for i in 0..n / 2 { let r = f([scale * ((i % 1000) as f64 * 0.001 - 0.5), scale * ((i % 997) as f64 * 0.001 - 0.5)]); acc += r[0] + r[1]; }
+        let thr = t.elapsed().as_secs_f64() * 1e9 / n as f64;
+        println!("{name} throughput {thr:5.2} ns per value  [{acc:.2e}]");
+    }
 }
