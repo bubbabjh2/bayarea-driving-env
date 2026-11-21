@@ -24,9 +24,12 @@ fn main() {
         let setup = t.elapsed().as_secs_f64() * 1e3;
         for _ in 0..(100 / batch).max(1) { sim.run_steps(batch); }
         if let Some(p) = sim.profiler.as_mut() { p.reset(); }
-        let t = Instant::now(); let mut k = 0; while k < steps { sim.run_steps(batch); k += batch; }
+        let t = Instant::now(); let mut k = 0; let (mut c46, mut c47, mut m46, mut m47) = (0u64, 0u64, 0u32, 0u32);
+        while k < steps { sim.run_steps(batch); k += batch; let s = sim.stats(); c46 += s[46] as u64; c47 += s[47] as u64; m46 = m46.max(s[46]); m47 = m47.max(s[47]); }
         let ms = t.elapsed().as_secs_f64() * 1e3 / steps as f64;
         println!("n {n} placed {} setup {setup:.0} ms: {ms:.3} ms/step ({:.0} steps/s, batch {batch}), driving {}, contacts {}", info.placed, 1000.0 / ms, sim.stats()[32], sim.counters.crash_events);
+        let nb = (steps / batch).max(1) as u64;
+        println!("  contacts found per step (last of each batch): mean {} max {}; left to the serial pass: mean {} max {}", c46 / nb, m46, c47 / nb, m47);
         if let Some(p) = &sim.profiler {
             let rows = p.report(); let tot: f64 = rows.iter().map(|r| r.ms).sum();
             println!("  profile ({} timestamps, {} profiled steps): GPU step (one pass) {:.3} ms; per-dispatch sum {:.3} ms in {} dispatches",

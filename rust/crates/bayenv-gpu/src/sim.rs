@@ -44,6 +44,9 @@ pub struct GpuOptions {
     pub keep_events: bool,
     /// size the contact-resolve rounds by the contacts found (indirect dispatch; identical results). JS: off
     pub indirect_resolve: bool,
+    /// contact resolve in one dispatch (kernels/resolve_fused.wgsl: one workgroup runs the rounds with barriers
+    /// instead of 37 dispatches; same contacts resolved per round, bit-identical state). JS: off
+    pub fused_resolve: bool,
     /// GPU timestamp profile of the first step of every batch (`crate::profile`; needs TIMESTAMP_QUERY). JS: opts.profile
     pub profile: bool,
 }
@@ -67,7 +70,7 @@ impl Default for GpuOptions {
     fn default() -> Self {
         GpuOptions { capacity: 131072, dt: 0.05, start_time: 5.0 * 3600.0, seed: 1, obs: ObsMode::V2, steer_rate: false, decide_every: 1, features: Features::default(),
             controls: true, junctions: true, table_bits: 18, contact_cap: 131072, ev_cap: 16384, spawn_queue: 16384, op_cap: 16384, max_blocks: 4096, route_slack: 1 << 22,
-            resolve_rounds: 12, progress_weight: 1.0, jerk_weight: 0.5, jerk_reward: false, grade_obs: true, squeeze_delay: 15.0 * 60.0, deadlock_break: 0, reroute: true, keep_events: false, indirect_resolve: true, profile: false }
+            resolve_rounds: 12, progress_weight: 1.0, jerk_weight: 0.5, jerk_reward: false, grade_obs: true, squeeze_delay: 15.0 * 60.0, deadlock_break: 0, reroute: true, keep_events: false, indirect_resolve: true, fused_resolve: true, profile: false }
     }
 }
 
@@ -167,6 +170,8 @@ pub struct GpuSim {
     /// a submitted batch whose readback / events are processed lazily (`run_steps_async`, `sync`)
     pending: Option<Pending>,
     io_host: Vec<u32>,
+    /// stages(): build the JS dispatch list (peek_stages)
+    js_stages: bool,
     /// timestamp profiler (opts.profile)
     pub profiler: Option<crate::profile::Profiler>,
 }
@@ -253,7 +258,7 @@ impl GpuSim {
             refuel_queue: Vec::new(), reroute_queue: Default::default(), last_reroute: HashMap::new(), lot: 0, new_pose: false, crashes: Vec::new(), active: Vec::new(),
             counters: Counters::default(), gpu_stats: [0; 64], events: Vec::new(), closed_key: None, closed_n: 0, closed_edges: Vec::new(),
             edge_speed_ema: HashMap::new(), edge_speed_order: Vec::new(), traffic_penalty: HashMap::new(), penalty_order: Vec::new(), pending_penalty: None, next_traffic: -1e9,
-            router: None, packer: None, out_staging: None, pending: None, staging, io_host: vec![0; io_words], profiler: None, blob, gpu, opts,
+            router: None, packer: None, out_staging: None, pending: None, staging, io_host: vec![0; io_words], profiler: None, js_stages: false, blob, gpu, opts,
         };
         if !use_j { sim.blob.j_m = None; }
         sim.blob.words = Vec::new();   // uploaded: no host copy kept (block writes go straight to the GPU)
@@ -281,7 +286,11 @@ impl GpuSim {
             hs.into_iter().map(|h| h.join().unwrap()).collect()
         });
         for (sp, k) in specs.iter().zip(out) { self.k.insert(sp.label, k?); }
-        self.k.insert("contactArgs", self.gpu.kernel("contactArgs", include_str!("../kernels/contact_args.wgsl"), "main")?);
+        self.k.insert("contactArgs", self.gpu.kernel("contactArgs", kernels::host_raw("contact_args"), "main")?);
+        if self.opts.fused_resolve {
+            let src = defines::prefix(self.opts.obs, self.cap) + &format!("const RF_ROUNDS: u32 = {}u;\n", self.opts.resolve_rounds) + &kernels::resolve_includes(kernels::host_raw("resolve_fused"));
+            self.k.insert("contacts.resolveFused", self.gpu.kernel("contacts.resolveFused", &src, "resolveFused")?);
+        }
         Ok(())
     }
 
@@ -426,9 +435,11 @@ impl GpuSim {
             stage = "barrier"; push!("contacts.barrier", "contacts.barrier", g(cap as usize, 128));
             stage = "detect"; push!("contacts.detect", "contacts.detect", g(cap as usize, 128));
             stage = "resolve";
-            let wg = if self.opts.indirect_resolve { push!("contactArgs", "contactArgs", 1); 0 } else { g(self.opts.contact_cap, 128) };
-            for _ in 0..self.opts.resolve_rounds { push!("contacts.ownClear", "contacts.ownClear", wg); push!("contacts.ownMin", "contacts.ownMin", wg); push!("contacts.resolveRound", "contacts.resolveRound", wg); }
-            push!("contacts.resolve", "contacts.resolve", 1);
+            if self.opts.fused_resolve && !self.js_stages { push!("contacts.resolveFused", "contacts.resolveFused", 1); } else {
+                let wg = if self.opts.indirect_resolve && !self.js_stages { push!("contactArgs", "contactArgs", 1); 0 } else { g(self.opts.contact_cap, 128) };
+                for _ in 0..self.opts.resolve_rounds { push!("contacts.ownClear", "contacts.ownClear", wg); push!("contacts.ownMin", "contacts.ownMin", wg); push!("contacts.resolveRound", "contacts.resolveRound", wg); }
+                push!("contacts.resolve", "contacts.resolve", 1);
+            }
         }
         stage = "lists"; push!("build.clear", "build.clear", g(self.n_counts, 256)); push!("build.count", "build.count", g(cap as usize, 256));
         for l in 0..self.scan.len() { push!("scanBlocks", &format!("scan{l}"), self.scan[l].blocks as u32); }
@@ -496,10 +507,15 @@ impl GpuSim {
         if let Some(p) = &self.profiler { p.resolve(enc); }
     }
 
-    /// The dispatch list (kernel, x) of the next step (diagnostics / oracle comparison).
+    /// The JS dispatch list (kernel, x) of the next step, as `gpuSim.js _stages` would record it (diagnostics /
+    /// oracle comparison: the host optimisations of `GpuOptions` are left out).
     pub fn peek_stages(&mut self, first: bool, op_count: usize) -> Vec<(&'static str, u32)> {
-        let np = self.new_pose; let wg = ((self.opts.contact_cap + 127) / 128) as u32;
-        let v = self.stages(self.step + 1, first, op_count).into_iter().filter(|d| d.kernel != "contactArgs").map(|d| (d.kernel, if d.x == 0 { wg } else { d.x })).collect(); self.new_pose = np; v
+        let np = self.new_pose; self.js_stages = true;
+        let v = self.stages(self.step + 1, first, op_count).into_iter().map(|d| (d.kernel, d.x)).collect(); self.new_pose = np; self.js_stages = false; v
+    }
+    /// The dispatch list of the next step as encoded with the current options (stage, kernel, x; x = 0: indirect).
+    pub fn peek_dispatches(&mut self, first: bool, op_count: usize) -> Vec<Dispatch> {
+        let np = self.new_pose; let v = self.stages(self.step + 1, first, op_count); self.new_pose = np; v
     }
 
     /// Run n sim steps in one submit, then read back stats + events and process them (host side).
