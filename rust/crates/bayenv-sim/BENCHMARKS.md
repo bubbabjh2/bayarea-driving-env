@@ -74,6 +74,11 @@ rem_pio2, spatial-hash queries, lead_base, lane geometry (offset_point, y_along,
 | junction moves_into map once per world (World::mv_into) | -24 MB per env |
 | router: one search graph per world (World::nav_base) + search state per worker thread (ThreadNavRouter) | -36 MB per env |
 | interleaved vehicle dynamics in single-threaded phase A: 2 or 4 consecutive cars' substeps alternate (step_dynamics2 / 4; each car's ops unchanged) | real 2k single thread ~3,900 -> 4,300 (2-wide) / 4,350 (4-wide) steps/s (+11-12 %); VecEnv 14 x real 2k 6.6 -> 7.5 / 7.6 M agent-steps/s (+15 %), 14 x real 20k 4.27 -> 4.61 / 4.62 M (+8 %) (load 6-16, lock) |
+| phase-A results dense in slot order in a reused buffer (no high-sized Option vec per step; pose as 5 fields) | real 2k single thread 4,520 -> 4,790 steps/s (+6 %), real 20k 228 -> 240 (+5 %); real 100k parallel within noise |
+| contacts: candidates j <= i dropped inside the spatial-hash walk; LaneIndex rebuild without its counting pass | no measurable change (kept: same results, less work) |
+| rejected: jsmath::sincos (one argument reduction for sin + cos, bit-identical) in step_dynamics | -4 % (4,770 -> 4,585 steps/s at real 2k); hr / steer are mostly below pi/4 (no reduction to share) |
+| rejected: cache of avoid / penalty reroute queries per (closed set, penalty) epoch | 512 queries in 3,000 steps at real 20k, 0 repeats |
+| measured for stage 2 (vector fdlibm): scalar throughput per call atan 2.7 ns, tanh 4.4 ns, tan 3.0 ns, sin 1.6 ns, cos 2.0 ns (latency 9.5 / 22.8 / 11.5 / 7.3 / 9.5 ns); per car-step ~180 ns of transcendentals in a ~400 ns interleaved step_dynamics | a perfect 2-lane port would save at most ~90 ns per car-step: <= ~8 % end to end at real 2k, ~4 % at real 20k |
 | rejected: fixed-point skip in step_dynamics (reuse a substep when (u, v, r, steer, sl, ax) repeat bitwise) | only 0.8 % (2k) / 1.4 % (20k) of substeps repeat |
 | rejected: periodic re-ordering of cars by edge / lane for locality | slot order is semantic (slot-order commits, contact pass order, event order) |
 | not pursued: allocation-free step | 0.35 allocations per car-step (73 per step at 2k, 701 at 20k): < 1 % of step time |
