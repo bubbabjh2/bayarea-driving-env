@@ -18,7 +18,11 @@
 //! for `bayenv_world::graph::SimGraph`, so the GPU host generates directly on the shared graph (no World copy).
 //! Both impls expose the same values (SimGraph u32 / u8 integers widened), so output is bit-identical.
 //!
-//! Not ported (throw in JS-only paths / unused by env.js): `region` filters, `cfg.router`, `snapTolerance` overrides.
+//! Region filters (population.js regionFilter / REGION_PRESETS / mergeCfg preset `pop` overrides) restrict homes AND
+//! workplaces (the `all` / `homes` pools and the nearestNode filter); see [`Region`]. JS function regions
+//! (`region: (x, z) => bool`) are not representable; use [`Region::Bbox`] etc.
+//!
+//! Not ported (throw in JS-only paths / unused by env.js): function regions, `cfg.router`, `snapTolerance` overrides.
 use crate::jm;
 use crate::population::Population;
 use crate::rng::{hash_seed, Rng};
@@ -46,6 +50,8 @@ const REALISM_P_CROSS: f64 = 0.05;
 /// roadGraph.js HIGHWAY_RANK of the default homeClasses ['residential', 'tertiary', 'living_street']
 pub const DEFAULT_HOME_RANKS: [i32; 3] = [1, 3, 0];
 const R_EARTH: f64 = 6371008.8;
+/// POPULATION_DEFAULTS.projection (lat0, lon0)
+pub const DEFAULT_PROJECTION: (f64, f64) = (37.55, -122.15);
 
 /// The graph queries population generation needs, on top of [`PlanGraph`] (edge from / to / length / speed, node x / z).
 pub trait PopGraph: PlanGraph {
@@ -180,6 +186,120 @@ pub struct PopConfig {
     pub delta_norm_cap: f64,
     /// options.range: commuter ids [a, b) (default [0, n))
     pub range: Option<(usize, usize)>,
+    /// cfg.region: restrict homes and workplaces (None = whole graph). Set it through [`PopConfig::set_region`]
+    /// (or apply_json) so that preset `pop` overrides (e.g. `bridges`) are applied like mergeCfg does.
+    pub region: Option<Region>,
+}
+
+/// population.js cfg.region (regionFilter): homes AND workplaces must satisfy it (routes may leave it).
+#[derive(Clone, Debug, PartialEq)]
+pub enum Region {
+    /// `{ bbox: [minX, minZ, maxX, maxZ] }` in graph x / z
+    Bbox([f64; 4]),
+    /// `{ side: 0 | 1 }`: bay side (axis.sideOf), 0 = Peninsula / west
+    Side(u8),
+    /// `{ preset: key }`: REGION_PRESETS key (sf, pen, sj, eb, ebs, marin, bridges, hills, wsj, bay) or the legacy
+    /// 'peninsula-101' / 'eastbay-880'. 'bay' = no restriction.
+    Preset(String),
+}
+
+/// population.js REGION_PRESETS boxes: [latMin, latMax, lonMin, lonMax] (None for 'bay'; 'sf' / 'wsj' / legacy presets
+/// use their x / z definitions in regionFilter and these boxes are only descriptive for sf / wsj).
+pub fn region_preset_boxes(key: &str) -> Option<&'static [[f64; 4]]> {
+    Some(match key {
+        "sf" => &[[37.712, 37.838, -122.499, -122.340]],
+        "pen" => &[[37.43, 37.66, -122.46, -122.13]],
+        "sj" => &[[37.25, 37.43, -122.10, -121.80]],
+        "eb" => &[[37.72, 37.90, -122.32, -122.14]],
+        "ebs" => &[[37.48, 37.70, -122.14, -121.90]],
+        "marin" => &[[37.83, 37.97, -122.56, -122.44], [37.77, 37.81, -122.52, -122.40]],
+        "bridges" => &[[37.77, 37.84, -122.42, -122.26], [37.53, 37.65, -122.33, -122.06], [37.44, 37.54, -122.20, -121.99]],
+        "hills" => &[[37.38, 37.53, -122.40, -122.22], [37.25, 37.30, -122.08, -121.93], [37.80, 37.90, -122.25, -122.16], [37.30, 37.42, -121.84, -121.80]],
+        "wsj" => &[[37.223, 37.353, -122.044, -121.884]],
+        _ => return None,
+    })
+}
+/// REGION_PRESETS keys (population.js order)
+pub const REGION_PRESET_KEYS: [&str; 10] = ["sf", "pen", "sj", "eb", "ebs", "marin", "bridges", "hills", "wsj", "bay"];
+/// population.js BREAKDOWN_REGIONS
+pub const BREAKDOWN_REGIONS: [&str; 8] = ["sf", "marin", "eb", "bridges", "pen", "ebs", "hills", "sj"];
+/// REGION_PRESETS[key].pop (mergeCfg preset overrides, explicit options win), as generatePopulation options JSON.
+pub fn region_preset_pop(key: &str) -> Option<Value> {
+    match key { "bridges" => Some(serde_json::json!({ "localShare": 0.9, "local": { "medianM": 9000, "minM": 3000, "maxM": 20000 } })), _ => None }
+}
+
+impl Region {
+    /// Parse a JS region object ({ preset } | { bbox } | { side }; checked in regionFilter's order: bay, bbox, side, preset).
+    pub fn from_json(v: &Value) -> Result<Option<Region>, String> {
+        if v.is_null() { return Ok(None); }
+        let preset = v.get("preset").and_then(|p| p.as_str());
+        if preset == Some("bay") { return Ok(None); }
+        if let Some(b) = v.get("bbox").and_then(|b| b.as_array()) {
+            if b.len() != 4 { return Err(format!("region bbox needs 4 numbers: {v}")); }
+            let g = |i: usize| b[i].as_f64().ok_or_else(|| format!("region bbox: {v}"));
+            return Ok(Some(Region::Bbox([g(0)?, g(1)?, g(2)?, g(3)?])));
+        }
+        if let Some(s) = v.get("side").filter(|s| !s.is_null()) { return Ok(Some(Region::Side(s.as_f64().ok_or("region side")? as u8))); }
+        match preset {
+            Some(p) if matches!(p, "peninsula-101" | "eastbay-880") || region_preset_boxes(p).is_some() => Ok(Some(Region::Preset(p.to_string()))),
+            _ => Err(format!("unknown region {v}")),
+        }
+    }
+    pub fn preset(key: &str) -> Region { Region::Preset(key.to_string()) }
+}
+
+/// regionFilter(region, axis) resolved: (x, z) -> inside.
+#[derive(Clone, Debug)]
+pub enum RegionFilter {
+    Bbox([f64; 4]),
+    Side(u8, Axis),
+    /// peninsula-101 (side 0) / eastbay-880 (side 1): |signed distance from the bay centreline| < 8 km
+    Strip(u8, Axis),
+    /// 'sf': 14 km box around axis.sf
+    SfBox(P2),
+    /// lat/lon boxes converted to [minX, minZ, maxX, maxZ] (latLonBoxesFilter; 'wsj' is its literal x / z box)
+    Boxes(Vec<[f64; 4]>),
+}
+impl RegionFilter {
+    /// `proj`: axis.proj || POPULATION_DEFAULTS.projection
+    pub fn new(region: &Region, axis: &Axis, proj: (f64, f64)) -> Result<Option<RegionFilter>, String> {
+        Ok(Some(match region {
+            Region::Bbox(b) => RegionFilter::Bbox(*b),
+            Region::Side(s) => RegionFilter::Side(*s, *axis),
+            Region::Preset(p) => match p.as_str() {
+                "bay" => return Ok(None),
+                "peninsula-101" => RegionFilter::Strip(0, *axis),
+                "eastbay-880" => RegionFilter::Strip(1, *axis),
+                "sf" => RegionFilter::SfBox(axis.sf),
+                "wsj" => RegionFilter::Boxes(vec![[9382.0, 21865.0, 23487.0, 36321.0]]),
+                k => match region_preset_boxes(k) {
+                    Some(bx) => RegionFilter::Boxes(lat_lon_boxes(bx, proj)),
+                    None => return Err(format!("unknown region preset {k}")),
+                },
+            },
+        }))
+    }
+    #[inline]
+    pub fn contains(&self, x: f64, z: f64) -> bool {
+        match self {
+            RegionFilter::Bbox([a, b, c, d]) => x >= *a && x <= *c && z >= *b && z <= *d,
+            RegionFilter::Side(s, ax) => ax.side_of(x, z) == *s,
+            RegionFilter::Strip(s, ax) => ax.side_of(x, z) == *s && ((x - ax.mid.x) * ax.v.x + (z - ax.mid.z) * ax.v.z).abs() < 8000.0,
+            RegionFilter::SfBox(c) => (x - c.x).abs() < 7000.0 && (z - c.z).abs() < 7000.0,
+            RegionFilter::Boxes(bb) => bb.iter().any(|b| x >= b[0] && x <= b[2] && z >= b[1] && z <= b[3]),
+        }
+    }
+}
+
+/// latLonBoxesFilter boxes in the graph projection: [a.x, a.z, b.x, b.z], a = (latMax, lonMin), b = (latMin, lonMax).
+pub fn lat_lon_boxes(boxes: &[[f64; 4]], proj: (f64, f64)) -> Vec<[f64; 4]> {
+    boxes.iter().map(|&[la0, la1, lo0, lo1]| { let a = project_lat_lon((la1, lo0), proj); let b = project_lat_lon((la0, lo1), proj); [a.x, a.z, b.x, b.z] }).collect()
+}
+
+/// regionClassifier(proj, BREAKDOWN_REGIONS): (x, z) -> first preset key whose boxes contain it, or "other".
+pub fn region_classifier(proj: (f64, f64)) -> impl Fn(f64, f64) -> &'static str {
+    let fs: Vec<(&'static str, Vec<[f64; 4]>)> = BREAKDOWN_REGIONS.iter().map(|&k| (k, lat_lon_boxes(region_preset_boxes(k).unwrap(), proj))).collect();
+    move |x, z| { for (k, bb) in &fs { if bb.iter().any(|b| x >= b[0] && x <= b[2] && z >= b[1] && z <= b[3]) { return *k; } } "other" }
 }
 
 impl Default for PopConfig {
@@ -199,7 +319,7 @@ impl Default for PopConfig {
             home_ranks: DEFAULT_HOME_RANKS.to_vec(), astar_weight: 1.25,
             departures: Departures::Curve, curve_start: 6.0 * H, curve_bin: 15.0 * MIN,
             curve_share: vec![0.037, 0.042, 0.037, 0.041, 0.079, 0.08, 0.076, 0.079, 0.106, 0.095, 0.073, 0.067, 0.057, 0.049, 0.044, 0.038],
-            mix: Mix::Spec, axis: AxisSpec::Projection(None), base_delta: None, delta_norm_cap: 0.5, range: None,
+            mix: Mix::Spec, axis: AxisSpec::Projection(None), base_delta: None, delta_norm_cap: 0.5, range: None, region: None,
         }
     }
 }
@@ -211,8 +331,23 @@ impl PopConfig {
     pub fn env_synthetic(n: usize, seed: f64) -> PopConfig {
         PopConfig { axis: AxisSpec::Synth, long_min_m: 5000.0, long_max_m: 16000.0, departures: Departures::Spec, ..PopConfig::env(n, seed) }
     }
+    /// Set cfg.region like generatePopulation({ region }) does: a preset's `pop` overrides (REGION_PRESETS[key].pop,
+    /// e.g. bridges) are applied to this config first. Explicit options set after this call win (mergeCfg); use
+    /// apply_json with both `region` and the options to get the same precedence in one step.
+    pub fn set_region(&mut self, r: Option<Region>) {
+        if let Some(Region::Preset(p)) = &r { if let Some(pop) = region_preset_pop(p) { self.apply_json(&pop); } }
+        self.region = r;
+    }
     /// Apply a JSON object of generatePopulation options (the subset ported here; nested objects merge like mergeCfg).
+    /// `region` ({ preset } | { bbox } | { side }) is applied first, with its preset `pop` overrides, then the other
+    /// options on top (explicit options win, as in mergeCfg). Panics on an unknown region.
     pub fn apply_json(&mut self, o: &Value) {
+        if let Some(r) = o.get("region") {
+            let reg = Region::from_json(r).unwrap_or_else(|e| panic!("population_gen: {e}"));
+            // mergeCfg keys the pop overrides off options.region.preset (also when bbox / side take precedence in regionFilter)
+            if let Some(pop) = r.get("preset").and_then(|p| p.as_str()).and_then(region_preset_pop) { self.apply_json(&pop); }
+            self.region = reg;
+        }
         let f = |v: &Value, k: &str| v.get(k).and_then(|x| x.as_f64());
         if let Some(x) = f(o, "n") { self.n = x as usize; }
         if let Some(x) = f(o, "seed") { self.seed = x; }
@@ -236,7 +371,6 @@ impl PopConfig {
             if let Some(x) = f(l, "start") { self.curve_start = x; } if let Some(x) = f(l, "bin") { self.curve_bin = x; }
             if let Some(a) = l.get("share").and_then(|a| a.as_array()) { self.curve_share = a.iter().map(|v| v.as_f64().unwrap()).collect(); }
         }
-        assert!(o.get("region").is_none(), "population_gen: region filters are not ported");
     }
 }
 
@@ -413,6 +547,9 @@ pub fn delta_for(seed_str: &str, cfg: &PopConfig, base: &[f32; DELTA_SIZE], id: 
 
 /// population.js _context (pools, axis, type CDFs, base genome); the router is supplied per thread.
 pub struct Context {
+    /// 1 for nodes allowed as a workplace snap target (ctx.inScc: SCC and inside the region)
+    pub in_pool: Vec<u8>,
+    pub region: Option<RegionFilter>,
     pub scc: Vec<u8>, pub all: Vec<i32>, pub homes: Vec<i32>, pub axis: Axis,
     pub type_cum: Vec<f64>, pub type_cum_realism: Vec<f64>, pub base: [f32; DELTA_SIZE], pub nearest: NearestNode, pub seed_str: String,
 }
@@ -420,18 +557,27 @@ pub struct Context {
 impl Context {
     pub fn new<G: PopGraph + ?Sized>(g: &G, cfg: &PopConfig) -> Result<Context, String> {
         let scc = largest_scc(g);
+        let (axis, proj) = match cfg.axis {
+            AxisSpec::Explicit(a) => (a, DEFAULT_PROJECTION), AxisSpec::Synth => (Axis::synth(g), DEFAULT_PROJECTION),
+            AxisSpec::Projection(p) => { let pr = p.unwrap_or(cfg.projection); (Axis::from_cfg(cfg, pr), pr) }
+        };
+        let region = match &cfg.region { Some(r) => RegionFilter::new(r, &axis, proj)?, None => None };
+        let (nx, nz) = (g.nx(), g.nz());
         let (mut homes, mut all) = (Vec::new(), Vec::new());
         // nodeLowRank (roadGraph.js): min rank over the edges touching the node (127 if none)
         let mut low = vec![127i32; g.node_count()];
         for e in 0..g.edge_count() { let r = g.edge_rank(e); for k in [g.edge_from(e) as usize, g.edge_to(e) as usize] { if r < low[k] { low[k] = r; } } }
         for i in 0..g.node_count() {
             if scc[i] == 0 { continue; }
+            if let Some(f) = &region { if !f.contains(nx[i], nz[i]) { continue; } }
             all.push(i as i32);
             if cfg.home_ranks.contains(&low[i]) { homes.push(i as i32); }
         }
         if all.len() < 2 { return Err("graph has too few routable nodes".into()); }
-        let axis = match cfg.axis { AxisSpec::Explicit(a) => a, AxisSpec::Synth => Axis::synth(g), AxisSpec::Projection(p) => Axis::from_cfg(cfg, p.unwrap_or(cfg.projection)) };
+        // inScc: SCC node inside the region (the workplace snap filter)
+        let in_pool = match &region { None => scc.clone(), Some(f) => (0..g.node_count()).map(|k| (scc[k] == 1 && f.contains(nx[k], nz[k])) as u8).collect() };
         Ok(Context {
+            in_pool, region,
             homes: if homes.is_empty() { all.clone() } else { homes }, all, scc, axis,
             type_cum: prefix_sums(&TYPE_WEIGHTS), type_cum_realism: prefix_sums(&REALISM_TYPE_WEIGHTS),
             base: make_genome(cfg.base_delta.as_deref(), cfg.delta_norm_cap), nearest: NearestNode::new(g), seed_str: js_num_str(cfg.seed),
@@ -455,7 +601,7 @@ pub fn generate_commuter<G: PopGraph + ?Sized>(g: &G, cfg: &PopConfig, ctx: &Con
         for b in REALISM_BINS { if q < b.2 { found = Some(b); break; } q -= b.2; }
         r_bin = found.unwrap_or(REALISM_BINS[0]); is_local = r_bin.1 <= 15.0;
     }
-    let in_scc = |k: usize| ctx.scc[k] == 1;
+    let in_scc = |k: usize| ctx.in_pool[k] == 1;
     let mut home = ctx.homes[rng.int(ctx.homes.len())];
     struct Best { work: i32, route: Vec<i32>, l: f64, d: f64, ok: bool }
     let mut best: Option<Best> = None;

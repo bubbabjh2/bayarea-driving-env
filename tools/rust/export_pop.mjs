@@ -5,7 +5,11 @@
 //   node --max-old-space-size=14000 tools/rust/export_pop.mjs --world real --n 10000 --seed 2 --out /tmp/p [--parallel] [--opts '{"returnTrips":true}']
 //     --world     synthetic | real | scenario:<dir name in data/scenarios>
 //     --parallel  real world only: popParallel.js generatePopulationParallel (what env.js uses for n >= 4000)
-//     --opts      population overrides (generatePopulation options; scenario: scenarioPopulation options)
+//     --opts      population overrides (generatePopulation options; scenario: scenarioPopulation options), e.g. a region
+//                 restriction the way tools/train/region-pack.mjs builds it:
+//                 --parallel --nostations --opts '{"returnTrips":true,"region":{"preset":"sf"}}'
+//     --workers   popParallel worker count (default cpus - 2; output does not depend on it)
+//     --nostations  real world: loadWorld({ stations: false }) (region-pack.mjs; the graph is the same)
 import fs from 'node:fs';
 import { buildGraph } from '../../src/sim/roadGraph.js';
 import { makeSynthGraph } from '../../src/sim/synthGraph.js';
@@ -27,10 +31,10 @@ if (world === 'synthetic') {
   const t = Date.now(); pop = generatePopulation(graph, popOpts); ms = Date.now() - t;
 } else if (world === 'real') {
   const { loadWorld } = await import('../../src/sim/data.js');
-  const w = await loadWorld({}); graph = w.graph; stations = w.stations; controls = w.controls;
+  const w = await loadWorld(flag('nostations') ? { stations: false } : {}); graph = w.graph; stations = w.stations ?? []; controls = w.controls;
   popOpts = { n, seed, returnTrips: false, ...extra };
   const t = Date.now();
-  if (flag('parallel')) { const { generatePopulationParallel } = await import('../../src/sim/popParallel.js'); pop = await generatePopulationParallel(graph, popOpts, {}); }
+  if (flag('parallel')) { const { generatePopulationParallel } = await import('../../src/sim/popParallel.js'); pop = await generatePopulationParallel(graph, popOpts, arg('workers') ? { workers: +arg('workers') } : {}); }
   else pop = generatePopulation(graph, popOpts);
   ms = Date.now() - t;
 } else if (world.startsWith('scenario:')) {

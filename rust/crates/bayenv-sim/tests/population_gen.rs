@@ -1,6 +1,7 @@
 //! Population generator vs the JS oracle (tools/rust/export_pop.mjs or trace.mjs runs). Every subdirectory of
 //! $BAYENV_POP_DIR holding world.pack + pop.pack is checked: all Population arrays bit-exact (f64 / f32 bits, routes).
-//! Skips when BAYENV_POP_DIR is unset. Timings: serial (1 thread) vs rayon vs the JS time stored in pop.pack meta.ms.
+//! Region runs (popOpts.region, e.g. export_pop.mjs --opts '{"region":{"preset":"sf"}}') also check that every home
+//! and workplace is inside the region. Skips when BAYENV_POP_DIR is unset. Timings: serial (1 thread) vs rayon vs the JS time stored in pop.pack meta.ms.
 use bayenv_sim::pack::Pack;
 use bayenv_sim::population::Population;
 use bayenv_sim::population_gen::*;
@@ -83,6 +84,12 @@ fn population_matches_js() {
             let tp = t.elapsed().as_secs_f64() * 1e3;
             let b = compare(&p.pop, &s.pop);
             assert_eq!(b, 0, "{name}: rayon != serial");
+            // region runs: every home and workplace lies inside the region (regionFilter)
+            if let Some(f) = Context::new(&*world, &cfg).unwrap().region {
+                let out = s.pop.home.iter().chain(s.pop.work.iter()).filter(|&&k| !f.contains(world.nx[k as usize], world.nz[k as usize])).count();
+                assert_eq!(out, 0, "{name}: {out} homes / workplaces outside the region");
+                eprintln!("  {name}: region {:?}: all {} homes / workplaces inside", cfg.region, 2 * s.pop.n);
+            }
             (s.pop, t1, Some(tp))
         };
         let bad = compare(&r1, &js);
