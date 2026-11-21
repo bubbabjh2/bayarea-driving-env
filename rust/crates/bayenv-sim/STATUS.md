@@ -44,6 +44,19 @@ Not ported: events / tripLog (no effect on state), getStats string fields, the l
 * VecEnv: independent envs on the rayon pool, sharing `Arc<World>` / `Arc<Population>` read-only. Never clone the
   world Arc in hot paths (`Sim::gw()`): the atomic refcount made 14 threads slower than 4.
 
+## API for other crates (stable)
+
+* `Env` (env.rs): `new` / `create_real` / `reset`, `act(slot, Action)`, `act_rows` (N,3) / `act_batch(slots, n*3)`,
+  `step(k)`, `step_events(k)`, `events()` (per-slot `sim::Event` log, kinds 1..8, sorted by (slot, kind) per step),
+  `observe_batch(ObsKind::{V3, Flat, FlatV3}, out, slots)`, `observe_into` (rows = slots), `state_columns`,
+  `progress_m`, `crash_flags`, `stats`, `outcomes`. `VecEnv` for many envs.
+* `Sim::batch_policy`: batched external policy called once per step inside drive (JS batchDrive semantics;
+  checked with `trace.mjs --hook 1`). Driver queries for external drivers: `yield_required`, `box_busy`,
+  `rubberneck`, `speed_cap`, `lane_open`, `blocked_ahead`, `lane_gap_ok`; lane ends are in `vs.lane_end_*`.
+* `fuel::StationNetwork::plan<G: PlanGraph>` and `population_gen::*<G: PopGraph>` work on `bayenv_world`'s SimGraph
+  directly (no copy). `sim::Router` takes std HashSet / HashMap (bayenv-gpu implements it).
+* `fuel::Plan.detour_time` = via-station time - direct time (routeViaStation detourTime).
+
 ## Open items / ideas
 
 * Stationary-car fast path in `step_dynamics` (exact fixed point incl. signed zeros) — not done.
