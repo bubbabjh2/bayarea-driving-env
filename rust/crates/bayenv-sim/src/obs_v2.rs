@@ -11,8 +11,8 @@
 //! position-mode overwrite of 41..43 with the road grade inputs (`clampG`). Its inputs are the env obs (`obs.rs
 //! fill_obs` + signals), the agent's 64-float profile (traits = delta[0..4]), `VEHICLE_PARAMS` and the per-trip state
 //! below. NOT ported (brain-only, after / beside the 70 raw floats): the network (net.js / net3.js, its feature /
-//! normalisation layers), the reflex (adjust.js `reflex`), the heuristic teacher and its `eyes.near` bookkeeping,
-//! rewards, the v3 extension (inputs 70..357, already in `obs.rs fill_obs3`), the in-driver reaction delay
+//! normalisation layers), the reflex (adjust.js `reflex`), the heuristic teacher (but its input, `eyes.near`, IS
+//! exported: [`Near`], via [`V2Encoder::encode_v2_near`] / [`V2Encoder::encode_batch_near`]), rewards, the v3 extension (inputs 70..357, already in `obs.rs fill_obs3`), the in-driver reaction delay
 //! (`applyReactionDelay`, off), re-route requests (`_checkReroute`, needs a router + the driver's own policy).
 //! Junction heading kinks (63 / 64) are disabled in guidance.js (`KINKS_ENABLED = false`): always 0 / 1.
 //!
@@ -279,13 +279,67 @@ impl Guidance {
 
     /// Guidance.laneEndAhead(d, lane, {maxDist}): distance to the end of `lane` (sim lane mapping), or None
     pub fn lane_end_ahead(&self, g: &World, d: f64, lane: i32, max_dist: f64) -> Option<f64> {
+        self.lane_end_ahead_side(g, d, lane, max_dist).map(|x| x.0)
+    }
+    /// Guidance.laneEndAhead(d, lane, {maxDist}) as (distance, side), or None
+    pub fn lane_end_ahead_side(&self, g: &World, d: f64, lane: i32, max_dist: f64) -> Option<(f64, i32)> {
         let i = self.edge_pos_at(d);
         let stop_at = self.maneuvers.iter().find(|m| m.stop && !m.done).map_or(-1, |m| m.edge_pos as i32 - 1);
         if stop_at == i as i32 { return None; }
         let e = self.edge_ids[i] as usize;
         if lane < 0 || lane >= g.e_lanes[e] { return None; }
         let o = lane_end_ahead(g, &self.edge_ids, i, d - self.start_dist[i], lane, max_dist, stop_at);
-        if o.dist < 1e8 { Some(o.dist) } else { None }
+        if o.dist < 1e8 { Some((o.dist, o.side)) } else { None }
+    }
+}
+
+/// driver.js `this.eyes.near` after Driver.sense: the raw neighbour summary (metres, m/s; Infinity = none) eyes.js
+/// `look` fills from obs.neighbors, then Driver._adjust mirrors the adjust.js results into it (predicted heading
+/// error; lane-end / junction-conflict obstacles as stopped leaders / side-lane leaders; lane-end distances).
+/// Field names = the JS keys (camelCase in [`NEAR_FIELDS`]). Values are the JS f64 numbers (gaps / speeds from the
+/// f32 obs.neighbors widened, `v + nb[k]` in f64), bit-exact.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct Near {
+    /// own-lane leader gap (m; min with the own lane end (when not sim-injected) and the junction-conflict obstacle)
+    pub leader_gap: f64, pub leader_speed: f64,
+    /// leader speed - my speed (nb[1]; -speed when an obstacle is the leader)
+    pub leader_rel: f64,
+    pub behind_gap: f64, pub behind_speed: f64,
+    /// left-lane ahead gap (min with the left lane's end as a stopped obstacle), behind gap, speeds
+    pub left_ahead: f64, pub left_behind: f64, pub left_ahead_speed: f64, pub left_behind_speed: f64,
+    pub right_ahead: f64, pub right_behind: f64, pub right_ahead_speed: f64, pub right_behind_speed: f64,
+    pub left_exists: bool, pub right_exists: bool,
+    /// delay-compensated heading error (adjust.js r.he; + right, rad)
+    pub heading_error: f64,
+    /// adjust.js r.ownGap / r.leftGap / r.rightGap: lane-end obstacle gaps (Infinity = none; ownGap is Infinity when
+    /// the sim injects its own lane-end obstacle, i.e. always with the sim's obs)
+    pub lane_end_gap: f64, pub left_end_gap: f64, pub right_end_gap: f64,
+    /// own lane end: obs.laneEndDistance / laneEndSide when finite, else the 400 m guidance plan (Infinity / 0 = none)
+    pub end_dist: f64, pub end_side: f64,
+    /// left / right lane end distances (guidance, 400 m lookahead; Infinity = none)
+    pub left_end_dist: f64, pub right_end_dist: f64,
+}
+/// JS keys of `eyes.near`, in [`Near::to_array`] order (booleans as 0 / 1)
+pub const NEAR_FIELDS: [&str; 23] = ["leaderGap", "leaderSpeed", "leaderRel", "behindGap", "behindSpeed",
+    "leftAhead", "leftBehind", "leftAheadSpeed", "leftBehindSpeed", "rightAhead", "rightBehind", "rightAheadSpeed", "rightBehindSpeed",
+    "leftExists", "rightExists", "headingError", "laneEndGap", "leftEndGap", "rightEndGap", "endDist", "endSide", "leftEndDist", "rightEndDist"];
+pub const NEAR_N: usize = NEAR_FIELDS.len();
+impl Default for Near {
+    fn default() -> Self {
+        let inf = f64::INFINITY;
+        Near { leader_gap: inf, leader_speed: 0.0, leader_rel: 0.0, behind_gap: inf, behind_speed: 0.0, left_ahead: inf, left_behind: inf,
+            left_ahead_speed: 0.0, left_behind_speed: 0.0, right_ahead: inf, right_behind: inf, right_ahead_speed: 0.0, right_behind_speed: 0.0,
+            left_exists: false, right_exists: false, heading_error: 0.0, lane_end_gap: inf, left_end_gap: inf, right_end_gap: inf,
+            end_dist: inf, end_side: 0.0, left_end_dist: inf, right_end_dist: inf }
+    }
+}
+impl Near {
+    pub fn to_array(&self) -> [f64; NEAR_N] {
+        let bf = |x: bool| if x { 1.0 } else { 0.0 };
+        [self.leader_gap, self.leader_speed, self.leader_rel, self.behind_gap, self.behind_speed,
+         self.left_ahead, self.left_behind, self.left_ahead_speed, self.left_behind_speed, self.right_ahead, self.right_behind, self.right_ahead_speed, self.right_behind_speed,
+         bf(self.left_exists), bf(self.right_exists), self.heading_error, self.lane_end_gap, self.left_end_gap, self.right_end_gap,
+         self.end_dist, self.end_side, self.left_end_dist, self.right_end_dist]
     }
 }
 
@@ -375,21 +429,31 @@ impl V2Encoder {
     }
 
     /// Driver.sense for `slot` (a driving car): writes the 70 floats into out[..70]. Call once per step per driving slot.
-    pub fn encode_v2(&mut self, sim: &mut Sim, slot: usize, out: &mut [f32]) {
+    pub fn encode_v2(&mut self, sim: &mut Sim, slot: usize, out: &mut [f32]) { self.encode_v2_impl(sim, slot, out, None) }
+    /// encode_v2 that also writes the driver's `eyes.near` after the sense into `near`.
+    pub fn encode_v2_near(&mut self, sim: &mut Sim, slot: usize, out: &mut [f32], near: &mut Near) { self.encode_v2_impl(sim, slot, out, Some(near)) }
+    fn encode_v2_impl(&mut self, sim: &mut Sim, slot: usize, out: &mut [f32], near: Option<&mut Near>) {
         let i = slot;
         let mut o = std::mem::take(&mut self.obs);
         observe_one(sim, i, &mut o, None);
         let sim: &Sim = sim;
         let st = self.sync(sim, i);
-        encode_core(st, sim, i, &o, out);
+        encode_core(st, sim, i, &o, out, near);
         self.obs = o;
     }
 
     /// encode_v2 for many driving slots (ascending, distinct) into rows of OBS2 floats: trip states synced in slot
     /// order, then observation + encoding per car in parallel (opts.parallel; each car reads only shared state and
     /// its own trip state), then the observations' state effects applied. Same result as encode_v2 slot by slot.
-    pub fn encode_batch(&mut self, sim: &mut Sim, slots: &[usize], out: &mut [f32]) {
+    pub fn encode_batch(&mut self, sim: &mut Sim, slots: &[usize], out: &mut [f32]) { self.encode_batch_near(sim, slots, out, None) }
+    /// encode_batch that also writes each slot's `eyes.near` into `near[k]` (k = index into `slots`) when given.
+    pub fn encode_batch_near(&mut self, sim: &mut Sim, slots: &[usize], out: &mut [f32], near: Option<&mut [Near]>) {
         assert!(out.len() >= slots.len() * OBS2);
+        let mut scratch: Vec<Near> = Vec::new();
+        let (near, want): (&mut [Near], bool) = match near {
+            Some(n) => { assert!(n.len() >= slots.len(), "encode_batch_near: near too short"); (&mut n[..slots.len()], true) }
+            None => { scratch.resize(slots.len(), Near::default()); (&mut scratch[..], false) }
+        };
         for &i in slots { self.sync(sim, i); }
         let me: &Sim = sim;
         let mut states: Vec<&mut TripState> = Vec::with_capacity(slots.len());
@@ -397,22 +461,22 @@ impl V2Encoder {
             let mut it = self.slots.iter_mut().enumerate();
             for &i in slots { loop { let (k, s) = it.next().expect("encode_batch: slots must be ascending"); if k == i { states.push(s.as_mut().unwrap()); break; } } }
         }
-        let job = |st: &mut TripState, i: usize, row: &mut [f32]| -> Option<i32> {
+        let job = |st: &mut TripState, i: usize, row: &mut [f32], nr: &mut Near| -> Option<i32> {
             let mut o = Obs::default();
             observe_one_ro(me, i, &mut o, None);
-            encode_core(st, me, i, &o, row);
+            encode_core(st, me, i, &o, row, if want { Some(nr) } else { None });
             o.yield_write
         };
         let writes: Vec<Option<i32>> = if me.opts.parallel && slots.len() >= 128 {
             use rayon::prelude::*;
-            states.into_par_iter().zip(slots.par_iter()).zip(out[..slots.len() * OBS2].par_chunks_mut(OBS2)).with_min_len(16).map(|((st, &i), row)| job(st, i, row)).collect()
-        } else { states.into_iter().zip(slots.iter()).zip(out[..slots.len() * OBS2].chunks_mut(OBS2)).map(|((st, &i), row)| job(st, i, row)).collect() };
+            states.into_par_iter().zip(slots.par_iter()).zip(out[..slots.len() * OBS2].par_chunks_mut(OBS2)).zip(near.par_iter_mut()).with_min_len(16).map(|(((st, &i), row), nr)| job(st, i, row, nr)).collect()
+        } else { states.into_iter().zip(slots.iter()).zip(out[..slots.len() * OBS2].chunks_mut(OBS2)).zip(near.iter_mut()).map(|(((st, &i), row), nr)| job(st, i, row, nr)).collect() };
         for (k, w) in writes.into_iter().enumerate() { if let Some(v) = w { sim.set_yield_by(slots[k], v); } }
     }
 }
 
 /// Driver.sense on an observation already filled for slot i (the 70 floats into out[..70]).
-fn encode_core(st: &mut TripState, sim: &Sim, i: usize, o: &Obs, out: &mut [f32]) {
+fn encode_core(st: &mut TripState, sim: &Sim, i: usize, o: &Obs, out: &mut [f32], near: Option<&mut Near>) {
         let g = sim.gw();
         let delta = &sim.pop.deltas[sim.vs.commuter[i] as usize * 64..sim.vs.commuter[i] as usize * 64 + 4];
         let (aggression, patience, reaction_time, headway) = (delta[0] as f64, delta[1] as f64, delta[2] as f64, delta[3] as f64);
@@ -527,9 +591,11 @@ fn encode_core(st: &mut TripState, sim: &Sim, i: usize, o: &Obs, out: &mut [f32]
         // b) lane ends / junction conflict as stopped obstacles
         let (mut own_end, mut own_side) = (f64::INFINITY, 0.0f64);
         let (mut left_end, mut right_end) = (f64::INFINITY, f64::INFINITY);
+        let mut plan: Option<(f64, i32)> = None;   // Driver._adjust `plan` (own lane, 400 m): only feeds near.endDist
         if !o.on_connector {
             own_end = o.lane_end_distance; own_side = o.lane_end_side as f64;   // obs.laneEndDistance: the sim's (injected)
             let lane = o.lane_index;
+            if near.is_some() { plan = st.guide.lane_end_ahead_side(&g, rd, lane, SIDE_LANE_END_LOOKAHEAD); }
             if left_exists { if let Some(e) = st.guide.lane_end_ahead(&g, rd, lane + 1, SIDE_LANE_END_LOOKAHEAD) { left_end = e; } }
             if right_exists { if let Some(e) = st.guide.lane_end_ahead(&g, rd, lane - 1, SIDE_LANE_END_LOOKAHEAD) { right_end = e; } }
         }
@@ -541,12 +607,33 @@ fn encode_core(st: &mut TripState, sim: &Sim, i: usize, o: &Obs, out: &mut [f32]
         };
         inp[LANE_END_OFFSET] = if own_end < f64::INFINITY { clamp(own_end / 300.0, 0.0, 1.0) as f32 } else { 1.0 };
         inp[LANE_END_OFFSET + 1] = if own_end < f64::INFINITY { own_side as f32 } else { 0.0 };
+        let (mut junc_gap, mut left_gap, mut right_gap) = (f64::INFINITY, f64::INFINITY, f64::INFINITY);
         if jd {
             let my_t = (jn.distance + length) / jm::max(v, 1.0);
-            if jn.stopped || jn.time_to_conflict < my_t + 2.0 { put(inp, 0, jm::max(0.0, jn.distance - 2.0)); }
+            if jn.stopped || jn.time_to_conflict < my_t + 2.0 { junc_gap = jm::max(0.0, jn.distance - 2.0); put(inp, 0, junc_gap); }
         }
-        if left_exists && left_end < f64::INFINITY { put(inp, 2, jm::max(0.0, left_end - half)); }
-        if right_exists && right_end < f64::INFINITY { put(inp, 4, jm::max(0.0, right_end - half)); }
+        if left_exists && left_end < f64::INFINITY { left_gap = jm::max(0.0, left_end - half); put(inp, 2, left_gap); }
+        if right_exists && right_end < f64::INFINITY { right_gap = jm::max(0.0, right_end - half); put(inp, 4, right_gap); }
+        if let Some(nr) = near {
+            // eyes.js look (obs.neighbors branch), then Driver._adjust's mirror of the adjust.js result. The own-lane
+            // end is always sim-injected here (obs.laneEndDistance is defined), so r.ownGap stays Infinity.
+            let own_gap = f64::INFINITY;
+            let nbv = |k: usize| v + nb[k] as f64;
+            *nr = Near {
+                leader_gap: gp(0), leader_speed: nbv(1), leader_rel: nb[1] as f64, behind_gap: gp(1), behind_speed: nbv(3),
+                left_ahead: gp(2), left_ahead_speed: nbv(5), left_behind: gp(3), left_behind_speed: nbv(7),
+                right_ahead: gp(4), right_ahead_speed: nbv(9), right_behind: gp(5), right_behind_speed: nbv(11),
+                left_exists, right_exists, heading_error: s_he,
+                lane_end_gap: own_gap, left_end_gap: left_gap, right_end_gap: right_gap,
+                end_dist: f64::INFINITY, end_side: 0.0, left_end_dist: left_end, right_end_dist: right_end,
+            };
+            if own_gap < nr.leader_gap { nr.leader_gap = own_gap; nr.leader_speed = 0.0; nr.leader_rel = -v; }
+            if junc_gap < nr.leader_gap { nr.leader_gap = junc_gap; nr.leader_speed = 0.0; nr.leader_rel = -v; }
+            if left_gap < nr.left_ahead { nr.left_ahead = left_gap; nr.left_ahead_speed = 0.0; }
+            if right_gap < nr.right_ahead { nr.right_ahead = right_gap; nr.right_ahead_speed = 0.0; }
+            if own_end < f64::INFINITY { nr.end_dist = own_end; nr.end_side = own_side; }
+            else if let Some((d, s)) = plan { nr.end_dist = d; nr.end_side = s as f64; }
+        }
         // position mode, input version 2: road grade in 41..43
         for k in 0..3 { let x = o.grade[k] / 0.35; inp[WHEEL_OFFSET + k] = (if x > 1.0 { 1.0 } else if x < -1.0 { -1.0 } else { x }) as f32; }
 }
@@ -560,7 +647,13 @@ pub struct V2Mismatch { pub step: usize, pub slot: usize, pub index: usize, pub 
 #[derive(Debug, Default)]
 pub struct V2Check { pub steps: usize, pub rows: usize, pub mismatches: Vec<V2Mismatch>, pub encode_ns: f64, pub encodes: usize,
     /// obs::observe_one alone (fill_obs + signals), timed on the recorded rows: the part of encode_ns that is the env obs
-    pub observe_ns: f64, pub state_unchanged: Option<bool> }
+    pub observe_ns: f64, pub state_unchanged: Option<bool>,
+    /// rows whose `eyes.near` was compared (v2.pack section v2.near present), and the near mismatches
+    pub near_rows: usize, pub near_mismatches: Vec<NearMismatch> }
+
+/// One `eyes.near` mismatch: recorded step, slot, field (NEAR_FIELDS name), JS / Rust value.
+#[derive(Debug)]
+pub struct NearMismatch { pub step: usize, pub slot: usize, pub field: &'static str, pub js: f64, pub rust: f64 }
 
 /// Replay the run in `dir` (v2_oracle.mjs output: world.pack, pop.pack, run.json, v2.pack) with the harness policy,
 /// encoding every driving car on every step, and compare the recorded rows bit for bit. With `state_check`, also
@@ -573,6 +666,14 @@ pub fn check_v2(dir: &str, max: usize, state_check: bool) -> V2Check {
     let every = pk.meta["every"].as_u64().unwrap_or(1) as usize;
     let steps = pk.meta["steps"].as_u64().unwrap() as usize;
     let (vn, vslot, vx) = (pk.u32s("v2.n"), pk.i32s("v2.slot"), pk.f32s("v2.x"));
+    // optional section (newer oracles): v2.near = f64 rows of NEAR_N, field order meta.nearFields
+    let vnear = if pk.has("v2.near") {
+        let names: Vec<String> = pk.meta["nearFields"].as_array().expect("meta.nearFields").iter().map(|x| x.as_str().unwrap().to_string()).collect();
+        assert_eq!(names, NEAR_FIELDS.iter().map(|s| s.to_string()).collect::<Vec<_>>(), "v2.near field order");
+        Some(pk.f64s("v2.near"))
+    } else { None };
+    let mut near_row = Near::default();
+    let mut batch_near: Vec<Near> = Vec::new();
     let mut enc = V2Encoder::new(&env.world).with_names(pk.i32s("edge.ref"), pk.i32s("edge.name"));
     let mut pol = Policy::new(run["policy"].as_str().unwrap(), run["seed"].as_f64().unwrap());
     let mut res = V2Check::default();
@@ -587,7 +688,7 @@ pub fn check_v2(dir: &str, max: usize, state_check: bool) -> V2Check {
         enc.record_actions(&env.sim);
         env.step(1);
         let slots = crate::obs::driving_slots(&env.sim);
-        if batch { batch_rows.resize(slots.len() * OBS2, 0.0); }
+        if batch { batch_rows.resize(slots.len() * OBS2, 0.0); batch_near.resize(slots.len(), Near::default()); }
         let recorded = k % every == 0;
         if recorded && vn[rec] as usize != slots.len() {
             res.mismatches.push(V2Mismatch { step: k, slot: usize::MAX, index: usize::MAX, js: vn[rec] as f32, rust: slots.len() as f32 });
@@ -595,13 +696,13 @@ pub fn check_v2(dir: &str, max: usize, state_check: bool) -> V2Check {
         }
         if batch {
             let t = std::time::Instant::now();
-            enc.encode_batch(&mut env.sim, &slots, &mut batch_rows[..]);
+            enc.encode_batch_near(&mut env.sim, &slots, &mut batch_rows[..], if vnear.is_some() { Some(&mut batch_near[..]) } else { None });
             ns += t.elapsed().as_nanos(); res.encodes += slots.len();
         }
         for (r, &i) in slots.iter().enumerate() {
-            if batch { row.copy_from_slice(&batch_rows[r * OBS2..(r + 1) * OBS2]); if !recorded { continue; } } else {
+            if batch { row.copy_from_slice(&batch_rows[r * OBS2..(r + 1) * OBS2]); near_row = batch_near.get(r).copied().unwrap_or_default(); if !recorded { continue; } } else {
             let t = std::time::Instant::now();
-            enc.encode_v2(&mut env.sim, i, &mut row);
+            if vnear.is_some() { enc.encode_v2_near(&mut env.sim, i, &mut row, &mut near_row); } else { enc.encode_v2(&mut env.sim, i, &mut row); }
             ns += t.elapsed().as_nanos(); res.encodes += 1;
             if !recorded { continue; }
             let t = std::time::Instant::now();
@@ -616,6 +717,17 @@ pub fn check_v2(dir: &str, max: usize, state_check: bool) -> V2Check {
                     res.mismatches.push(V2Mismatch { step: k, slot: i, index: d, js: x, rust: y });
                     if res.mismatches.len() >= max { res.steps = k; break 'outer; }
                 }
+            }
+            if let Some(vn2) = &vnear {
+                let a = near_row.to_array();
+                for (f, &y) in a.iter().enumerate() {
+                    let x = vn2[q * NEAR_N + f];
+                    if x.to_bits() != y.to_bits() && !(x.is_nan() && y.is_nan()) {
+                        res.near_mismatches.push(NearMismatch { step: k, slot: i, field: NEAR_FIELDS[f], js: x, rust: y });
+                        if res.near_mismatches.len() >= max { res.steps = k; break 'outer; }
+                    }
+                }
+                res.near_rows += 1;
             }
             res.rows += 1;
         }

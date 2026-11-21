@@ -18,7 +18,9 @@
 // Writes <out>/world.pack, <out>/pop.pack, <out>/run.json (trace.mjs format) and <out>/v2.pack:
 //   v2.n (u32 per recorded step: driving cars), v2.slot (i32), v2.x (f32 rows of 70),
 //   edge.ref / edge.name (i32 per edge: interned road ref / name, 0 = '', for guidance 'continue' maneuvers),
-//   meta {kind: 'v2', every, steps, inputSize, setRouteCalls, stopRoutes, stopsCompleted}
+//   v2.near (f64 rows of NEAR_FIELDS.length: the driver's eyes.near after sense, booleans 0/1, Infinity kept),
+//   meta {kind: 'v2', every, steps, inputSize, nearFields, setRouteCalls, stopRoutes, stopsCompleted}
+// (v2.near / meta.nearFields are additions; readers of older packs without them skip the near check)
 import fs from 'node:fs';
 import { buildEnv, makePolicy } from './trace.mjs';
 import { STATE_DRIVING } from '../../src/sim/vehicle.js';
@@ -81,6 +83,11 @@ function pushPending(drv, cmd) {
 }
 
 const act = makePolicy(policy, seed);
+// driver.js eyes.near keys after Driver.sense (eyes.js look + Driver._adjust), order = obs_v2.rs NEAR_FIELDS
+const NEAR_FIELDS = ['leaderGap', 'leaderSpeed', 'leaderRel', 'behindGap', 'behindSpeed',
+  'leftAhead', 'leftBehind', 'leftAheadSpeed', 'leftBehindSpeed', 'rightAhead', 'rightBehind', 'rightAheadSpeed', 'rightBehindSpeed',
+  'leftExists', 'rightExists', 'headingError', 'laneEndGap', 'leftEndGap', 'rightEndGap', 'endDist', 'endSide', 'leftEndDist', 'rightEndDist'];
+const nearRows = [];
 const vN = [], vSlot = [], rows = [];
 let senseNs = 0n, senses = 0, stops0 = 0;
 const t0 = Date.now();
@@ -104,17 +111,22 @@ for (let k = 1; k <= steps; k++) {
     const tq = process.hrtime.bigint();
     const input = r.drv.sense(sim.dt, null, it.obs);
     senseNs += process.hrtime.bigint() - tq; senses++;
-    if (rec) { vSlot.push(it.slot); rows.push(Float32Array.from(input.subarray(0, INPUT_SIZE))); }
+    if (rec) {
+      vSlot.push(it.slot); rows.push(Float32Array.from(input.subarray(0, INPUT_SIZE)));
+      const nr = r.drv.eyes.near;
+      nearRows.push(Float64Array.from(NEAR_FIELDS, (k) => { const v = nr[k]; if (v === undefined) throw new Error(`eyes.near.${k} undefined`); return typeof v === 'boolean' ? +v : v; }));
+    }
   }
 }
 for (const { drv } of recs.values()) stops0 += drv.stopsCompleted || 0;
 // GC the drivers of finished trips is not needed for these run lengths
 const X = new Float32Array(rows.length * INPUT_SIZE); rows.forEach((a, q) => X.set(a, q * INPUT_SIZE));
+const NX = new Float64Array(nearRows.length * NEAR_FIELDS.length); nearRows.forEach((a, q) => NX.set(a, q * NEAR_FIELDS.length));
 const E = sim.graph.edges, refs = [''], names = [''];
 const intern = (tab, s) => { s = s || ''; let q = tab.indexOf(s); if (q < 0) { tab.push(s); q = tab.length - 1; } return q; };
 const eRef = Int32Array.from(E, (e) => intern(refs, e.ref)), eName = Int32Array.from(E, (e) => intern(names, e.name));
 const w = new PackWriter();
-w.add('v2.n', Uint32Array.from(vN)).add('v2.slot', Int32Array.from(vSlot)).add('v2.x', X).add('edge.ref', eRef).add('edge.name', eName);
-w.meta = { kind: 'v2', every, steps, inputSize: INPUT_SIZE, setRouteCalls, stopRoutes, stopsCompleted: stops0, refs: refs.length, names: names.length };
+w.add('v2.n', Uint32Array.from(vN)).add('v2.slot', Int32Array.from(vSlot)).add('v2.x', X).add('edge.ref', eRef).add('edge.name', eName).add('v2.near', NX);
+w.meta = { kind: 'v2', every, steps, inputSize: INPUT_SIZE, nearFields: NEAR_FIELDS, setRouteCalls, stopRoutes, stopsCompleted: stops0, refs: refs.length, names: names.length };
 w.write(`${out}/v2.pack`);
 console.log(JSON.stringify({ world, policy, steps, rows: rows.length, trips: recs.size, setRouteCalls, stopRoutes, stopsCompleted: stops0, refuelPlanned: sim.counters.refuelPlanned, refuelled: sim.counters.refuelled, reroutes: sim.counters.reroutes || 0, missedExits: sim.counters.missedExits || 0, senseNsPerAgent: Number(senseNs / BigInt(Math.max(1, senses))), wallS: (Date.now() - t0) / 1000, out }));
