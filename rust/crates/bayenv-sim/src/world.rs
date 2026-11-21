@@ -30,13 +30,19 @@ pub const HW_PULLOVER: u8 = 2; // motorway, trunk
 pub const HW_MAINLINE: u8 = 4; // motorway or trunk (density sampling)
 
 pub struct LaneGeom {
-    pub v_first: Vec<u32>, pub vx: Vec<f64>, pub vy: Vec<f64>, pub vz: Vec<f64>, pub vs: Vec<f64>, pub mx: Vec<f64>, pub mz: Vec<f64>,
+    pub v_first: Vec<u32>, pub vs: Vec<f64>,
+    /// per vertex [x, y, z, mx, mz] interleaved (offset_point reads vertices i and i + 1: one or two cache lines)
+    pub vtx: Vec<[f64; 5]>,
     pub rd: Vec<f64>, pub rend: Vec<f64>, pub tau: Vec<f64>, pub x_r: Vec<f64>, pub x_l: Vec<f64>, pub lane_w: Vec<f64>, pub lane_w_end: Vec<f64>,
     pub tap_r: Vec<u8>, pub tap_l: Vec<u8>,
     /// LaneGraph (src/geom/graph.js), same numbering as the SimGraph
     pub g_length: Vec<f64>, pub g_lanes: Vec<i32>, pub g_opp: Vec<i32>, pub g_twin: Vec<i32>, pub g_cls: Vec<u8>,
     pub g_first: Vec<u32>, pub g_count: Vec<u32>, pub g_poly: Vec<u32>, pub g_xyz: Vec<f64>,
     pub g_out_start: Vec<u32>, pub g_out_list: Vec<u32>, pub g_in_start: Vec<u32>, pub g_in_list: Vec<u32>,
+}
+
+fn interleave_vtx(x: &[f64], y: &[f64], z: &[f64], mx: &[f64], mz: &[f64]) -> Vec<[f64; 5]> {
+    (0..x.len()).map(|k| [x[k], y[k], z[k], mx[k], mz[k]]).collect()
 }
 
 #[inline(always)]
@@ -97,15 +103,16 @@ impl LaneGeom {
     pub fn offset_point(&self, e: usize, s: f64, off: f64, off_slope: f64) -> Pt {
         let (i, t) = self.locate(e, s);
         let j = i + 1;
-        let (vx, vy, vz, mx, mz) = (&self.vx, &self.vy, &self.vz, &self.mx, &self.mz);
-        let nx = mx[i] + (mx[j] - mx[i]) * t;
-        let nz = mz[i] + (mz[j] - mz[i]) * t;
-        let x = vx[i] + (vx[j] - vx[i]) * t + off * nx;
-        let y = vy[i] + (vy[j] - vy[i]) * t;
-        let z = vz[i] + (vz[j] - vz[i]) * t + off * nz;
+        let (a, b) = (&self.vtx[i], &self.vtx[j]);
+        let ([vxi, vyi, vzi, mxi, mzi], [vxj, vyj, vzj, mxj, mzj]) = (*a, *b);
+        let nx = mxi + (mxj - mxi) * t;
+        let nz = mzi + (mzj - mzi) * t;
+        let x = vxi + (vxj - vxi) * t + off * nx;
+        let y = vyi + (vyj - vyi) * t;
+        let z = vzi + (vzj - vzi) * t + off * nz;
         let ds = jm::or(self.vs[j] - self.vs[i], 1.0);
-        let hx = (vx[j] - vx[i] + off * (mx[j] - mx[i])) / ds + off_slope * nx;
-        let hz = (vz[j] - vz[i] + off * (mz[j] - mz[i])) / ds + off_slope * nz;
+        let hx = (vxj - vxi + off * (mxj - mxi)) / ds + off_slope * nx;
+        let hz = (vzj - vzi + off * (mzj - mzi)) / ds + off_slope * nz;
         let l = jm::or(jm::hypot(hx, hz), 1.0);
         Pt { x, y, z, hx: hx / l, hz: hz / l, seg: 0 }
     }
@@ -375,8 +382,8 @@ impl World {
         let flags = p.u8s("eFlags");
         let lg = if meta["laneGeom"].as_bool().unwrap_or(false) {
             Some(LaneGeom {
-                v_first: p.u32s("LG.vFirst"), vx: p.f64s("LG.vx"), vy: p.f64s("LG.vy"), vz: p.f64s("LG.vz"), vs: p.f64s("LG.vs"),
-                mx: p.f64s("LG.mx"), mz: p.f64s("LG.mz"), rd: p.f64s("LG.Rd"), rend: p.f64s("LG.Rend"), tau: p.f64s("LG.tau"),
+                v_first: p.u32s("LG.vFirst"), vs: p.f64s("LG.vs"),
+                vtx: interleave_vtx(&p.f64s("LG.vx"), &p.f64s("LG.vy"), &p.f64s("LG.vz"), &p.f64s("LG.mx"), &p.f64s("LG.mz")), rd: p.f64s("LG.Rd"), rend: p.f64s("LG.Rend"), tau: p.f64s("LG.tau"),
                 x_r: p.f64s("LG.xR"), x_l: p.f64s("LG.xL"), lane_w: p.f64s("LG.laneW"), lane_w_end: p.f64s("LG.laneWEnd"),
                 tap_r: p.u8s("LG.tapR"), tap_l: p.u8s("LG.tapL"),
                 g_length: p.f64s("G.length"), g_lanes: p.i32s("G.lanes"), g_opp: p.i32s("G.opp"), g_twin: p.i32s("G.twin"), g_cls: p.u8s("G.cls"),
@@ -450,7 +457,7 @@ impl World {
         let lgs = &w.lanes;
         let lgr = &w.lane_graph;
         let lg = LaneGeom {
-            v_first: lgs.v_first.to_vec(), vx: lgs.vx.to_vec(), vy: f64v(&lgs.vy), vz: lgs.vz.to_vec(), vs: lgs.vs.to_vec(), mx: lgs.mx.to_vec(), mz: lgs.mz.to_vec(),
+            v_first: lgs.v_first.to_vec(), vs: lgs.vs.to_vec(), vtx: interleave_vtx(&lgs.vx, &f64v(&lgs.vy), &lgs.vz, &lgs.mx, &lgs.mz),
             rd: f64v(&lgs.rd), rend: f64v(&lgs.rend), tau: f64v(&lgs.tau), x_r: u8f(&lgs.x_r), x_l: u8f(&lgs.x_l), lane_w: f64v(&lgs.lane_w), lane_w_end: f64v(&lgs.lane_w_end),
             tap_r: lgs.tap_r.to_vec(), tap_l: lgs.tap_l.to_vec(),
             g_length: f64v(&lgr.length), g_lanes: lgr.lanes.iter().map(|&x| x as i32).collect(), g_opp: lgr.opp.iter().map(|&x| x as i32).collect(), g_twin: lgr.twin.clone(), g_cls: lgr.cls.clone(),

@@ -27,7 +27,9 @@ fn main() {
     if names(&w) != names(&r) { println!("highway names differ"); bad += 1; }
     let (a, b) = (w.lg.as_ref().unwrap(), r.lg.as_ref().unwrap());
     macro_rules! l { ($($f:ident),*) => { $(cmp(concat!("lg.", stringify!($f)), &a.$f, &b.$f, &mut bad);)* }; }
-    l!(v_first, vx, vy, vz, vs, mx, mz, rd, rend, tau, x_r, x_l, lane_w, lane_w_end, tap_r, tap_l, g_length, g_lanes, g_opp, g_twin, g_cls, g_first, g_count, g_poly, g_xyz, g_out_start, g_out_list, g_in_start, g_in_list);
+    let flat = |x: &bayenv_sim::world::LaneGeom| x.vtx.iter().flatten().copied().collect::<Vec<f64>>();
+    cmp("lg.vtx", &flat(a), &flat(b), &mut bad);
+    l!(v_first, vs, rd, rend, tau, x_r, x_l, lane_w, lane_w_end, tap_r, tap_l, g_length, g_lanes, g_opp, g_twin, g_cls, g_first, g_count, g_poly, g_xyz, g_out_start, g_out_list, g_in_start, g_in_list);
     match (&w.j, &r.j) { (Some(a), Some(b)) => { macro_rules! j { ($($f:ident),*) => { $(cmp(concat!("j.", stringify!($f)), &a.$f, &b.$f, &mut bad);)* }; } j!(mouth_s, gore_s, j_node, j_first_m, j_count_m, m_info, m_f, m_len, pts, j_of_node, conf_start); }
         _ => { println!("junctions presence differs"); bad += 1; } }
     match (&w.controls, &r.controls) { (Some(a), Some(b)) => { macro_rules! k { ($($f:ident),*) => { $(cmp(concat!("c.", stringify!($f)), &a.$f, &b.$f, &mut bad);)* }; } k!(ty, flags, cycle, offset, ap_control, ap_stop_at, ap_edge, ap_group, ap_prot_left, cluster_of, edge_ap_start, edge_ap_list, phase_start);
