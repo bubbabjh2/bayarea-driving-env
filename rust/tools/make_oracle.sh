@@ -8,7 +8,8 @@
 #     --quick  smaller runs (fewer commuters / steps); the full set takes ~30-60 min and ~6 GB of RAM per node process
 #     --brain  the private training repo (v2 / TeacherObs oracle needs its src/brain); default ../bayarea-driving-sim
 #              next to this repo. Without it the v2 part is skipped (with a message).
-# Needs: node >= 20, the data/ directory (npm run unpack etc., see README "Rebuilding the world").
+# Needs: node >= 20, the data/ directory (npm run unpack etc., see README "Rebuilding the world"). Builds a missing
+# data/junctions.bin first (npm run unpack if data/controls.json is missing, then npm run build:junctions, ~90 s).
 set -euo pipefail
 ROOT="$(cd "$(dirname "$0")/../.." && pwd)"
 O="$ROOT/rust/oracle"
@@ -21,6 +22,17 @@ want() { [ -z "$ONLY" ] || [[ ",$ONLY," == *",$1,"* ]]; }
 say() { printf '\n== %s\n' "$*"; }
 cd "$ROOT"
 [ -f data/roads.meta.json ] || { echo "data/roads.meta.json missing: build or unpack the world first (README)"; exit 1; }
+# The unpacked JSON (data/controls.json etc., gitignored) is an input of build:junctions: without controls.json it
+# silently builds the junctions without the control crosswalk legs, a different junctions.bin.
+if [ ! -f data/controls.json ]; then printf '\n== data/controls.json missing: npm run unpack\n'; node tools/osm/unpack.mjs; fi
+# data/junctions.bin is a gitignored build output. Without it the JS loaders build the junctions in memory, and the JS
+# GPUSim then packs a different world blob than the Rust host (which always has the full junctions): host_oracle fails.
+# So build it first, as `npm run build:junctions` (it also rewrites controls.*, identical to the committed files).
+if [ ! -f data/junctions.bin ] || [ ! -f data/junctions.meta.json ]; then
+  printf '\n== data/junctions.bin missing: npm run build:junctions\n'
+  $NODE tools/build_junctions.mjs data/
+  git diff --quiet -- 'data/controls.*' || echo "WARNING: build:junctions changed the committed data/controls.* (git diff data/)"
+fi
 mkdir -p "$O"
 if [ $QUICK = 1 ]; then N2K=1000; STEPS=1000; MATHN=100000; else N2K=2000; STEPS=3000; MATHN=400000; fi
 
