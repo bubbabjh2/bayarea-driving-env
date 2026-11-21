@@ -13,9 +13,32 @@ actions you supply.
   grade, per-surface tyre friction and rolling resistance; swept-SAT rigid-body contacts; crash severity = per-vehicle delta-v; incidents block lanes and get
   cleared / towed on realistic timelines; fuel and gas stations.
 * CPU reference sim (Node, plain ES modules, zero dependencies) and a WebGPU sim that mirrors it.
+* Native Rust / Python host (`rust/`): the same WGSL kernels through wgpu, no browser, plus a Rust port of the CPU sim.
 
 Licence: code MIT (LICENSE). Map data © OpenStreetMap contributors, ODbL 1.0. Elevation: U.S. Geological
 Survey, 3D Elevation Program (public domain). See NOTICE.
+
+## Quickstart (Python, via Rust)
+
+Needs a Rust toolchain (`rustup`, stable) and Python ≥ 3.9. The committed `data/` is enough, with no Node and no build step: the
+first load builds the junctions in a few seconds and caches them in `data/build/rust/`.
+
+```
+cd rust && python3 -m venv .venv && .venv/bin/pip install maturin numpy
+(cd crates/bayenv-py && ../../.venv/bin/maturin develop --release)   # builds and installs the `bayenv` module
+cd .. && rust/.venv/bin/python example.py                            # the example below; run from the repo root
+```
+
+```python
+import numpy as np, bayenv
+venv = bayenv.VecEnv("data", n_envs=4, n_cars=10000, seed=11)    # 4 independent envs on one GPU, one shared world
+A = np.zeros((venv.n_envs, venv.n_slots, 3), np.float32); A[..., 1] = 0.3   # [steer, gas, brake] per car
+obs = venv.step_observe(A, k=1)       # float32 (n_envs, n_slots, 70) observations
+crashed = venv.crash_flags()          # bool (n_envs, n_slots)
+```
+
+`bayenv.Env` is the single-env form, and `backend="cpu"` selects the Rust CPU sim behind the same calls. Build and API:
+`rust/README.md`. Layout: `rust/ARCHITECTURE.md`. Timings: `rust/BENCHMARKS.md`. The JS API is under "API (CPU)" below.
 
 ## Setup
 
@@ -69,22 +92,34 @@ Measured (Apple M-series laptop): CPU real world, 2,000-commuter population at ~
 ~20–100 cars on the road (≈55k agent-steps/s; cost scales with active cars); synthetic 300 agents ~6,500
 steps/s. GPU real world: 10k cars 1.47 ms/step, 100k cars 4.68 ms/step.
 
-## Rust / Python (branch `rust`, `rust/`)
+## Rust / Python (`rust/`)
 
-A native host for the GPU sim: the unchanged WGSL kernels run through wgpu (Metal / Vulkan / DX12) from Rust or
-Python, with no browser. The world loader, lane geometry, junction builder, router and world packer are ported to Rust
-and match the JS bit for bit. `npm run build:junctions` output is byte-identical: 6.3 s in Rust vs ~90 s in JS. The world
-loads in ~60 ms. Per-car state agrees with the JS GPU sim to float tolerance (`rust/README.md`).
+A native host for the GPU sim: the unchanged WGSL kernels of `src/gpu/kernels/` run through wgpu (Metal / Vulkan /
+DX12) from Rust or Python, with no browser. The world loader, lane geometry, junction builder, router and world packer
+are ported to Rust and match the JS bit for bit. `npm run build:junctions` output is byte-identical: 6.3 s in Rust vs
+~90 s in JS. The world loads in ~60 ms. `bayenv-sim` is a Rust port of the CPU sim (`src/sim`).
 
-```python
-import numpy as np, bayenv          # cd rust/crates/bayenv-py && maturin develop --release
-env = bayenv.Env("data", n_cars=10000, seed=11)
-env.act(np.tile(np.float32([0, 0.3, 0]), (env.n_slots, 1)))   # [steer, gas, brake] per car
-env.step(20)                        # 20 steps in one GPU submit
-obs, st = env.observe(), env.state()  # float32 (n, 70); dict of per-car numpy arrays
-```
+**The JS sim is the reference oracle.** Every Rust port is checked against dumps of the JS implementation
+(`bash rust/tools/make_oracle.sh`, then `BAYENV_REQUIRE_ORACLE=1 bash rust/tools/check.sh`; `rust/README.md`,
+"Verifying against the JS"). Per-car state of the wgpu host agrees with the JS GPU sim in Chrome to float tolerance.
 
-Measured (Apple M4 Max): 10k cars 1.12 ms/step, 100k cars 4.66 ms/step (`rust/BENCHMARKS.md`).
+**Model fixes, on by default.** The Rust host fixes three model bugs of the JS sims. Each one has a flag, and turning
+it off restores the JS model:
+
+* `cpu_connector_join` (GPU, `GpuOptions` / `bayenv.Env(...)`): junction connector entry as in the CPU sim. With
+  `False`, the JS GPU kernels' connector entry makes steer-0 cars drift into the kerb after junction boxes
+  (`rust/docs/kerb-investigation.md`).
+* `contact_tangent` (GPU): an f32-robust friction tangent for the contact impulse. With `False`, aligned rear-ends
+  get an impulse in a rounding-noise direction (`rust/docs/crash-divergence.md`).
+* `replan_at_missed_event` (CPU, `SimOpts`): a missed turn is re-planned at the event, as on the GPU. With `False`,
+  the re-plan comes one step late, as in the JS CPU sim.
+
+`SimOpts::js()` (CPU) and the legacy flags `cpu_connector_join=False, contact_tangent=False` (GPU) give the JS
+models bit for bit; every JS-oracle check runs that way. The GPU-step optimisations (`GpuOptions`) are bit-identical
+with the JS. The `deterministic_*` options (on by default: same-seed GPU runs are bit-identical) fix the order of
+contacts, spawns, events and perception; the JS-oracle checks turn them off too (`rust/README.md`, `rust/docs/determinism.md`).
+
+Measured (Apple M4 Max): 10k cars 0.64 ms/step, 100k cars 3.50 ms/step (`rust/BENCHMARKS.md`).
 
 ## Data and coordinates
 
