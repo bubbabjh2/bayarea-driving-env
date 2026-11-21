@@ -348,7 +348,8 @@ impl Sim {
         Some(m2)
     }
     fn moves_into(&self, e: usize) -> Vec<usize> {
-        match &self.mv_into { Some(m) => m.get(&(e as u32)).cloned().unwrap_or_default(), None => Self::build_moves_into(self.gw()).and_then(|m| m.get(&(e as u32)).cloned()).unwrap_or_default() }
+        // world-derived, built once per world (shared by every env on it)
+        match self.g.mv_into.get_or_init(|| Self::build_moves_into(&self.g)) { Some(m) => m.get(&(e as u32)).cloned().unwrap_or_default(), None => Vec::new() }
     }
 
     fn see_approach(&self, i: usize, o_in: usize, o_lane: i32, o_out: i32, first: &dyn Fn(&Sim, usize, f64) -> bool) -> Option<usize> {

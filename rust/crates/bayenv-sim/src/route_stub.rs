@@ -161,3 +161,44 @@ impl Router for NavRouter {
         self.r.route_batch(&qs).into_iter().map(|r| r.map(|v| v.into_iter().map(|x| x as i32).collect())).collect()
     }
 }
+
+/// The world's router (World::nav_base) with search state per THREAD instead of per env: many envs stepped on a
+/// thread pool (VecEnv) share one search state per worker thread (~8 MB each on the real world) instead of one each.
+/// A search's result does not depend on the state left by earlier searches (generation stamps), so results are
+/// identical to an own router.
+pub struct ThreadNavRouter { w: std::sync::Arc<World>, avoid: Vec<u32>, pen: Vec<(u32, f64)> }
+
+thread_local! {
+    /// (search graph pointer, router fork) per thread
+    static TL_ROUTERS: std::cell::RefCell<Vec<(usize, bayenv_world::nav::router::Router)>> = const { std::cell::RefCell::new(Vec::new()) };
+}
+
+impl ThreadNavRouter {
+    pub fn new(w: std::sync::Arc<World>) -> ThreadNavRouter {
+        w.nav_base.get_or_init(|| NavRouter::new(&w, 1.25));
+        ThreadNavRouter { w, avoid: Vec::new(), pen: Vec::new() }
+    }
+    fn with<T>(&self, f: impl FnOnce(&mut bayenv_world::nav::router::Router) -> T) -> T {
+        let base = &self.w.nav_base.get().unwrap().r;
+        let key = std::sync::Arc::as_ptr(base.graph()) as usize;
+        TL_ROUTERS.with(|tl| {
+            let mut v = tl.borrow_mut();
+            let k = match v.iter().position(|p| p.0 == key) { Some(k) => k, None => { v.push((key, base.fork())); v.len() - 1 } };
+            f(&mut v[k].1)
+        })
+    }
+}
+
+impl Router for ThreadNavRouter {
+    fn route(&mut self, start: i32, goal: i32, avoid: Option<&std::collections::HashSet<i32>>, penalty: Option<&std::collections::HashMap<i32, f64>>) -> Option<Vec<i32>> {
+        let to_i = |p: Vec<u32>| p.into_iter().map(|x| x as i32).collect::<Vec<i32>>();
+        if avoid.is_none() && penalty.is_none() { return self.with(|r| r.route(start as usize, goal as usize)).map(to_i); }
+        self.avoid.clear(); self.pen.clear();
+        if let Some(a) = avoid { self.avoid.extend(a.iter().map(|&x| x as u32)); }
+        if let Some(p) = penalty { self.pen.extend(p.iter().map(|(&e, &v)| (e as u32, v))); }
+        let (a, p) = (std::mem::take(&mut self.avoid), std::mem::take(&mut self.pen));
+        let out = self.with(|r| r.route_with(start as usize, goal as usize, &bayenv_world::nav::router::RouteQuery { avoid: &a, penalty: &p })).map(to_i);
+        self.avoid = a; self.pen = p;
+        out
+    }
+}

@@ -70,14 +70,41 @@ impl SpatialHash {
     }
 }
 
+/// Per-(edge, lane) sorted lists of the indexed cars. Keys are `edge * MAX_LANES + lane` (the touched keys are laid
+/// out in ascending key order, which is observed); the per-key arrays are stored in blocks of MAX_LANES allocated
+/// on an edge's first use (`edge_blk`), instead of dense over every edge (26.7 MB per env on the real world).
 pub struct LaneIndex {
+    /// block index per edge (u32::MAX = never used: every lane of the edge is empty)
+    edge_blk: Vec<u32>,
     pub lstart: Vec<i32>, pub lend: Vec<i32>, count: Vec<i32>, touched: Vec<i32>, pub order: Vec<i32>, pub ent_pos: Vec<i32>, n_touched: usize,
 }
 
 impl LaneIndex {
     pub fn new(edge_count: usize, capacity: usize) -> Self {
-        let keys = edge_count * MAX_LANES as usize;
-        LaneIndex { lstart: vec![0; keys], lend: vec![0; keys], count: vec![0; keys], touched: vec![0; capacity * 2], order: vec![0; capacity * 2], ent_pos: vec![0; capacity * MAX_OCC as usize], n_touched: 0 }
+        LaneIndex { edge_blk: vec![u32::MAX; edge_count], lstart: Vec::new(), lend: Vec::new(), count: Vec::new(), touched: vec![0; capacity * 2], order: vec![0; capacity * 2], ent_pos: vec![0; capacity * MAX_OCC as usize], n_touched: 0 }
+    }
+    /// slot of key `edge * MAX_LANES + lane` in the block arrays, allocating the edge's block
+    #[inline]
+    fn slot_mut(&mut self, k: usize) -> usize {
+        let e = k / MAX_LANES as usize;
+        let mut b = self.edge_blk[e];
+        if b == u32::MAX {
+            b = (self.lstart.len() / MAX_LANES as usize) as u32; self.edge_blk[e] = b;
+            let n = self.lstart.len() + MAX_LANES as usize;
+            self.lstart.resize(n, 0); self.lend.resize(n, 0); self.count.resize(n, 0);
+        }
+        b as usize * MAX_LANES as usize + k % MAX_LANES as usize
+    }
+    /// slot of a key whose edge has a block (touched keys)
+    #[inline]
+    fn slot(&self, k: usize) -> usize { self.edge_blk[k / MAX_LANES as usize] as usize * MAX_LANES as usize + k % MAX_LANES as usize }
+    /// (start, end) of a key; (0, 0) for an edge never used
+    #[inline]
+    fn bounds(&self, edge: i32, lane: i32) -> (i32, i32) {
+        let b = self.edge_blk[edge as usize];
+        if b == u32::MAX { return (0, 0); }
+        let q = b as usize * MAX_LANES as usize + lane as usize;
+        (self.lstart[q], self.lend[q])
     }
     pub fn rebuild(&mut self, vs: &VehicleStore) {
         let high = vs.high;
@@ -86,29 +113,30 @@ impl LaneIndex {
         if self.order.len() < total { self.order = vec![0; total * 2]; }
         if self.touched.len() < total { self.touched.resize(total * 2, 0); }
         if self.ent_pos.len() < high * MAX_OCC as usize { self.ent_pos = vec![0; high * MAX_OCC as usize * 2]; }
-        for q in 0..self.n_touched { let k = self.touched[q] as usize; self.lstart[k] = 0; self.lend[k] = 0; }
+        for q in 0..self.n_touched { let k = self.slot(self.touched[q] as usize); self.lstart[k] = 0; self.lend[k] = 0; }
         let mut nt = 0usize;
         for i in 0..high {
             let st = vs.state[i]; if st != STATE_DRIVING && st != STATE_CRASHED { continue; }
             let base = vs.edge[i] as i64 * MAX_LANES as i64;
             let mut l = vs.lane_lo[i] as i64;
-            while l <= vs.lane_hi[i] as i64 { let k = (base + l) as usize; if self.count[k] == 0 { self.touched[nt] = k as i32; nt += 1; } self.count[k] += 1; l += 1; }
+            while l <= vs.lane_hi[i] as i64 { let k = (base + l) as usize; let q = self.slot_mut(k); if self.count[q] == 0 { self.touched[nt] = k as i32; nt += 1; } self.count[q] += 1; l += 1; }
         }
         // load-bearing: the lane ranges laid out in key order (dropping this sort breaks the obs / v2 traces)
         self.touched[..nt].sort_unstable();
         let mut acc = 0i32;
-        for q in 0..nt { let k = self.touched[q] as usize; self.lstart[k] = acc; acc += self.count[k]; self.lend[k] = self.lstart[k]; }
+        for q in 0..nt { let k = self.slot(self.touched[q] as usize); self.lstart[k] = acc; acc += self.count[k]; self.lend[k] = self.lstart[k]; }
         for i in 0..high {
             let st = vs.state[i]; if st != STATE_DRIVING && st != STATE_CRASHED { continue; }
             let base = vs.edge[i] as i64 * MAX_LANES as i64;
             let mut l = vs.lane_lo[i] as i64;
-            while l <= vs.lane_hi[i] as i64 { let k = (base + l) as usize; self.order[self.lend[k] as usize] = i as i32; self.lend[k] += 1; l += 1; }
+            while l <= vs.lane_hi[i] as i64 { let k = self.slot((base + l) as usize); self.order[self.lend[k] as usize] = i as i32; self.lend[k] += 1; l += 1; }
         }
         let s = &vs.s;
         for q in 0..nt {
-            let k = self.touched[q] as usize;
+            let key = self.touched[q] as usize;
+            let k = self.slot(key);
             let (a, b) = (self.lstart[k] as usize, self.lend[k] as usize);
-            let lane = (k % MAX_LANES as usize) as i64;
+            let lane = (key % MAX_LANES as usize) as i64;
             for i in a + 1..b {
                 let v = self.order[i]; let sv = s[v as usize];
                 let mut j = i as i64 - 1;
@@ -123,26 +151,23 @@ impl LaneIndex {
     #[inline]
     pub fn ahead(&self, vs: &VehicleStore, i: usize, lane: i32) -> i32 {
         if lane < vs.lane_lo[i] as i32 || lane > vs.lane_hi[i] as i32 { return -1; }
-        let k = (vs.edge[i] * MAX_LANES + lane) as usize;
+        let (_, end) = self.bounds(vs.edge[i], lane);
         let p = self.ent_pos[i * MAX_OCC as usize + (lane - vs.lane_lo[i] as i32) as usize] + 1;
-        if p < self.lend[k] { self.order[p as usize] } else { -1 }
+        if p < end { self.order[p as usize] } else { -1 }
     }
     #[inline]
     pub fn behind(&self, vs: &VehicleStore, i: usize, lane: i32) -> i32 {
         if lane < vs.lane_lo[i] as i32 || lane > vs.lane_hi[i] as i32 { return -1; }
-        let k = (vs.edge[i] * MAX_LANES + lane) as usize;
+        let (start, _) = self.bounds(vs.edge[i], lane);
         let p = self.ent_pos[i * MAX_OCC as usize + (lane - vs.lane_lo[i] as i32) as usize] - 1;
-        if p >= self.lstart[k] { self.order[p as usize] } else { -1 }
+        if p >= start { self.order[p as usize] } else { -1 }
     }
-    #[inline]
-    fn key(edge: i32, lane: i32) -> usize { (edge * MAX_LANES + lane) as usize }
-    #[inline] pub fn first(&self, edge: i32, lane: i32) -> i32 { let k = Self::key(edge, lane); if self.lend[k] > self.lstart[k] { self.order[self.lstart[k] as usize] } else { -1 } }
-    #[inline] pub fn last(&self, edge: i32, lane: i32) -> i32 { let k = Self::key(edge, lane); if self.lend[k] > self.lstart[k] { self.order[self.lend[k] as usize - 1] } else { -1 } }
-    #[inline] pub fn range(&self, edge: i32, lane: i32) -> (usize, usize) { let k = Self::key(edge, lane); (self.lstart[k] as usize, self.lend[k] as usize) }
+    #[inline] pub fn first(&self, edge: i32, lane: i32) -> i32 { let (a, b) = self.bounds(edge, lane); if b > a { self.order[a as usize] } else { -1 } }
+    #[inline] pub fn last(&self, edge: i32, lane: i32) -> i32 { let (a, b) = self.bounds(edge, lane); if b > a { self.order[b as usize - 1] } else { -1 } }
+    #[inline] pub fn range(&self, edge: i32, lane: i32) -> (usize, usize) { let (a, b) = self.bounds(edge, lane); (a as usize, b as usize) }
     /// neighborsAt: [first with s >= s (ahead), last with s < s (behind)], skipping `me`.
     pub fn neighbors_at(&self, vs: &VehicleStore, edge: i32, lane: i32, s: f64, me: i32) -> (i32, i32) {
-        let k = Self::key(edge, lane);
-        let (a, b) = (self.lstart[k] as usize, self.lend[k] as usize);
+        let (a, b) = self.range(edge, lane);
         let (mut lo, mut hi) = (a, b);
         while lo < hi { let m = (lo + hi) >> 1; if (vs.s[self.order[m] as usize] as f64) < s { lo = m + 1; } else { hi = m; } }
         let mut p = lo; while p < b && self.order[p] == me { p += 1; }
