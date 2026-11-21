@@ -27,7 +27,7 @@ pub struct NavRouter(pub bayenv_world::nav::Router);
 impl NavRouter {
     pub fn new(w: &World, weight: f64) -> NavRouter { NavRouter(bayenv_world::nav::Router::new(&w.graph, &bayenv_world::nav::RouterOpts { weight, cache_max: 0, ..Default::default() })) }
 }
-fn nav_route(r: &mut bayenv_world::nav::Router, start: i32, goal: i32, avoid: Option<&bayenv_sim::fx::HashSet<i32>>, penalty: Option<&bayenv_sim::fx::HashMap<i32, f64>>) -> Option<Vec<i32>> {
+fn nav_route(r: &mut bayenv_world::nav::Router, start: i32, goal: i32, avoid: Option<&HashSet<i32>>, penalty: Option<&HashMap<i32, f64>>) -> Option<Vec<i32>> {
     let p = if avoid.is_none() && penalty.is_none() { r.route(start as usize, goal as usize) } else {
         let a: Vec<u32> = avoid.map(|s| s.iter().map(|&x| x as u32).collect()).unwrap_or_default();
         let p: Vec<(u32, f64)> = penalty.map(|m| m.iter().map(|(&e, &v)| (e as u32, v)).collect()).unwrap_or_default();
@@ -36,11 +36,11 @@ fn nav_route(r: &mut bayenv_world::nav::Router, start: i32, goal: i32, avoid: Op
     p.map(|v| v.into_iter().map(|x| x as i32).collect())
 }
 impl bayenv_sim::sim::Router for NavRouter {
-    fn route(&mut self, s: i32, g: i32, a: Option<&bayenv_sim::fx::HashSet<i32>>, p: Option<&bayenv_sim::fx::HashMap<i32, f64>>) -> Option<Vec<i32>> { nav_route(&mut self.0, s, g, a, p) }
+    fn route(&mut self, s: i32, g: i32, a: Option<&HashSet<i32>>, p: Option<&HashMap<i32, f64>>) -> Option<Vec<i32>> { nav_route(&mut self.0, s, g, a, p) }
 }
 struct NavRef<'a>(&'a mut bayenv_world::nav::Router);
 impl bayenv_sim::sim::Router for NavRef<'_> {
-    fn route(&mut self, s: i32, g: i32, a: Option<&bayenv_sim::fx::HashSet<i32>>, p: Option<&bayenv_sim::fx::HashMap<i32, f64>>) -> Option<Vec<i32>> { nav_route(self.0, s, g, a, p) }
+    fn route(&mut self, s: i32, g: i32, a: Option<&HashSet<i32>>, p: Option<&HashMap<i32, f64>>) -> Option<Vec<i32>> { nav_route(self.0, s, g, a, p) }
 }
 
 // ------------------------------------------------------------------ populations
