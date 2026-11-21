@@ -8,6 +8,8 @@ repository.workspace = true
 
 [dependencies]
 bayenv-world.workspace = true
+bayenv-sim.workspace = true
+rayon.workspace = true
 wgpu.workspace = true
 pollster.workspace = true
 bytemuck.workspace = true

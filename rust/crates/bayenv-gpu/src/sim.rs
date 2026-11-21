@@ -11,6 +11,11 @@ use bayenv_world::{jsmath, World};
 use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
 
+// host logic beyond scatter (populations, streaming, refuel plans / pumps, obstacles, snapshots, resetDay)
+#[path = "host.rs"]
+pub mod host;
+pub use host::{CommuterTable, GpuPopulation, ObstacleKind, ObstacleSpec, Placed, Snapshot, StaticObstacle};
+
 /// `GPU_DEFAULTS` subset that changes behaviour (the rest are constants of the JS defaults).
 #[derive(Clone, Debug)]
 pub struct GpuOptions {
@@ -52,6 +57,10 @@ pub struct GpuOptions {
     pub sorted_order: bool,
     /// GPU timestamp profile of the first step of every batch (`crate::profile`; needs TIMESTAMP_QUERY). JS: opts.profile
     pub profile: bool,
+    /// populations: schedule the return legs (GPU_DEFAULTS.returnTrips)
+    pub return_trips: bool,
+    /// wall-clock budget per frame for refuel plans (JS refuelBudgetMs = 4; f64::INFINITY = every queued plan each frame, deterministic)
+    pub refuel_budget_ms: f64,
 }
 #[derive(Clone, Copy, Debug)]
 pub struct Features { pub lane_changes: bool, pub accidents: bool, pub fuel: bool, pub collisions: bool, pub yield_: bool, pub policy: bool, pub zip_fix: bool, pub empty: bool }
@@ -85,7 +94,7 @@ impl Default for GpuOptions {
     fn default() -> Self {
         GpuOptions { capacity: 131072, dt: 0.05, start_time: 5.0 * 3600.0, seed: 1, obs: ObsMode::V2, steer_rate: false, decide_every: 1, features: Features::default(),
             controls: true, junctions: true, table_bits: 18, contact_cap: 131072, ev_cap: 16384, spawn_queue: 16384, op_cap: 16384, max_blocks: 4096, route_slack: 1 << 22,
-            resolve_rounds: 12, progress_weight: 1.0, jerk_weight: 0.5, jerk_reward: false, grade_obs: true, squeeze_delay: 15.0 * 60.0, deadlock_break: 0, reroute: true, keep_events: false, indirect_resolve: true, fused_resolve: true, sorted_order: true, profile: false }
+            resolve_rounds: 12, progress_weight: 1.0, jerk_weight: 0.5, jerk_reward: false, grade_obs: true, squeeze_delay: 15.0 * 60.0, deadlock_break: 0, reroute: true, keep_events: false, indirect_resolve: true, fused_resolve: true, sorted_order: true, profile: false, return_trips: true, refuel_budget_ms: 4.0 }
     }
 }
 
@@ -109,7 +118,7 @@ pub struct WorldBlob {
 pub struct Event { pub time: f64, pub kind: &'static str, pub slot: i64, pub a: f64, pub b: f64 }
 
 #[derive(Clone, Copy, Debug)]
-struct Wreck { lo: u32, hi: u32, ty: u32, edge: u32, s: f32 }
+struct Wreck { lo: u32, hi: u32, ty: u32, edge: u32, s: f64 }
 
 #[derive(Clone, Debug)]
 pub struct Scene {
@@ -123,7 +132,7 @@ pub struct Scene {
 pub struct Counters { pub minor_contacts: u64, pub crash_events: u64, pub crashes: u64, pub crashed_vehicles: u64, pub secondary_crashes: u64, pub stranded: u64, pub towed: u64,
     pub cleared: u64, pub spawned: u64, pub refuel_plan_failed: u64, pub events_dropped: u64, pub signal_violations: u64, pub stop_violations: u64, pub pull_overs: u64,
     pub towed_to_shoulder: u64, pub hauled_away: u64, pub missed_exits: u64, pub stuck_labels: u64, pub reroutes: u64, pub reroute_failed: u64, pub no_route: u64,
-    pub by_severity: [u64; 4] }
+    pub by_severity: [u64; 4], pub refuel_planned: u64, pub refuelled: u64, pub reentered: u64 }
 
 
 struct ScanLevel { n: usize, blocks: usize }
@@ -206,6 +215,8 @@ pub struct GpuSim {
     js_stages: bool,
     /// timestamp profiler (opts.profile)
     pub profiler: Option<crate::profile::Profiler>,
+    /// population / streaming / stations / obstacles state (sim/host.rs)
+    pub x: host::Ext,
 }
 
 #[derive(Clone, Copy, Debug, Default)]
@@ -292,7 +303,7 @@ impl GpuSim {
             refuel_queue: Vec::new(), reroute_queue: Default::default(), last_reroute: HashMap::new(), lot: 0, new_pose: false, crashes: Vec::new(), active: Vec::new(),
             counters: Counters::default(), gpu_stats: [0; 64], events: Vec::new(), closed_key: None, closed_n: 0, closed_edges: Vec::new(),
             edge_speed_ema: HashMap::new(), edge_speed_order: Vec::new(), traffic_penalty: HashMap::new(), penalty_order: Vec::new(), pending_penalty: None, next_traffic: -1e9,
-            router: None, packer: None, out_staging: None, pending: None, staging, io_host: vec![0; io_words], profiler: None, js_stages: false, blob, gpu, opts,
+            router: None, packer: None, out_staging: None, pending: None, staging, io_host: vec![0; io_words], profiler: None, js_stages: false, x: Default::default(), blob, gpu, opts,
         };
         if !use_j { sim.blob.j_m = None; }
         sim.blob.words = Vec::new();   // uploaded: no host copy kept (block writes go straight to the GPU)
@@ -590,7 +601,9 @@ impl GpuSim {
     pub fn submit_steps(&mut self, n: usize, obs_floats: usize, veh_words: usize) -> Pending {
         self.sync();
         let t_end = self.time + n as f64 * self.dt;
+        self.enqueue_spawns(t_end);
         self.scenes();
+        self.pumps();
         self.process_refuels();
         let mut sampled = false;
         if self.has_junctions() {
@@ -718,11 +731,11 @@ impl GpuSim {
         if n > cap { self.counters.events_dropped += (n - cap) as u64; }
         let m = n.min(cap); let base = io::EVDATA;
         for k in 0..m { let t = io[base + 4 * k];
-            if t & 255 == ev::WRECK { self.wrecks.insert(io[base + 4 * k + 1], Wreck { lo: (t >> 8) & 15, hi: (t >> 12) & 15, ty: (t >> 16) & 255, edge: io[base + 4 * k + 2], s: f32::from_bits(io[base + 4 * k + 3]) }); } }
+            if t & 255 == ev::WRECK { self.wrecks.insert(io[base + 4 * k + 1], Wreck { lo: (t >> 8) & 15, hi: (t >> 12) & 15, ty: (t >> 16) & 255, edge: io[base + 4 * k + 2], s: f32::from_bits(io[base + 4 * k + 3]) as f64 }); } }
         for k in 0..m {
             let o = base + 4 * k; let t = io[o] & 255; let slot = io[o + 1]; let a = io[o + 2]; let b = io[o + 3];
             match t {
-                ev::ARRIVE => { self.release(slot, "arrived"); }
+                ev::ARRIVE => { self.arrive(slot, f32::from_bits(b) as f64); }
                 ev::CTLVIOL => { if b & 255 == 1 { self.counters.signal_violations += 1; } else { self.counters.stop_violations += 1; } self.event("signalViolation", slot as i64, a as f64, (b >> 8) as f64 / 10.0); }
                 ev::TRIPX => {}
                 ev::CRASHX_V => { self.crash_x.insert(slot, CrashX { other: a, pre_a: (b & 0xFFFF) as f64 / 10.0, pre_b: (b >> 16) as f64 / 10.0, strike_edge: -1, ..Default::default() }); }
@@ -741,7 +754,7 @@ impl GpuSim {
                 ev::SPAWN => { self.queue_free.push(a); self.counters.spawned += 1; self.event("spawn", slot as i64, self.slot_trip[slot as usize] as f64, b as f64); }
                 ev::LOWFUEL => self.refuel_queue.push((slot, a)),
                 ev::STATION => self.enter_station(slot),
-                ev::REENTER => { self.slot_station[slot as usize] = -1; self.event("refuelLeave", slot as i64, 0.0, 0.0); }
+                ev::REENTER => { if self.x.in_lot.remove(&slot) { self.lot -= 1; } self.slot_station[slot as usize] = -1; self.counters.reentered += 1; self.event("refuelLeave", slot as i64, 0.0, 0.0); }
                 ev::CRASH => { let cx = self.crash_x.remove(&slot); self.crash_v4(slot, a, (b & 0xFFFF) as f64 / 10.0, (b >> 16) as f64 / 10.0, cx); }
                 ev::CONTACT => {
                     let dv = jsmath::max((b & 0xFFFF) as f64 / 10.0, (b >> 16) as f64 / 10.0);
@@ -761,10 +774,19 @@ impl GpuSim {
     }
     fn pull(&mut self, slot: u32) { self.counters.pull_overs += 1; let until = self.time + 300.0 + 600.0 * self.rand(); self.op(op::SET_PULL, slot, f32bits(until), 0); }
 
-    fn release(&mut self, slot: u32, outcome: &'static str) {
+    fn release(&mut self, slot: u32, outcome: &'static str) { self.release_fuel(slot, outcome, 0.0); }
+    /// `_release(slot, outcome, fuel)`: frees the slot, records the commuter's fuel / outcome (populations).
+    fn release_fuel(&mut self, slot: u32, outcome: &'static str, fuel: f64) {
         if self.slot_trip[slot as usize] == -2 { return; }
         let tr = self.slot_trip[slot as usize];
+        if self.x.has_pop() && tr >= 0 {
+            let id = (tr >> 1) as usize;
+            if outcome == "arrived" { self.x.fuel_left[id] = fuel as f32; }
+            else if outcome == "towed" { let ty = self.x.vehicle_type(id); self.x.fuel_left[id] = (0.2 * VEHICLE_PARAMS[ty.min(3)].tank_l) as f32; }
+            if tr & 1 == 0 && self.x.outcome[id] == 0 { self.x.outcome[id] = match outcome { "arrived" => 1, "crash" => 2, "stranded" => 3, "stuck" => 4, _ => 0 }; }
+        }
         self.slot_trip[slot as usize] = -2;
+        self.arena_free(slot);
         self.free.push(slot);
         self.event(outcome, slot as i64, tr as f64, 0.0);
     }
@@ -798,10 +820,10 @@ impl GpuSim {
         let first = *self.wrecks.get(&fresh[0])?;
         let e = first.edge as usize; let lanes = self.world.graph.lanes[e] as u32;
         let (mut mask, mut s_max) = (0u32, 0f64);
-        for s in all { if let Some(inf) = self.wrecks.get(s) { if inf.edge == first.edge { for l in inf.lo..=inf.hi { mask |= 1 << l; } if inf.s as f64 > s_max { s_max = inf.s as f64; } } } }
+        for s in all { if let Some(inf) = self.wrecks.get(s) { if inf.edge == first.edge { for l in inf.lo..=inf.hi { mask |= 1 << l; } if inf.s > s_max { s_max = inf.s; } } } }
         let mut blocked = (0..lanes).filter(|l| (mask >> l) & 1 == 1).count() as u32;
         for l in 0..lanes { if blocked >= lanes_blocked { break; } if (mask >> l) & 1 == 0 { mask |= 1 << l; blocked += 1; } }
-        let p = self.pose_at(e, first.s as f64, (first.lo as f64 + 0.5) * LANE_W);
+        let p = self.pose_at(e, first.s, (first.lo as f64 + 0.5) * LANE_W);
         let other_edge = all.iter().any(|q| self.wrecks.get(q).map_or(false, |w| w.edge != first.edge));
         let rec = Scene { id: self.crashes.len(), time: self.time, cause, severity, vehicles: fresh.to_vec(), lanes_blocked: blocked, lane_mask: mask, edge: first.edge, s: s_max,
             x: p[0], y: p[1], z: p[2], block_end: self.time + block_dur, clear_end: self.time + clear_dur,
@@ -824,6 +846,7 @@ impl GpuSim {
         self.crashes[id].delta_v_kmh = [dva, dvb];
         let secondary = slots.iter().any(|s| self.in_crash.contains(s) && !fresh.contains(s));
         self.counters.crashes += 1; self.counters.crashed_vehicles += fresh.len() as u64; if secondary { self.counters.secondary_crashes += 1; }
+        for &s in &fresh { self.mark_outcome(s, 2); }
         self.event("crash", fresh[0] as i64, id as f64, jsmath::max(dva, dvb));
     }
 
@@ -831,6 +854,7 @@ impl GpuSim {
         self.in_crash.insert(slot); self.counters.stranded += 1;
         let tow = 1800.0 * jsmath::exp(0.3 * self.gauss());
         self.open_scene(&[slot], "stranded", "stranded", 1, tow, tow, false, &[slot]);
+        self.mark_outcome(slot, 3);
         self.event("stranded", slot as i64, 0.0, 0.0);
     }
 
@@ -908,11 +932,6 @@ impl GpuSim {
         self.active = keep;
     }
 
-    fn process_refuels(&mut self) {
-        // no StationNetwork on the GPU host yet: every request fails (as gpuSim.js without setStations)
-        for (slot, _) in std::mem::take(&mut self.refuel_queue) { self.op(op::FUEL_PLAN_FAILED, slot, 0, 0); }
-    }
-    fn enter_station(&mut self, slot: u32) { self.lot += 1; self.op(op::PUMPED, slot, f32bits(self.time), 0); }
 
     fn update_closed(&mut self) {
         let g = &self.world.graph; let mut closed = Vec::new();

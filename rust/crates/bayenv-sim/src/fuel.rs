@@ -30,14 +30,41 @@ pub struct StationNetwork {
     pub busy: Vec<i32>, pub served: Vec<i32>, pub queue: Vec<Vec<usize>>, pub max_queue: usize, pub planned: u64, pub plan_failed: u64,
 }
 
+/// The graph queries refuel planning needs (implemented for the sim's `World` and the shared `SimGraph`, so the
+/// GPU host plans on `bayenv_world` without a copy).
+pub trait PlanGraph {
+    fn edge_from(&self, e: usize) -> i32;
+    fn edge_to(&self, e: usize) -> i32;
+    fn edge_length(&self, e: usize) -> f64;
+    fn edge_speed(&self, e: usize) -> f64;
+    fn node_x(&self, n: usize) -> f64;
+    fn node_z(&self, n: usize) -> f64;
+}
+impl PlanGraph for World {
+    fn edge_from(&self, e: usize) -> i32 { self.e_from[e] }
+    fn edge_to(&self, e: usize) -> i32 { self.e_to[e] }
+    fn edge_length(&self, e: usize) -> f64 { self.e_length[e] }
+    fn edge_speed(&self, e: usize) -> f64 { self.e_speed[e] }
+    fn node_x(&self, n: usize) -> f64 { self.nx[n] }
+    fn node_z(&self, n: usize) -> f64 { self.nz[n] }
+}
+impl PlanGraph for bayenv_world::graph::SimGraph {
+    fn edge_from(&self, e: usize) -> i32 { self.from[e] as i32 }
+    fn edge_to(&self, e: usize) -> i32 { self.to[e] as i32 }
+    fn edge_length(&self, e: usize) -> f64 { self.length[e] }
+    fn edge_speed(&self, e: usize) -> f64 { self.speed_limit[e] }
+    fn node_x(&self, n: usize) -> f64 { self.nx[n] }
+    fn node_z(&self, n: usize) -> f64 { self.nz[n] }
+}
+
 struct RouteRes { edges: Vec<i32>, nodes: Vec<i32>, length: f64, time: f64 }
-fn to_result(g: &World, edges: Option<Vec<i32>>) -> Option<RouteRes> {
+fn to_result<G: PlanGraph + ?Sized>(g: &G, edges: Option<Vec<i32>>) -> Option<RouteRes> {
     let edges = edges?;
     if edges.is_empty() { return None; }
     let mut nodes = Vec::with_capacity(edges.len() + 1);
-    nodes.push(g.e_from[edges[0] as usize]);
+    nodes.push(g.edge_from(edges[0] as usize));
     let (mut length, mut time) = (0.0, 0.0);
-    for &e in &edges { let e = e as usize; nodes.push(g.e_to[e]); length += g.e_length[e]; time += g.e_length[e] / g.e_speed[e]; }
+    for &e in &edges { let e = e as usize; nodes.push(g.edge_to(e)); length += g.edge_length(e); time += g.edge_length(e) / g.edge_speed(e); }
     Some(RouteRes { edges, nodes, length, time })
 }
 
@@ -56,12 +83,12 @@ impl StationNetwork {
         fuel / lpk < remaining_m / 1000.0 + self.cfg.reserve_km
     }
     /// StationNetwork.plan (routeViaStation)
-    pub fn plan(&mut self, g: &World, router: &mut dyn Router, from: i32, goal: i32) -> Option<Plan> {
+    pub fn plan<G: PlanGraph + ?Sized>(&mut self, g: &G, router: &mut dyn Router, from: i32, goal: i32) -> Option<Plan> {
         if self.node.is_empty() { return None; }
         let r = self.route_via_station(g, router, from, goal);
         match r {
             Some((route, st)) => {
-                let stop = route.edges.iter().position(|&e| g.e_to[e as usize] == self.node[st]);
+                let stop = route.edges.iter().position(|&e| g.edge_to(e as usize) == self.node[st]);
                 match stop {
                     Some(k) => { self.planned += 1; let dt = route.time; Some(Plan { edges: route.edges, station: st, stop_index: k, detour_time: dt }) }
                     None => { self.plan_failed += 1; None }
@@ -70,7 +97,7 @@ impl StationNetwork {
             None => { self.plan_failed += 1; None }
         }
     }
-    fn route_via_station(&self, g: &World, router: &mut dyn Router, from: i32, goal: i32) -> Option<(RouteRes, usize)> {
+    fn route_via_station<G: PlanGraph + ?Sized>(&self, g: &G, router: &mut dyn Router, from: i32, goal: i32) -> Option<(RouteRes, usize)> {
         let direct = to_result(g, router.route(from, goal, None, None))?;
         let stride = 1usize.max((direct.nodes.len() as f64 / 400.0).floor() as usize);
         let mut scored: Vec<(usize, f64)> = Vec::new();
@@ -78,7 +105,7 @@ impl StationNetwork {
             if self.node[s] == from || self.node[s] == goal { continue; }
             let mut best = f64::INFINITY;
             let mut i = 0;
-            while i < direct.nodes.len() { let n = direct.nodes[i] as usize; let dx = g.nx[n] - self.x[s]; let dz = g.nz[n] - self.z[s]; let d2 = dx * dx + dz * dz; if d2 < best { best = d2; } i += stride; }
+            while i < direct.nodes.len() { let n = direct.nodes[i] as usize; let dx = g.node_x(n) - self.x[s]; let dz = g.node_z(n) - self.z[s]; let d2 = dx * dx + dz * dz; if d2 < best { best = d2; } i += stride; }
             scored.push((s, best));
         }
         scored.sort_by(|a, b| jm::cmp_of(a.1 - b.1));

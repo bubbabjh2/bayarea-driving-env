@@ -489,6 +489,30 @@ impl World {
         world
     }
 
+    /// Graph-only copy of the shared world for routing / population generation / refuel planning (bayenv-gpu):
+    /// nodes, edge from / to / reverse / lanes / speed / length / rank / headings, CSR adjacency, banned hops,
+    /// stations, bounds. Polylines, lane geometry, junctions, controls and the hop table are left empty (~40 MB
+    /// instead of the full copy of `from_bayenv`).
+    pub fn routing_from_bayenv(w: &bayenv_world::World) -> World {
+        let g = &w.graph;
+        let i32v = |v: &[u32]| v.iter().map(|&x| x as i32).collect::<Vec<i32>>();
+        World {
+            node_count: g.node_count, nx: g.nx.clone(), nz: g.nz.clone(), node_y: Vec::new(), edge_count: g.edge_count,
+            e_from: i32v(&g.from), e_to: i32v(&g.to), e_rev: g.reverse.clone(), e_lanes: g.lanes.iter().map(|&x| x as i32).collect(), e_opp: Vec::new(),
+            e_speed: g.speed_limit.clone(), e_length: g.length.clone(), e_rank: g.rank.iter().map(|&x| x as i32).collect(), e_class: g.class.clone(), e_hw: Vec::new(),
+            e_is_link: Vec::new(), e_has_ys: Vec::new(), e_head_start: g.heading_start.clone(), e_head_end: g.heading_end.clone(), e_y: Vec::new(), e_right: Vec::new(),
+            e_s_exit: Vec::new(), e_s_stop: Vec::new(), e_gore: Vec::new(), e_surf: Vec::new(), e_gnd_r: Vec::new(), e_gnd_l: Vec::new(),
+            v_start: Vec::new(), px: Vec::new(), pz: Vec::new(), cum: Vec::new(), ys: Vec::new(), l_start: Vec::new(), lane_off: Vec::new(),
+            out_start: i32v(&g.out_start), out_edges: i32v(&g.out_edges), in_start: i32v(&g.in_start), in_edges: i32v(&g.in_edges),
+            highway_names: Vec::new(), max_speed: g.max_speed,
+            banned_hops: g.banned_hops.iter().map(|(&k, v)| (k as i64, v.iter().map(|&x| x as i32).collect())).collect(),
+            contact_pairs: None, lg: None, j: None, controls: None,
+            stations: w.stations.iter().map(|s| Station { node: s.node as i32, pumps: s.pumps as i32, x: s.x, z: s.z }).collect(),
+            surfaces: false, hop_base: Vec::new(), hops: Vec::new(),
+            bounds: (g.bounds.min_x, g.bounds.max_x, g.bounds.min_z, g.bounds.max_z),
+        }
+    }
+
     fn build_hops(&mut self) {
         let ne = self.edge_count;
         let mut base = vec![0u32; ne + 1];
