@@ -93,6 +93,28 @@ if (scenario === 'pop') {
   add('arriveEv', Uint32Array.from(arr.flat()));
   writeOut('mock', out);
   console.log(JSON.stringify(out));
+} else if (scenario === 'stream') {
+  // setStreaming(CommuterTable, default RouteProvider): routes at departure into the size-class arena
+  const n = +opt('n', 20000), seed = +opt('seed', 42), start = +opt('start', 25200), cap = +opt('cap', 8192);
+  const { buildCommuterTable } = await import('../../../src/sim/stream.js');
+  const tt = Date.now(); const table = await buildCommuterTable(world.graph, { n, seed }); const tableMs = Date.now() - tt;
+  const sim = await mkSim(cap, { startTime: start });
+  await sim.setStreaming(table, { stations: world.stations });
+  const out = { n, seed, start, cap, tableMs, tablePtr0: sim.tablePtr, nAgents: sim.nAgents };
+  for (const k of ['home', 'work', 'depart', 'workStart', 'reactionTime', 'fuelFill', 'vehicleType', 'order', 'sortedDepart']) add('t_' + k, table[k]);
+  const te = Date.now(); await sim.runSteps(10); out.enqueueMs = Date.now() - te;
+  out.queueHigh = sim.queueHigh; out.tablePtr1 = sim.tablePtr; out.pending1 = sim.pendingStream.length; out.routeWords1 = sim.routeWords; out.stats1 = { ...sim.streamStats };
+  add('queue1', buf('queue').slice(0, sim.queueHigh * L.SPAWN_WORDS)); add('routes1', sim.routeMirror.slice(0, sim.routeWords)); add('slotTrip1', sim.slotTrip.slice()); add('slotRoute1', sim.slotRoute.slice()); add('params1', buf('params').slice());
+  // queue slots back, half the cars arrive (arena blocks freed), 30 min later: more departures reuse the blocks
+  const qh = sim.queueHigh; sim._ingest(io(Array.from({ length: qh }, (_, q) => [L.EV.SPAWN, 0, q, 0])));
+  const arr = []; for (let s = 0; s < sim.cap; s += 2) if (sim.slotTrip[s] >= 0) arr.push([L.EV.ARRIVE, s, 0, f32u(7)]);
+  sim._ingest(io(arr)); out.arrived = arr.length;
+  sim.time += 1800; await sim.runSteps(10);
+  out.queueHigh2 = sim.queueHigh; out.tablePtr2 = sim.tablePtr; out.pending2 = sim.pendingStream.length; out.routeWords2 = sim.routeWords; out.stats2 = { ...sim.streamStats }; out.free2 = sim.free.length;
+  add('queue2', buf('queue').slice(0, sim.queueHigh * L.SPAWN_WORDS)); add('routes2', sim.routeMirror.slice(0, sim.routeWords)); add('slotTrip2', sim.slotTrip.slice()); add('slotRoute2', sim.slotRoute.slice());
+  add('fuelLeft2', sim.fuelLeft.slice()); add('outcome2', sim.outcome.slice()); add('arriveEv', Uint32Array.from(arr.flat()));
+  writeOut('mock', out);
+  console.log(JSON.stringify(out));
 } else if (scenario === 'obstacles') {
   const cap = +opt('cap', 4096), count = +opt('count', 40), oseed = +opt('oseed', 3), nw = +opt('wrecks', 12);
   const sim = await mkSim(cap, { startTime: 8 * 3600, seed: 5 });
