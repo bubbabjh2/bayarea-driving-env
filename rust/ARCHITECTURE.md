@@ -61,6 +61,11 @@ Numeric types = JS: f64 where JS holds a double, f32 where it stores into a Floa
 
 ## Floating point vs JS
 
-V8 on arm64 is compiled with FMA contraction, and its `Math.sin/cos` come from glibc, the rest from fdlibm; the
-`libm` crate and the system libm both differ in the last ulp on ~0.1-10 % of inputs. `jsmath` reproduces V8 per
-platform (verified on a generated test set). Bit-exact ports must route all transcendental calls through `jsmath`.
+V8 (node 22.22.0 = V8 12.4) implements every `Math` transcendental with its fdlibm port `src/base/ieee754.cc`
+(node's gyp build never sets `V8_USE_LIBM_TRIG_FUNCTIONS`, so sin/cos are fdlibm too; `Math.pow` is
+`ieee754::pow`). Clang compiles it with `-ffp-contract=on`, so on arm64 each `a*b + c` inside one C expression
+is an FMA. `jsmath` ports that file statement by statement with explicit `mul_add` at exactly those spots
+(plain mul + add on non-aarch64 targets: unverified). The `libm` crate and the system libm differ from node in
+the last ulp on ~0.1-30 % of inputs. Bit-exact ports must route all transcendental calls through `jsmath`.
+Check: `node rust/tools/oracle/gen_math.mjs` (writes `rust/oracle/math.bin`), then
+`cargo test -p bayenv-world --release --test jsmath_oracle` (0 mismatches required).
