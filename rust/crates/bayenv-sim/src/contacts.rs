@@ -64,14 +64,31 @@ impl Sim {
         let mut now: crate::fx::HashSet<i64> = std::collections::HashSet::default();
         let layer = self.opts.layer_gap;
         let mut cand = std::mem::take(&mut self.near_buf);
+        // parallel pre-scan: which cars would touch a barrier or have a swept contact with a later car, against the
+        // state at the start of the pass. The ordered pass below only runs cars the scan flags, cars changed earlier in
+        // the pass, and cars with a changed car near them (exact: everything else would find nothing).
+        let par = self.opts.parallel && high >= 512;
+        let scan: Vec<bool> = if par {
+            use rayon::prelude::*;
+            let me = &*self;
+            (0..high).into_par_iter().with_min_len(64).map(|i| me.contact_scan(i)).collect()
+        } else { Vec::new() };
+        let mut touched = vec![false; if par { high } else { 0 }];
+        let mut touched_list: Vec<usize> = Vec::new();
         for i in 0..high {
             let si = self.vs.state[i];
             if si != STATE_DRIVING && si != STATE_CRASHED { continue; }
+            if par && !scan[i] && !touched[i] {
+                let vs = &self.vs;
+                let r = jm::hypot(f(vs.hl[i]), f(vs.hw[i])) + 6.5 + jm::hypot(f(vs.x[i]) - f(vs.px[i]), f(vs.z[i]) - f(vs.pz[i])) + 5.0 + 1.0;
+                let (xi, zi) = (f(vs.x[i]), f(vs.z[i]));
+                if !touched_list.iter().any(|&k| k > i && jm::hypot(f(vs.x[k]) - xi, f(vs.z[k]) - zi) <= r) { continue; }
+            }
             let mov_i = si == STATE_DRIVING || self.vs.speed[i] > 0.01 || jm::abs(f(self.vs.v_lat[i])) > 0.01;
             if si == STATE_DRIVING && !self.empty && self.vs.conn[i] < 0 {
                 let eb = self.vs.edge[i] as usize;
                 let s = f(self.vs.s[i]);
-                if !(g.j.is_some() && (s < g.e_s_exit[eb] + 1.0 || s > g.e_s_stop[eb])) { self.barrier(i); }
+                if !(g.j.is_some() && (s < g.e_s_exit[eb] + 1.0 || s > g.e_s_stop[eb])) && self.barrier(i) && par && !touched[i] { touched[i] = true; touched_list.push(i); }
             }
             if self.empty && si == STATE_DRIVING { continue; }
             let vs = &self.vs;
@@ -102,6 +119,7 @@ impl Sim {
                 let res = physics::resolve_contact(&mut a, &mut b, &c, physics::RESTITUTION, physics::FRICTION);
                 physics::separate(&mut a, &mut b, &c);
                 self.write_back(i, &a); self.write_back(j, &b);
+                if par { for q in [i, j] { if !touched[q] { touched[q] = true; touched_list.push(q); } } }
                 if !self.touch.contains(&key) && res.jn > 0.0 && (si == STATE_DRIVING || sj == STATE_DRIVING) {
                     self.crash_event(&[i, j], &[res.dva, res.dvb], &c, res.closing, "collision", Some(pre));
                 }
@@ -132,7 +150,47 @@ impl Sim {
         }
     }
 
-    pub(crate) fn barrier(&mut self, i: usize) {
+    /// Pre-scan of the contact pass for slot i (pure): would its barrier act, or would a swept contact with a later
+    /// car j > i be found, at the current state?
+    fn contact_scan(&self, i: usize) -> bool {
+        let g = self.gw();
+        let vs = &self.vs;
+        let si = vs.state[i];
+        if si != STATE_DRIVING && si != STATE_CRASHED { return false; }
+        if si == STATE_DRIVING && !self.empty && vs.conn[i] < 0 {
+            let eb = vs.edge[i] as usize;
+            let s = f(vs.s[i]);
+            if !(g.j.is_some() && (s < g.e_s_exit[eb] + 1.0 || s > g.e_s_stop[eb])) && self.barrier_hit(i) { return true; }
+        }
+        if self.empty && si == STATE_DRIVING { return false; }
+        let mov_i = si == STATE_DRIVING || vs.speed[i] > 0.01 || jm::abs(f(vs.v_lat[i])) > 0.01;
+        let layer = self.opts.layer_gap;
+        let sweep_i = jm::hypot(f(vs.x[i]) - f(vs.px[i]), f(vs.z[i]) - f(vs.pz[i]));
+        let hd_i = jm::hypot(f(vs.hl[i]), f(vs.hw[i]));
+        let (xi, zi, yi) = (f(vs.x[i]), f(vs.z[i]), f(vs.y[i]));
+        let mut found = false;
+        self.hash.for_each_near(&vs.x, &vs.z, xi, zi, hd_i + 6.5 + sweep_i + 5.0, |j| {
+            if j <= i { return true; }
+            let sj = vs.state[j];
+            if sj != STATE_DRIVING && sj != STATE_CRASHED { return true; }
+            let mov_j = sj == STATE_DRIVING || vs.speed[j] > 0.01 || jm::abs(f(vs.v_lat[j])) > 0.01;
+            if !mov_i && !mov_j { return true; }
+            if jm::abs(f(vs.y[j]) - yi) > layer { return true; }
+            if vs.edge[j] == vs.edge[i] && jm::abs(f(vs.s[j]) - f(vs.s[i])) > f(vs.hl[i]) + f(vs.hl[j]) + 1.0 { return true; }
+            if vs.edge[j] != vs.edge[i] && !adjacent_or_freeway_free(g, vs.edge[i] as usize, vs.edge[j] as usize) { return true; }
+            let sweep_j = jm::hypot(f(vs.x[j]) - f(vs.px[j]), f(vs.z[j]) - f(vs.pz[j]));
+            let hd_j = jm::hypot(f(vs.hl[j]), f(vs.hw[j]));
+            if jm::hypot(f(vs.x[j]) - xi, f(vs.z[j]) - zi) > hd_i + hd_j + sweep_i + sweep_j { return true; }
+            let (a, a0) = body(vs, i, mov_i);
+            let (b, b0) = body(vs, j, mov_j);
+            if physics::swept_contact(a0, &a, b0, &b, 0.5).is_some() { found = true; return false; }
+            true
+        });
+        found
+    }
+
+    /// Returns whether slot i touched a barrier (state changed).
+    pub(crate) fn barrier(&mut self, i: usize) -> bool {
         let g = self.gw();
         let vs = &self.vs;
         let e = vs.edge[i] as usize;
@@ -150,7 +208,7 @@ impl Sim {
         let (mut side, mut depth) = (0.0f64, 0.0f64);
         if lat - ext < right { side = -1.0; depth = right - (lat - ext); }
         else if lat + ext > left { side = 1.0; depth = lat + ext - left; }
-        if side == 0.0 { return; }
+        if side == 0.0 { return false; }
         let mut best = 1e9;
         let (mut cx, mut cz) = (0.0, 0.0);
         let yaw = f(vs.heading[i]);
@@ -174,6 +232,30 @@ impl Sim {
         let was = self.barrier_touch.contains(&i);
         self.barrier_now.insert(i);
         if !was && res.jn > 0.0 { self.crash_event(&[i], &[res.dva], &c, res.closing, "barrier", Some(pre)); }
+        true
+    }
+
+    /// Whether _barrier(i) would act (pure; same expressions).
+    fn barrier_hit(&self, i: usize) -> bool {
+        let g = self.gw();
+        let vs = &self.vs;
+        let e = vs.edge[i] as usize;
+        let s = f(vs.s[i]);
+        let w = g.lane_w(e, s);
+        let (mut pad_r, mut pad_l) = (0.0, g.e_lanes[e] as f64 * w);
+        if let Some(lg) = &g.lg { let bd = lg.bounds(e, s); pad_r = bd.r - bd.right; pad_l = bd.r - bd.left; }
+        else { let taper = if f(vs.taper[i]) > s { w } else { 0.0 }; if vs.lat[i] < 0.0 { pad_r -= taper; } if f(vs.lat[i]) > pad_l { pad_l += taper; } }
+        let right = pad_r - if g.is_shoulder_road(e) { self.opts.freeway_shoulder } else { self.opts.shoulder };
+        let left = pad_l + if g.e_rev[e] >= 0 { jm::or(g.e_opp[e] as f64, g.e_lanes[e] as f64) * w + self.opts.opposite_margin } else { self.opts.shoulder };
+        let hr = f(vs.heading_rel[i]);
+        let (sh, ch) = (jm::sin(hr), jm::cos(hr));
+        let (hl, hw, lat) = (f(vs.hl[i]), f(vs.hw[i]), f(vs.lat[i]));
+        let ext = jm::abs(sh) * hl + jm::abs(ch) * hw;
+        let (mut side, mut depth) = (0.0f64, 0.0f64);
+        if lat - ext < right { side = -1.0; depth = right - (lat - ext); }
+        else if lat + ext > left { side = 1.0; depth = lat + ext - left; }
+        let _ = depth;
+        side != 0.0
     }
 
     /// _crashEvent: a new physical contact.
