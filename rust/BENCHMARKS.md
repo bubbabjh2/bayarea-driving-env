@@ -85,3 +85,19 @@ steps two runs of the baseline differ in 93 of 8,766 cars, baseline vs fused res
 Sorted order on the other per-car kernels (junction.perceive, courtesy, act, integrate, contacts.barrier) is
 bit-identical too but slower or neutral (the extra cap + lane-entry threads), so those entries are off by default
 (`SORTED_KERNELS`, override `BAYENV_SORTED=...`).
+
+## GPU host: populations, spawning, refuel plans (bayenv_gpu::sim::host)
+
+20,000 commuters (seed 42) on the real world, capacity 32768, start 07:00. JS = `gpuSim.js` in node 22 against the
+recording mock (`rust/tools/oracle/gpu_parity_mock.mjs`, same host code as in Chrome, no GPU work); Rust =
+`examples/parity_check.rs` (14 cores where noted). All outputs bit-identical.
+
+| operation | JS | Rust | notes |
+|---|---|---|---|
+| population generation, 20k commuters (40k routed legs) | 23.7 s (popParallel.js, worker threads) | 2.4 s (rayon, bayenv-sim generator) | |
+| `setPopulation` (packRoutes of 3.21M route words, trip sort) | 1,039 ms | 47 ms | per-hop maneuver table |
+| `_enqueueSpawns`, first frame (3,217 queue entries) | 20 ms | 10 ms | one queue write per entry |
+| refuel plan (`StationNetwork.plan`: direct A* + 6 candidate stations x 2 A*) | 7.3 ms | 3.1 ms | 40 plans: 291 vs 123 ms |
+| CommuterTable, 20k commuters | 5.9 s (worker threads) | 1.7 s (rayon) | |
+| streaming enqueue, 3,217 departures (A* at departure + arena) | 4,365 ms | 2,239 ms | serial in both; the browser uses a route-worker pool |
+| step with a population (3k cars driving, gas 0.3, batches of 10) | 2.48 ms/step (Chrome) | 1.43 ms/step | GPU-bound; host frame < 0.1 ms without refuel plans |

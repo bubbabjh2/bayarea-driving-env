@@ -9,7 +9,7 @@ oracle, and every port is checked against dumps of it (`tools/oracle/`). Layout 
 | crate | contents |
 |---|---|
 | `bayenv-world` | Road packs (mmap'd), SimGraph, lane geometry, junctions + builder, traffic-control plans, surfaces, grade separations, stations, DEM, node index, A* router, route guidance, V8-exact `jsmath`, bake format |
-| `bayenv-gpu` | wgpu host: world blob, buffers, kernels, `gpuSim.js` step loop (spawn / contacts / lists / junctions / sense / act / integrate), scatter population, events, crash scenes, closures and reroutes, live-traffic sampling, actions, observations, state readback |
+| `bayenv-gpu` | wgpu host: world blob, buffers, kernels, `gpuSim.js` step loop (spawn / contacts / lists / junctions / sense / act / integrate), scatter population, commuter populations (`setPopulation` / `setStreaming`), refuel plans and pumps, obstacles / wrecks, snapshot import, `resetDay`, events, crash scenes, closures and reroutes, live-traffic sampling, actions, observations, state readback |
 | `bayenv-sim` | CPU sim (port of `src/sim`) |
 | `bayenv-py` | Python module `bayenv` (PyO3 0.30 + maturin, abi3 ≥ 3.9) |
 
@@ -37,8 +37,22 @@ st = env.state()               # dict of numpy arrays: edge, s, speed, lat, x, y
 crashed = env.crash_flags()    # bool (n_slots,)
 sig = env.signals()            # per stop line: edge, stop_at, control, type, state, time_in, time_left
 env.stats(), env.time, env.raw("veh")
+
+pop = bayenv.Env("data", population=20000, pop_seed=42, start_time=7 * 3600.0)   # commuters on their trip schedule
+pop.step(20); pop.slot_trip()  # slot -> 2 * commuter + leg (-1 unused, -2 freed, -3 obstacle)
+pop.outcomes(), pop.agents()   # per commuter outcome; readAgents (reward sums, outcomes, trip time, crashes) + fuel_left
+pop.place_obstacles(count=40, seed=3); pop.place_wrecks(10); pop.reset_day()
 ```
 
+* Populations (gpu): `population=N, pop_seed=42` replaces the scatter with N commuters of `src/sim/population.js`
+  (generated natively, bit-identical with the JS, 10x faster than popParallel.js) spawning on their trip schedule, outbound
+  and return legs (`return_trips=True`), with refuel detours through the world's gas stations (`stations=True`) and
+  station pumps. `streaming=True` uses a CommuterTable whose routes are computed at departure (`GPUSim.setStreaming`).
+  `n_slots` = `capacity` (default min(N, 131072) rounded up to 1024): slots are recycled, `slot_trip()` maps them.
+  `refuel_budget_ms` (default none = every plan in the frame it is requested, deterministic; JS default 4 ms).
+  Also `reset_day(start_time=None)`, `place_obstacles(count, kinds, seed, slow_kmh, brake_every)` or
+  `place_obstacles(obstacles=[{edge, at, lane | lat, type}])`, `place_wrecks(n)`, `outcomes()`, `agents()`,
+  `import_snapshot(path)` (a CPU-sim `exportState` snapshot).
 * Constructor options: `backend="gpu"`, `capacity` (default `n_cars` rounded up to 1024; results are identical for any
   capacity ≥ `n_cars`), `obs="v2" | "v3" | "none"`, `dt`, `start_time`, `accidents`, `collisions`, `fuel`, `controls`,
   `junctions`, `steer="position" | "rate"`, `decide_every`, `keep_events`.
@@ -66,6 +80,11 @@ env.stats(), env.time, env.raw("veh")
 | A* router, guidance codes, route words | `tests/nav_oracle.rs` (5,250 queries, 1.03M words) | bit-identical |
 | GPU world blob (344 MB), params, kernel sources + defines, scatter state, dispatch lists | `crates/bayenv-gpu/tests/host_oracle.rs` vs the JS `GPUSim` (mock WebGPU run, `tools/oracle/gpu_mock.mjs`) | bit-identical |
 | per-car state after N steps, JS GPU sim in Chrome vs wgpu | `tools/oracle/compare_gpu.sh` (10k cars, seed 11, gas 0.3, batches of 10) | see below |
+| population (generator + `setPopulation`), spawn queue entries, trip schedule, params, slot tables, refuel plans (`StationNetwork.plan` + `SET_ROUTE_REFUEL` blocks), station / pump ops (`_enterStation`, `_pumps`), REENTER / ARRIVE (fuel to the return leg, outcomes), `resetDay` | `tools/oracle/compare_parity.sh` part 1: `gpu_parity_mock.mjs --scenario=pop` vs `examples/parity_check.rs` (20k commuters, seed 42, 07:00, 40 refuel plans) | bit-identical |
+| `setStreaming`: CommuterTable (9 arrays), routes at departure, size-class route arena (incl. reuse after arrivals) | `--scenario=stream` | bit-identical |
+| `placeObstacles` (spec, 40 of 8 kinds; explicit list), `placeWrecks`: veh / par / ctl records, scene blocks + edge heads, routes, scene records | `--scenario=obstacles` | bit-identical |
+| `importSnapshot` (CPU sim `exportState`, 95 cars): veh / par / ring / pose / routes / clock | `--scenario=snapshot` | bit-identical |
+| commuter population + 40 obstacles in Chrome vs wgpu | `compare_parity.sh` part 2 (`gpu_parity_run.html` vs `examples/parity_run.rs`, 20k commuters, gas 0.3) | see below |
 
 After 200 steps (10 s): all 9,983 cars are on the same edge in the same state with the same flags; 68.5 % are
 bit-identical in all 40 fields + pose; max |Δs| 0.029 m, |Δspeed| 0.032 m/s, |Δlat| 0.010 m, pose 0.030 m. Same
@@ -78,6 +97,12 @@ bit-identical cars instead of 6,838). The differences then grow through contacts
 cars have the same state and edge, 96.9 % are within 0.5 m and 0.1 m/s, and aggregates agree (7,565 vs 7,560 driving,
 4,712 vs 4,710 contacts, 940 vs 941 crash scenes). JS CPU vs JS GPU reaches 92.5 % within 0.5 m after 1,000 steps
 (`src/gpu/README.md`).
+
+Population runs (07:00, 3,217 departures queued in the first frame, gas 0.3): spawns, arrivals, trip pointer, slot
+assignment (`slotTrip`), refuel plans, station lots and outcomes match the JS exactly. Per-car state matches like the
+scatter runs: after 200 steps every car has the same state and edge and 99.8 % are within 0.5 m and 0.1 m/s; after
+1,000 steps 99.5 % (99.2 % with 40 obstacles) have the same state and edge and 96.9 % (96.4 %) are within 0.5 m and
+0.1 m/s; counters stay within 1 % (crash scenes 222 vs 224, refuel plans 110 vs 110).
 
 ## Performance (Apple M4 Max, Metal; real world, constant gas 0.3, obs v2, bench.html protocol)
 
@@ -104,12 +129,11 @@ bit-identical, and the JS behaviour is available with `GpuOptions.indirect_resol
 
 ## Not ported yet (GPU host)
 
-* `setPopulation` / `setStreaming` (commuter populations, spawning from the trip schedule). Only `scatter` populations
-  are available, as in `bench.html`.
-* Refuel planning (`StationNetwork.plan`, pumps). As in `gpuSim.js` without `setStations`, every low-fuel request gets
-  `FUEL_PLAN_FAILED`. This needs `src/sim/fuel.js` from `bayenv-sim`.
-* `placeObstacles` / `placeWrecks`, `importSnapshot`, `resetDay`, the timestamp profiler, crash-detail records (type,
-  maneuver, contact point) in the event log, `readAgents` / reward sums.
+* Web-Worker paths of `gpuSim.js` (refuel plans / reroutes / streaming routes in workers): the Rust host runs them on the
+  main thread like the JS without workers (`fuelWorkers: 0`), which gives the same results; streaming routes are
+  computed serially at departure (0.7 ms per route; no prefetch pool yet).
+* Crash-detail records (type, maneuver, contact point) in the event log, the `crashPenLog`, `getStats()` as one object
+  (the Python `stats()` exposes the counters).
 * Scatter routes carry no `slotRoute`, as in the JS, so missed-exit / closure reroutes are no-ops for scatter cars. The
   reroute path (A* + SET_ROUTE) is implemented for cars that have one.
 * Vulkan / DX12 are untested (developed on Metal). Obs v3 kernels compile but were not compared with the JS.

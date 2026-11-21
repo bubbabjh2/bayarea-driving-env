@@ -160,6 +160,14 @@ fn main() {
         cmp("fuelLeft", &m.words("fuelLeft5"), &sim.x.fuel_left.iter().map(|x| x.to_bits()).collect::<Vec<_>>(), &mut bad);
         cmp("outcome", &m.words("outcome5"), &sim.x.outcome.iter().map(|&x| x as u32).collect::<Vec<_>>(), &mut bad);
         cmp("slotTrip", &m.words("slotTrip5"), &sim.slot_trip.iter().map(|&x| x as u32).collect::<Vec<_>>(), &mut bad);
+        // resetDay + first frame of the new day
+        sim.reset_day(None); let t_r = sim.time; let t_end = sim.time + 0.5; sim.enqueue_spawns(t_end); sim.write_params_now(0);
+        eq("resetDay: time / queueHigh / route words / free / tripPtr", (m.f("timeR"), m.u("queueHighR") as usize, m.u("routeWordsR") as usize, m.u("freeR") as usize, m.u("tripPtrR") as usize),
+            (t_r, sim.queue_high(), sim.route_words, sim.free_len(), sim.x.trip_ptr), &mut bad);
+        cmp("resetDay spawn queue", &m.words("queueR"), &sim.read_words("queue")[..sim.queue_high() * L::SPAWN_WORDS], &mut bad);
+        cmp("resetDay slotTrip", &m.words("slotTripR"), &sim.slot_trip.iter().map(|&x| x as u32).collect::<Vec<_>>(), &mut bad);
+        cmp("resetDay params", &m.words("paramsR"), &sim.params_words()[..], &mut bad);
+        let eb = sim.blob.off.eb as usize; cmp("resetDay edge heads (world)", &m.words("worldEbR"), &sim.read_words("world")[eb..eb + 64], &mut bad);
     } else if !m.meta["placed"].is_null() {
         // ---------------------------------------------------------------- obstacles / wrecks
         let cap = m.u("cap") as usize;
