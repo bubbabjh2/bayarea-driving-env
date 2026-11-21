@@ -55,6 +55,11 @@ pub struct SimOpts {
     /// every curve and junction turn at any speed (69 deg turns at 108 km/h: 14.6 g). With the fix the world heading
     /// changes by the yaw rate only; cornering needs steering and is limited by the tyres.
     pub curvature_dynamics: bool,
+    /// The world holds the smoothed frame geometry (default OFF; DECISIONS.md 33): lane reference polylines and
+    /// junction connectors filleted to realistic minimum radii by road class and speed limit (bayenv_world::smooth),
+    /// built at load time with `LoadOptions::smooth_geometry` / `World::smooth_geometry`. Positions and frames both
+    /// come from it. Meant for `curvature_dynamics` (required); `Sim::new` checks that it matches the world.
+    pub smooth_geometry: bool,
     /// Model fix (default ON; false = the JS): a sliding wreck clamped at the end of its edge / connector loses its
     /// along-track speed (the JS kept the speed at a fixed position, e.g. 19.5 m/s decaying to 9 m/s standing still).
     pub wreck_end_stop: bool,
@@ -94,7 +99,7 @@ impl SimOpts {
     pub fn model_flags(&self) -> crate::vehicle::ModelFlags { crate::vehicle::ModelFlags { fixes: crate::physics::Fixes { hold: self.brake_hold, heavy_brakes: self.heavy_brakes, reverse: self.impact_reverse }, curvature: self.curvature_dynamics, wreck_end_stop: self.wreck_end_stop } }
     /// The JS sim's model (oracle checks, trace_check / v2_check, JS-port tests): Default with the model fixes off
     /// (replan_at_missed_event = false). Checkpoints trained on the JS CPU sim saw this model.
-    pub fn js() -> SimOpts { SimOpts { replan_at_missed_event: false, lane_index_snapshot: false, wreck_real_mass: false, curvature_dynamics: false, wreck_end_stop: false, contact_episodes: false, connector_barrier: false, brake_hold: false, heavy_brakes: false, barrier_soft_push: false, impact_reverse: false, ..SimOpts::default() } }
+    pub fn js() -> SimOpts { SimOpts { replan_at_missed_event: false, lane_index_snapshot: false, wreck_real_mass: false, curvature_dynamics: false, smooth_geometry: false, wreck_end_stop: false, contact_episodes: false, connector_barrier: false, brake_hold: false, heavy_brakes: false, barrier_soft_push: false, impact_reverse: false, ..SimOpts::default() } }
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -107,7 +112,7 @@ impl Default for SimOpts {
             cell_size: 25.0, table_bits: 18, leader_lookahead: 250.0, merge_lookahead: 80.0, lane_end_lookahead: 450.0, control_lookahead: 250.0,
             reroute: true, reroute_sight: 2000.0, squeeze_delay: 900.0, squeeze_speed: 3.0, density_interval: 60.0, path_sight: 0.0,
             deadlock_break: 0.0, spawn_lane_route: 0.0, junction_sight: 0.0, position_mode: true, traffic_mode: TrafficMode::Full, fuel: true,
-            seed: 1.0, wrecks: 0, default_action: Action { steer: Some(0.0), steer_rate: None, gas: 0.0, brake: 0.3 }, fuel_cfg: Default::default(), slot_pool: 0, parallel: false, replan_at_missed_event: true, batch_dynamics: true, lane_index_snapshot: true, wreck_real_mass: true, curvature_dynamics: false, wreck_end_stop: true, contact_episodes: true, connector_barrier: true, brake_hold: true, heavy_brakes: true, barrier_soft_push: true, impact_reverse: true }
+            seed: 1.0, wrecks: 0, default_action: Action { steer: Some(0.0), steer_rate: None, gas: 0.0, brake: 0.3 }, fuel_cfg: Default::default(), slot_pool: 0, parallel: false, replan_at_missed_event: true, batch_dynamics: true, lane_index_snapshot: true, wreck_real_mass: true, curvature_dynamics: false, smooth_geometry: false, wreck_end_stop: true, contact_episodes: true, connector_barrier: true, brake_hold: true, heavy_brakes: true, barrier_soft_push: true, impact_reverse: true }
     }
 }
 
@@ -313,6 +318,9 @@ impl Sim {
         let trips = pop.trips();
         let cap = if opts.slot_pool > 0 { opts.slot_pool } else { 1024usize.max(((n_c as f64 * 0.6).ceil() as usize + 64).min(1 << 20)) };
         assert!(opts.dt > 0.0 && opts.dt.is_finite(), "SimOpts.dt must be a positive finite number of seconds (got {})", opts.dt);
+        assert!(opts.smooth_geometry == g.geometry_smoothed, "SimOpts.smooth_geometry ({}) must match the world (smoothed: {}): load it with LoadOptions::smooth_geometry / Env::load_world_smoothed",
+            opts.smooth_geometry, g.geometry_smoothed);
+        assert!(!opts.smooth_geometry || opts.curvature_dynamics, "SimOpts.smooth_geometry is the frame geometry of curvature_dynamics: turn curvature_dynamics on too");
         let mut vs = VehicleStore::new(cap);
         vs.model = opts.model_flags();
         vs.position_mode = opts.position_mode;

@@ -107,12 +107,17 @@ fn snap(env: &Env) -> Vec<Snap> {
         edge: vs.edge[i], conn: vs.conn[i], spawn: vs.spawn_time[i], lat: vs.lat[i] as f64, s: vs.s[i] as f64, ty: vs.type_idx[i] }).collect()
 }
 
+/// AUDIT_CURV=1: curvature_dynamics on; AUDIT_SMOOTH=1: also the smoothed frame geometry (DECISIONS.md 33)
+fn audit_flags() -> (bool, bool) { let s = std::env::var("AUDIT_SMOOTH").is_ok(); (s || std::env::var("AUDIT_CURV").is_ok(), s) }
+
 fn make_env(data: &str, n: usize, seed: f64, start_h: f64, mode: TrafficMode, dt: f64) -> Env {
-    let world = Env::load_world(Path::new(data)).expect("world");
+    let (curv, smooth) = audit_flags();
+    let world = Env::load_world_with(Path::new(data), true, smooth).expect("world");
     let pop = Arc::new(Population::generate_like_env(&world, "real", n, seed, Some(Path::new(data))).expect("pop"));
     // AUDIT_JS=1: the JS model (all model fixes off)
     let base = if std::env::var("AUDIT_JS").is_ok() { SimOpts::js() } else { SimOpts::default() };
-    let opts = SimOpts { dt, seed, traffic_mode: mode, ..base };
+    let opts = SimOpts { dt, seed, traffic_mode: mode, curvature_dynamics: base.curvature_dynamics || curv, smooth_geometry: smooth, ..base };
+    eprintln!("audit model: {} curvature_dynamics {} smooth_geometry {}", if std::env::var("AUDIT_JS").is_ok() { "js" } else { "default" }, opts.curvature_dynamics, opts.smooth_geometry);
     let cfg = EnvConfig { opts, start_time: Some(start_h * 3600.0), static_obstacles: Vec::new(), scenario_obstacles: Vec::new(), obstacles: None };
     Env::new(world.clone(), pop, cfg, Box::new(|w| bayenv_sim::harness::router_for(&w)))
 }
@@ -141,6 +146,61 @@ fn keep_policy(env: &Env, i: usize, wobble: f64, t: f64) -> Action {
     Action { steer: Some((delta / p.max_steer).clamp(-1.0, 1.0)), steer_rate: None, gas, brake }
 }
 
+/// World point at the lane centre `d` m ahead of slot i along its planned path (current edge / connector, then the
+/// route; the connector its lane takes into the next route edge, else a plain hop keeping the lane index).
+fn path_point(env: &Env, i: usize, d: f64) -> (f64, f64) {
+    let (vs, g) = (&env.sim.vs, &*env.world);
+    let mut lane = vs.target_lane[i].max(vs.lane[i]).max(0) as i32;
+    let (mut e, mut m, mut s) = (vs.edge[i] as usize, vs.conn[i], vs.s[i] as f64);
+    let route = &vs.routes[i]; let mut pos = vs.route_pos[i].max(0) as usize;
+    let mut left_d = d;
+    for _ in 0..16 {
+        let (end, next): (f64, Option<(usize, i32, f64)>) = if m >= 0 {
+            let j = g.j.as_ref().unwrap(); let mu = m as usize; lane = j.info(mu, 3) as i32;
+            (j.s_in(mu) + j.m_len[mu], Some((j.info(mu, 2) as usize, -1, j.s_out(mu))))
+        } else {
+            let nx = if pos + 1 < route.len() { Some(route[pos + 1]) } else { None };
+            let mv = match (nx, &g.j) { (Some(n), Some(j)) => { let ln = lane.min(g.e_lanes[e] - 1).max(0); let mut mv = j.movement(e, ln, n); let mut l2 = 0; while mv < 0 && l2 < g.e_lanes[e] { mv = j.movement(e, l2, n); l2 += 1; } mv } _ => -1 };
+            if mv >= 0 { let j = g.j.as_ref().unwrap(); (j.s_in(mv as usize), Some((e, mv, j.s_in(mv as usize)))) } else { (g.e_length[e], nx.map(|n| (n as usize, -1, 0.0))) }
+        };
+        let rest = (end - s).max(0.0);
+        if left_d <= rest || next.is_none() { s = (s + left_d).min(end); break; }
+        left_d -= rest;
+        let (ne, nm, ns) = next.unwrap();
+        if m >= 0 || nm < 0 { if ne != e { pos += 1; } }
+        if nm >= 0 { lane = g.j.as_ref().unwrap().info(nm as usize, 1) as i32; }
+        e = ne; m = nm; s = ns;
+        lane = lane.min(g.e_lanes[e] - 1).max(0);
+    }
+    if m >= 0 { let j = g.j.as_ref().unwrap(); let p = j.connector_point(m as usize, s - j.s_in(m as usize)); return (p.x, p.z); }
+    let lg = g.lg.as_ref().unwrap(); let s = s.min(g.e_length[e]).max(0.0);
+    let p = lg.lat_point(e, s, (lane as f64 + 0.5) * g.lane_w(e, s)); (p.x, p.z)
+}
+
+/// A pure-pursuit driver ("pursuit"): steer towards the lane centre `L_d` = 2 m + 0.8 s x speed ahead along the
+/// planned path, delta = atan(2 L sin(alpha) / L_d); speed as keep_policy, capped at sqrt(0.3 g x radius ahead)
+/// from the lane-heading preview. A look-ahead driver for curvature_dynamics.
+fn pursuit_policy(env: &Env, i: usize, t: f64) -> Action {
+    let mut a = keep_policy(env, i, 0.0, t);
+    let vs = &env.sim.vs; let p = &VEHICLE_PARAMS[vs.type_idx[i] as usize];
+    let u = vs.speed[i] as f64;
+    // the command acts after the driver's reaction delay: aim from where the car will be by then
+    let delay = vs.delay_steps[i] as f64 * env.sim.dt;
+    let ld = 2.0 + 0.8 * u + u * delay;
+    let (tx, tz) = path_point(env, i, ld);
+    let (x, z, h) = (vs.x[i] as f64, vs.z[i] as f64, vs.heading[i] as f64);
+    let alpha = wrap((tz - z).atan2(tx - x) - h);
+    let dist = (tx - x).hypot(tz - z).max(1.0);
+    // a positive steer turns the world heading towards -heading (heading_rel grows with the yaw rate)
+    let delta = -(2.0 * p.l * alpha.sin() / dist).atan().clamp(-p.max_steer, p.max_steer);
+    a.steer = Some(delta / p.max_steer);
+    let pv = bayenv_sim::obs::heading_preview(&env.sim, i);
+    let kmax = (0..4).map(|k| pv[k].abs() / bayenv_sim::obs::HEADING_PREVIEW_D[k]).fold(0.0, f64::max);
+    let v_curve = if kmax > 1e-6 { (0.25 * 9.81 / kmax).sqrt().max(2.5) } else { f64::INFINITY };
+    if u > v_curve { a.gas = 0.0; a.brake = a.brake.max(((u - v_curve) * 0.4).clamp(0.0, 0.7)); } else { a.gas = a.gas.min(((v_curve - u) * 0.3).clamp(0.0, 1.0)); }
+    a
+}
+
 pub fn sim(data: &str, n: usize, steps: usize, policy: &str) {
     let dt = 0.05;
     let mut env = make_env(data, n, 42.0, 7.0, TrafficMode::Full, dt);
@@ -153,6 +213,7 @@ pub fn sim(data: &str, n: usize, steps: usize, policy: &str) {
         spawn: u64, spawn_overlap: u64, spawn_ex: String, overlap_pairs: u64, overlap_by: HashMap<&'static str, u64>, under: [u64; 5], under_heavy: u64,
         crash_ev: u64, ke_gain: u64, ke_gain_max: f64, contact_dy: u64, contact_dy_ex: String, nan: u64 }
     let mut c = C::default();
+    let mut crash_by: std::collections::BTreeMap<String, u32> = Default::default(); let mut crash_n = 0;
     let mut seen_pairs: std::collections::HashSet<(usize, usize, u32)> = Default::default();
     for step in 0..steps {
         let t = env.sim.time;
@@ -161,17 +222,30 @@ pub fn sim(data: &str, n: usize, steps: usize, policy: &str) {
             let a = match policy {
                 "const" => Action { steer: Some(0.0), steer_rate: None, gas: 0.3, brake: 0.0 },
                 "wobble" => keep_policy(&env, i, 0.03, t),
+                "pursuit" => pursuit_policy(&env, i, t),
                 "fast" => { let mut a = keep_policy(&env, i, 0.0, t); let u = env.sim.vs.speed[i] as f64; a.gas = ((30.0 - u) * 0.3).clamp(0.0, 1.0); if a.brake > 0.0 && env.sim.vs.leader[i] == -1 { a.brake = 0.0; } a }
                 _ => keep_policy(&env, i, 0.0, t),
             };
             env.act(i, a);
         }
+        if let Ok(tr) = std::env::var("AUDIT_TRACE") { let i: usize = tr.parse().unwrap(); let vs = &env.sim.vs; if i < vs.high && vs.state[i] == STATE_DRIVING {
+            let a = env.sim.actions.get(i).copied().flatten();
+            println!("  trace step {step} slot {i}: edge {} conn {} s {:.2} lat {:.2} hr {:.3} u {:.2} steer_angle {:.3} cmd {:?} pv {:?}", vs.edge[i], vs.conn[i], vs.s[i], vs.lat[i], vs.heading_rel[i], vs.speed[i], vs.steer_angle[i], a.map(|a| (a.steer, a.gas, a.brake)), bayenv_sim::obs::heading_preview(&env.sim, i).map(|x| (x * 1000.0).round() / 1000.0));
+        } }
         env.step(1);
         c.steps += 1;
         let now = snap(&env);
         let collided: std::collections::HashSet<usize> = env.sim.collided_last.iter().copied().collect();
         let evs = env.events();
         for ev in &evs {
+            if ev.kind == EV_CRASHED && std::env::var("AUDIT_CRASHES").is_ok() {
+                let i = ev.slot as usize; let a = &now[i]; let b = if i < prev.len() { prev[i] } else { Snap::default() };
+                let e = a.edge as usize;
+                let wall = if ev.other < 0 { "barrier" } else { "car" };
+                let lb = g.lg.as_ref().map(|l| l.bounds(e, a.s.min(g.e_length[e]))).unwrap_or_default();
+                *crash_by.entry(format!("{wall} {} {}", if b.conn >= 0 || a.conn >= 0 { "connector" } else { "edge" }, g.highway(e))).or_default() += 1;
+                if crash_n < 12 { crash_n += 1; println!("  crash step {step} slot {i} {wall}: edge {e} ({}, {} lanes, len {:.0}) conn {} -> {} s {:.1} lat {:.2} (bounds right {:.2} left {:.2}) hr {:.2} u {:.1} dv {:.1}", g.highway(e), g.e_lanes[e], g.e_length[e], b.conn, a.conn, a.s, a.lat, lb.right, lb.left, env.sim.vs.heading_rel[i], a.u, ev.dv_kmh); }
+            }
             if ev.kind == EV_SPAWNED {
                 c.spawn += 1;
                 let i = ev.slot as usize; let a = &now[i];
@@ -272,6 +346,7 @@ pub fn sim(data: &str, n: usize, steps: usize, policy: &str) {
     println!("== R rollout: policy {policy}, {n} commuters, {steps} steps (dt {dt}), {:.1} s wall, {} car-steps; spawned {}, arrived {}, crash events {}, crashed vehicles {}, minor contacts {} ==",
         el, c.car_steps, st["spawned"], st["arrived"], st["crash_events"], st["crashed_vehicles"], st["minor_contacts"]);
     println!("non-finite pose/speed: {}", c.nan);
+    if !crash_by.is_empty() { println!("crashes by kind: {crash_by:?}"); }
     println!("teleports (moved > 1.5 x speed x dt + 0.5 m): {} ({:.3} %): contact {}, connector change {}, edge hop {}, other {}; worst excess {:.2} m: {}", c.tele, 100.0 * c.tele as f64 / c.car_steps.max(1) as f64, c.tele_contact, c.tele_conn, c.tele_edge, c.tele_other, c.tele_max, c.tele_ex);
     println!("heading jumps > 0.3 rad in one step without contact: {}; first: {}", c.hjump, c.hjump_ex);
     println!("y jumps (> 0.5 m + 0.4 x distance): {}; worst {:.2} m: {}", c.yjump, c.yjump_max, c.yjump_ex);

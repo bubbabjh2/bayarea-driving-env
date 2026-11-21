@@ -29,6 +29,7 @@ pub mod lanes_build;
 pub mod nav;
 pub mod oracle;
 pub mod roadpack;
+pub mod smooth;
 pub mod verify;
 pub mod world;
 

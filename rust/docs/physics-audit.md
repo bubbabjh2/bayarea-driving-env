@@ -11,7 +11,9 @@ cargo run --release -p bayenv-sim --example physics_audit -- dyn            # A:
 cargo run --release -p bayenv-sim --example physics_audit -- contact        # B: rigid-body contacts
 cargo run --release -p bayenv-sim --example physics_audit -- world ../data  # W: world geometry
 cargo run --release -p bayenv-sim --example physics_audit -- scen ../data   # S: targeted scenarios
-cargo run --release -p bayenv-sim --example physics_audit -- sim ../data 5000 2400 keep|const|wobble|fast  # R: rollout scan
+cargo run --release -p bayenv-sim --example physics_audit -- sim ../data 5000 2400 keep|const|wobble|fast|pursuit  # R: rollout scan
+# AUDIT_JS=1: the JS model; AUDIT_CURV=1: curvature_dynamics on; AUDIT_SMOOTH=1: also smooth_geometry (DECISIONS.md 33);
+# AUDIT_CRASHES=1: crash sites by kind; AUDIT_TRACE=<slot>: per-step trace of one car
 ```
 
 The GPU kernels (`src/gpu/kernels/physics.wgsl`, `integrate.wgsl`, `contacts.wgsl`, `collidefns.wgsl`) were read
