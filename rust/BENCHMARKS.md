@@ -60,3 +60,27 @@ Apple M4 Max, Metal. JS: `node test/gpu/run.mjs test/gpu/bench.html` (Chrome, sa
 World load (`World::load`, warm page cache): 60 ms (graph 43 ms, controls 8 ms, lane geometry from the mmap'd bake 2 ms).
 Without `data/junctions.bin`: 6.5 s cold (lane geometry + junctions built in Rust and baked to `data/build/rust/`), then
 60 ms; JS loader ~75-90 s.
+
+## GPU step optimisations (bayenv_gpu host, rust-gpuopt)
+
+Protocol as above (`BAYENV_CAP=auto ... --example bench -- <data> 10000,100000 400 v2 20`, capacity = cars), min of
+3 runs (the machine is shared, ±10-20 % noise). "GPU" = timestamped GPU time of one step encoded as one pass
+(`bench --profile`). Equivalence: `--example opt_check` (two sims side by side, 10k cars 200 steps and 2k cars
+400 steps: veh / par / pose / obs inputs / ctl words and stats compared against the JS dispatch structure), and
+`oracle_run` + `compare_state` against the unmodified host after 200 steps (rust/oracle/gpuopt-base.bin).
+Flags: `GpuOptions` (`set_flag`, env `BAYENV_GPU_OPTS` in the examples).
+
+| optimisation | 10k ms/step (GPU) | 100k ms/step (GPU) | equivalence | flag |
+|---|---|---|---|---|
+| baseline (origin/rust 9d2dc15, indirect resolve) | 1.10 (1.02) | 4.59 (4.47) | - | - |
+| + profiler (`GpuOptions.profile`, `bench --profile`; off) | 1.10 | 4.59 | bit-identical (no change when off) | `profile`, off |
+| + contact resolve in one dispatch (`kernels/resolve_fused.wgsl`: 12 rounds x 3 phases with workgroup barriers in one workgroup, parallel order-keeping compaction; 37 -> 1 dispatches) | 0.88 (0.83) | 4.40 (4.21) | bit-identical | `fused_resolve`, on |
+| + lane-list thread order for leaders / sense / junction.yield (`kernels/sorted.wgsl`, indirect over lane entries + cap) | 0.88 (0.83) | 4.00 (3.81) | bit-identical | `sorted_order`, on |
+
+Contacts per step: ~6 at 10k, ~520 at 100k, none left to the serial pass. Run-to-run the unmodified host is
+itself not bit-reproducible beyond ~200 steps (atomic orders: hash ranks, pair table, event order): after 1,000
+steps two runs of the baseline differ in 93 of 8,766 cars, baseline vs fused resolve in 91, same aggregates
+(7,559-7,561 driving, 940-941 crash scenes).
+Sorted order on the other per-car kernels (junction.perceive, courtesy, act, integrate, contacts.barrier) is
+bit-identical too but slower or neutral (the extra cap + lane-entry threads), so those entries are off by default
+(`SORTED_KERNELS`, override `BAYENV_SORTED=...`).

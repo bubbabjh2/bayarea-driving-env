@@ -38,7 +38,33 @@ pub fn load(name: &str) -> String { resolve_includes(raw(name)) }
 pub const HOST_SOURCES: &[(&str, &str)] = &[
     ("contact_args", include_str!("../kernels/contact_args.wgsl")),
     ("resolve_fused", include_str!("../kernels/resolve_fused.wgsl")),
+    ("sorted", include_str!("../kernels/sorted.wgsl")),
+    ("list_args", include_str!("../kernels/list_args.wgsl")),
 ];
+
+/// Lane-list-order variant of a per-car kernel (kernels/sorted.wgsl): the entry `entry` of `src` becomes the
+/// function `{entry}_at` and the wrapper entry `{entry}_sorted` is appended.
+pub fn sorted_source(src: &str, entry: &str, wg: u32) -> String {
+    let sig_g = format!("fn {entry}(@builtin(global_invocation_id) g: vec3u)");
+    let sig_li = format!("fn {entry}(@builtin(global_invocation_id) g: vec3u, @builtin(local_invocation_index) li: u32)");
+    let (sig, li) = if src.contains(&sig_li) { (sig_li, true) } else { (sig_g, false) };
+    let p = src.find(&sig).unwrap_or_else(|| panic!("sorted_source: no `{sig}`"));
+    let attr = src[..p].rfind("@compute").expect("sorted_source: no @compute before the entry");
+    let mut out = String::with_capacity(src.len() + 4096);
+    out.push_str(&src[..attr]);
+    out.push_str(&if li { format!("fn {entry}_at(g: vec3u, li: u32)") } else { format!("fn {entry}_at(g: vec3u)") });
+    out.push_str(&src[p + sig.len()..]); out.push('\n');
+    if !src.contains("var<storage, read> vidx") { out.push_str(&load("lists")); out.push('\n'); }
+    // template sections: //#if G / //#if LI ... //#endif
+    let mut keep = true;
+    for line in host_raw("sorted").lines() {
+        let t = line.trim();
+        if let Some(c) = t.strip_prefix("//#if ") { keep = (c == "LI") == li; continue; }
+        if t == "//#endif" { keep = true; continue; }
+        if keep { out.push_str(&line.replace("ENTRY", entry).replace("WG", &wg.to_string())); out.push('\n'); }
+    }
+    out
+}
 pub fn host_raw(name: &str) -> &'static str { HOST_SOURCES.iter().find(|(k, _)| *k == name).map(|(_, s)| *s).unwrap_or_else(|| panic!("no host kernel {name}")) }
 
 /// `// #include <file>` lines of `text` replaced by the files of `src/gpu/kernels/` (recursively).
