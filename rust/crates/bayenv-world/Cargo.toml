@@ -17,6 +17,13 @@ xxhash-rust.workspace = true
 libm.workspace = true
 sha2.workspace = true
 
+[features]
+# the pre-optimisation router as `nav::router_ref` (equality oracle for tests and benches)
+router-ref = []
+
+[dev-dependencies]
+bayenv-world = { path = ".", features = ["router-ref"] }
+
 [[bin]]
 name = "build-junctions"
 path = "src/bin/build_junctions.rs"
