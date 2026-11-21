@@ -26,6 +26,8 @@ impl<K: std::hash::Hash + Eq + Copy> Default for ListMap<K> { fn default() -> Se
 impl<K: std::hash::Hash + Eq + Copy> ListMap<K> {
     #[inline] pub fn len(&self) -> usize { self.map.len() }
     #[inline] pub fn is_empty(&self) -> bool { self.map.is_empty() }
+    /// no list has an entry (keys may persist with empty lists)
+    pub fn is_empty_lists(&self) -> bool { self.touched.is_empty() }
     pub fn reset_lists(&mut self) { for k in self.touched.drain(..) { if let Some(l) = self.map.get_mut(&k) { l.clear(); } } }
     pub fn clear(&mut self) { self.map.clear(); self.touched.clear(); }
     #[inline] pub fn push(&mut self, k: K, v: usize) {

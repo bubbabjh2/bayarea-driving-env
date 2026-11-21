@@ -65,7 +65,8 @@ impl Sim {
 
     fn stuck_in(&self, k: usize) -> bool { let vs = &self.vs; vs.speed[k] < 0.3 && vs.stopped_since[k] >= 0.0 && self.time - f(vs.stopped_since[k]) > 20.0 }
 
-    pub(crate) fn junction(&mut self, i: usize) {
+    pub(crate) fn junction_p(&self, p: &P2) {
+        let i = p.i;
         let g = self.gw();
         let j = g.j.as_ref().unwrap();
         let e = self.vs.edge[i] as usize;
@@ -87,20 +88,20 @@ impl Sim {
         let ti = f(self.vs.s[i]) - s_in;
         let my_node = g.e_to[j.info(m, 0) as usize];
         let to_mouth = -ti - hl - 0.5;
-        let mut best = f(self.vs.gap[i]);
-        let mut who = self.vs.leader[i];
+        let mut best = f(p.gap.get());
+        let mut who = p.leader.get();
         let mut who_j = -1i32;
         let t0 = jm::max(0.0, ti + hl);
         if t0 < len {
             let pc = j.arc_point(m, 0.5 * (t0 + len));
-            let mut cand = std::mem::take(&mut self.near_buf);
+            let mut cand: Vec<usize> = Vec::new();
             self.hash.near_into(&self.vs.x, &self.vs.z, pc.x, pc.z, 0.5 * (len - t0) + 8.0, &mut cand);
             let vs = &self.vs;
             cand.retain(|&jj| {
                 let other_box = vs.conn[jj] >= 0 && g.e_to[j.info(vs.conn[jj] as usize, 0) as usize] != my_node;
                 if jj == i || !(vs.state[jj] == STATE_CRASHED || vs.speed[jj] < 2.0 || (other_box && vs.speed[jj] < 7.0)) { return false; }
                 if vs.edge[jj] == vs.edge[i] && vs.s[jj] < vs.s[i] && vs.state[jj] == STATE_DRIVING { return false; }
-                if vs.state[jj] == STATE_DRIVING && vs.leader[jj] == i as i32 { let i_in = vs.conn[i] >= 0; let j_in = vs.conn[jj] >= 0; if (i_in && !j_in) || (i_in == j_in && i < jj) { return false; } }
+                if vs.state[jj] == STATE_DRIVING && p.leader_of(self, jj) == i as i32 { let i_in = vs.conn[i] >= 0; let j_in = vs.conn[jj] >= 0; if (i_in && !j_in) || (i_in == j_in && i < jj) { return false; } }
                 if vs.state[jj] == STATE_DRIVING && vs.conn[i] >= 0 && vs.conn[jj] >= 0 && i < jj && self.stuck_in(i) && self.stuck_in(jj) { return false; }
                 true
             });
@@ -123,7 +124,6 @@ impl Sim {
                     t += 1.0;
                 }
             }
-            self.near_buf = cand;
         }
         let confs = self.conflicts(m);
         let vs = &self.vs;
@@ -135,7 +135,7 @@ impl Sim {
             let o = c.other as usize;
             for &jj in list {
                 if jj == i { continue; }
-                if vs.speed[jj] < 0.5 && (vs.leader[jj] == i as i32 || (vs.leader[jj] == -3 && self.conflict_with.get(&jj) == Some(&i))) { continue; }
+                if vs.speed[jj] < 0.5 && (p.leader_of(self, jj) == i as i32 || (p.leader_of(self, jj) == -3 && p.cw_of(self, jj) == Some(i))) { continue; }
                 if vs.state[jj] == STATE_DRIVING && vs.conn[i] >= 0 && i < jj && self.stuck_in(i) && self.stuck_in(jj) { continue; }
                 let tj = f(vs.s[jj]) - j.s_in(o);
                 let dj = c.s_other - tj;
@@ -161,26 +161,25 @@ impl Sim {
                 if (t_j < t_i || (t_j == t_i && jj < i)) && g_stop > v * v / 8.0 { if g_stop < best { best = g_stop; who = -3; who_j = jj as i32; } }
             }
         }
-        if best < f(self.vs.gap[i]) {
-            self.vs.gap[i] = r32(best); self.vs.leader[i] = who;
-            if who == -3 { if who_j >= 0 { self.conflict_with.insert(i, who_j as usize); } else { self.conflict_with.insert(i, usize::MAX); } }
+        if best < f(p.gap.get()) {
+            p.gap.set(r32(best)); p.leader.set(who);
+            if who == -3 { p.cw.set(Some(if who_j >= 0 { who_j as usize } else { usize::MAX })); }
         }
     }
 
-    pub(crate) fn node_bodies(&mut self, i: usize, e: usize) {
+    pub(crate) fn node_bodies_p(&self, p: &P2, e: usize) {
+        let i = p.i;
         let g = self.gw();
         let j = g.j.as_ref().unwrap();
         let (hl, hw) = (f(self.vs.hl[i]), f(self.vs.hw[i]));
-        let mut check = |s: &mut Sim, node: usize| {
-            let Some(list) = s.node_conn.get(&node) else { return };
+        let check = |node: usize| {
+            let Some(list) = self.node_conn.get(&node) else { return };
             if list.is_empty() { return; }
-            let list = list.clone();
-            let vs = &s.vs;
+            let vs = &self.vs;
             let yaw = f(vs.heading[i]); let fx = jm::cos(yaw); let fz = jm::sin(yaw);
-            for jj in list {
-                let vs = &s.vs;
+            for &jj in list {
                 if jj == i { continue; }
-                if vs.state[jj] == STATE_DRIVING && vs.speed[jj] < 0.5 && (vs.leader[jj] == i as i32 || (vs.leader[jj] == -3 && s.conflict_with.get(&jj) == Some(&i))) { continue; }
+                if vs.state[jj] == STATE_DRIVING && vs.speed[jj] < 0.5 && (p.leader_of(self, jj) == i as i32 || (p.leader_of(self, jj) == -3 && p.cw_of(self, jj) == Some(i))) { continue; }
                 let dx = f(vs.x[jj]) - f(vs.x[i]); let dz = f(vs.z[jj]) - f(vs.z[i]);
                 let along = dx * fx + dz * fz; if along <= 0.0 || along > 60.0 { continue; }
                 let lat = dx * fz - dz * fx;
@@ -188,23 +187,24 @@ impl Sim {
                 let sa = jm::abs(jm::sin(dpsi)); let ca = jm::abs(jm::cos(dpsi));
                 if jm::abs(lat) > hw + sa * f(vs.hl[jj]) + ca * f(vs.hw[jj]) + 0.3 { continue; }
                 let gg = along - hl - (ca * f(vs.hl[jj]) + sa * f(vs.hw[jj])) - 0.5;
-                if gg < f(vs.gap[i]) {
+                if gg < f(p.gap.get()) {
                     let ld = if jm::abs(dpsi) < 0.5 && vs.state[jj] == STATE_DRIVING { jj as i32 } else { -3 };
-                    s.vs.gap[i] = r32(gg); s.vs.leader[i] = ld;
-                    if ld == -3 { s.conflict_with.insert(i, jj); }
+                    p.gap.set(r32(gg)); p.leader.set(ld);
+                    if ld == -3 { p.cw.set(Some(jj)); }
                 }
             }
         };
-        if f(self.vs.s[i]) - hl < 40.0 && g.e_s_exit[e] > 0.0 { check(self, g.e_from[e] as usize); }
+        if f(self.vs.s[i]) - hl < 40.0 && g.e_s_exit[e] > 0.0 { check(g.e_from[e] as usize); }
         if g.e_length[e] - f(self.vs.s[i]) < 60.0 && g.e_s_stop[e] < g.e_length[e] {
             let vs = &self.vs;
             let rp = vs.route_pos[i] as usize;
             let r = &vs.routes[i];
-            if r.is_empty() || rp + 1 >= r.len() || j.movement(e, vs.lane[i] as i32, r[rp + 1]) < 0 { check(self, g.e_to[e] as usize); }
+            if r.is_empty() || rp + 1 >= r.len() || j.movement(e, vs.lane[i] as i32, r[rp + 1]) < 0 { check(g.e_to[e] as usize); }
         }
     }
 
-    pub(crate) fn converge_bodies(&mut self, i: usize, e: usize) {
+    pub(crate) fn converge_p(&self, p: &P2, e: usize) {
+        let i = p.i;
         let g = self.gw();
         let d_node = g.e_length[e] - f(self.vs.s[i]);
         if d_node > 150.0 { return; }
@@ -236,7 +236,7 @@ impl Sim {
                             let sa = jm::abs(jm::sin(dpsi)); let ca = jm::abs(jm::cos(dpsi));
                             if jm::abs(dpsi) < 0.5 && jm::abs(lat) < hw + sa * f(vs.hl[ju]) + ca * f(vs.hw[ju]) + 0.4 {
                                 let gg = along - hl - (ca * f(vs.hl[ju]) + sa * f(vs.hw[ju]));
-                                if gg < f(vs.gap[i]) { self.vs.gap[i] = r32(gg); self.vs.leader[i] = jj; }
+                                if gg < f(p.gap.get()) { p.gap.set(r32(gg)); p.leader.set(jj); }
                             }
                         }
                     }
@@ -403,14 +403,15 @@ impl Sim {
         None
     }
 
-    pub(crate) fn path_bodies(&mut self, i: usize) {
+    pub(crate) fn path_bodies_p(&self, p: &P2) {
+        let i = p.i;
         let g = self.gw();
         let jo = g.j.as_ref();
         let v = f(self.vs.speed[i]);
         let d_max = jm::min(80.0, 10.0 + 1.5 * v + v * v / 8.0);
         let (hl, hw) = (f(self.vs.hl[i]), f(self.vs.hw[i]));
         let yaw = f(self.vs.heading[i]); let fx = jm::cos(yaw); let fz = jm::sin(yaw);
-        let mut cand = std::mem::take(&mut self.near_buf);
+        let mut cand: Vec<usize> = Vec::new();
         self.hash.near_into(&self.vs.x, &self.vs.z, f(self.vs.x[i]) + fx * 0.5 * d_max, f(self.vs.z[i]) + fz * 0.5 * d_max, 0.5 * d_max + 9.0, &mut cand);
         {
             let vs = &self.vs;
@@ -419,12 +420,12 @@ impl Sim {
                 let st = vs.state[jj]; if st != STATE_DRIVING && st != STATE_CRASHED { return false; }
                 let dx = f(vs.x[jj]) - f(vs.x[i]); let dz = f(vs.z[jj]) - f(vs.z[i]);
                 if dx * fx + dz * fz < hl { return false; }
-                if st == STATE_DRIVING && vs.speed[jj] < 0.5 && (vs.leader[jj] == i as i32 || (vs.leader[jj] == -3 && self.conflict_with.get(&jj) == Some(&i))) { return false; }
+                if st == STATE_DRIVING && vs.speed[jj] < 0.5 && (p.leader_of(self, jj) == i as i32 || (p.leader_of(self, jj) == -3 && p.cw_of(self, jj) == Some(i))) { return false; }
                 if st == STATE_DRIVING && i < jj && self.stuck_in(i) && self.stuck_in(jj) { return false; }
                 true
             });
         }
-        if cand.is_empty() { self.near_buf = cand; return; }
+        if cand.is_empty() { return; }
         let route = self.vs.routes[i].clone();
         let mut rp = self.vs.route_pos[i] as usize;
         let mut e = self.vs.edge[i] as usize;
@@ -465,27 +466,26 @@ impl Sim {
                 continue;
             }
             let u = pos + (t - d);
-            let p = if m >= 0 { let mut p = jo.unwrap().connector_point(m as usize, u); p.x += off * p.hz; p.z -= off * p.hx; p }
+            let pt = if m >= 0 { let mut q = jo.unwrap().connector_point(m as usize, u); q.x += off * q.hz; q.z -= off * q.hx; q }
                 else if let Some(lg) = &g.lg { lg.lat_point(e, jm::min(u, g.e_length[e]), lat) } else { result = None; break };
             let vs = &self.vs;
             for &jj in &cand {
                 let c = jm::cos(f(vs.heading[jj])); let sn = jm::sin(f(vs.heading[jj]));
-                let dx = p.x - f(vs.x[jj]); let dz = p.z - f(vs.z[jj]);
+                let dx = pt.x - f(vs.x[jj]); let dz = pt.z - f(vs.z[jj]);
                 let lx = jm::abs(dx * c + dz * sn) - f(vs.hl[jj]); let lz = jm::abs(dz * c - dx * sn) - f(vs.hw[jj]);
                 if lx < clear && lz < clear && jm::hypot(jm::max(lx, 0.0), jm::max(lz, 0.0)) < clear {
-                    result = Some((t - hl - 0.5, jj, p.hx, p.hz));
+                    result = Some((t - hl - 0.5, jj, pt.hx, pt.hz));
                     break 'outer;
                 }
             }
             t += 2.0;
         }
-        self.near_buf = cand;
         if let Some((gg, jj, phx, phz)) = result {
-            if gg < f(self.vs.gap[i]) {
+            if gg < f(p.gap.get()) {
                 let mut dpsi = f(self.vs.heading[jj]) - jm::atan2(phz, phx); dpsi = jm::atan2(jm::sin(dpsi), jm::cos(dpsi));
-                self.vs.gap[i] = r32(gg);
-                if self.vs.state[jj] == STATE_DRIVING && jm::abs(dpsi) < 0.6 { self.vs.leader[i] = jj as i32; }
-                else { self.vs.leader[i] = -3; self.conflict_with.insert(i, jj); }
+                p.gap.set(r32(gg));
+                if self.vs.state[jj] == STATE_DRIVING && jm::abs(dpsi) < 0.6 { p.leader.set(jj as i32); }
+                else { p.leader.set(-3); p.cw.set(Some(jj)); }
             }
         }
     }
@@ -506,4 +506,32 @@ impl Sim {
         }
         false
     }
+}
+
+/// Per-car state of the order-dependent leader perception (phase 2): own leader / gap / conflict write, and the reads
+/// of other cars' leader / conflict that the slot-order semantics make order dependent. In speculative mode (parallel
+/// pass) a car j < i is read at its value before its own phase 2 (its phase-1 base), and the read is recorded; the
+/// ordered commit re-runs a car whose recorded reads differ from the final values.
+pub(crate) struct P2<'a> {
+    pub i: usize,
+    pub gap: std::cell::Cell<f32>, pub leader: std::cell::Cell<i32>, pub cw: std::cell::Cell<Option<usize>>,
+    pub spec: Option<&'a [Option<crate::leaders::Base>]>,
+    pub reads: std::cell::RefCell<Vec<(usize, i32, Option<usize>)>>,
+}
+impl<'a> P2<'a> {
+    pub fn new(i: usize, gap: f32, leader: i32, spec: Option<&'a [Option<crate::leaders::Base>]>) -> P2<'a> {
+        P2 { i, gap: std::cell::Cell::new(gap), leader: std::cell::Cell::new(leader), cw: std::cell::Cell::new(None), spec, reads: std::cell::RefCell::new(Vec::new()) }
+    }
+    #[inline]
+    fn early(&self, j: usize) -> Option<&crate::leaders::Base> { match self.spec { Some(b) if j < self.i => b.get(j).and_then(|x| x.as_ref()), _ => None } }
+    #[inline]
+    pub fn leader_of(&self, s: &Sim, j: usize) -> i32 {
+        match self.early(j) { Some(b) => { let cw = self.cw_start(s, j, b); self.reads.borrow_mut().push((j, b.leader, cw)); b.leader } None => s.vs.leader[j] }
+    }
+    #[inline]
+    pub fn cw_of(&self, s: &Sim, j: usize) -> Option<usize> {
+        match self.early(j) { Some(b) => { let cw = self.cw_start(s, j, b); self.reads.borrow_mut().push((j, b.leader, cw)); cw } None => s.conflict_with.get(&j).copied() }
+    }
+    #[inline]
+    fn cw_start(&self, s: &Sim, j: usize, b: &crate::leaders::Base) -> Option<usize> { b.cw.or_else(|| s.conflict_with.get(&j).copied()) }
 }

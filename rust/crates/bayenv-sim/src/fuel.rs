@@ -23,6 +23,7 @@ pub fn litres_per_km(type_idx: usize, v: f64) -> f64 {
 }
 
 /// detour_time = via-station route time - direct route time (s, free flow), as routeViaStation's detourTime.
+#[derive(Clone, Debug)]
 pub struct Plan { pub edges: Vec<i32>, pub station: usize, pub stop_index: usize, pub detour_time: f64 }
 
 pub struct StationNetwork {
@@ -96,40 +97,57 @@ impl StationNetwork {
     /// StationNetwork.plan (routeViaStation)
     pub fn plan<G: PlanGraph + ?Sized>(&mut self, g: &G, router: &mut dyn Router, from: i32, goal: i32) -> Option<Plan> {
         if self.node.is_empty() { return None; }
-        let r = self.route_via_station(g, router, from, goal);
-        match r {
-            Some((route, st, direct_time)) => {
-                let stop = route.edges.iter().position(|&e| g.edge_to(e as usize) == self.node[st]);
-                match stop {
-                    Some(k) => { self.planned += 1; let dt = route.time - direct_time; Some(Plan { edges: route.edges, station: st, stop_index: k, detour_time: dt }) }
-                    None => { self.plan_failed += 1; None }
+        let r = self.plan_many(g, router, &[(from, goal)]).pop().unwrap();
+        self.count(&r);
+        r
+    }
+    /// The planned / planFailed bookkeeping of one plan() result.
+    pub fn count(&mut self, r: &Option<Plan>) { if r.is_some() { self.planned += 1; } else { self.plan_failed += 1; } }
+
+    /// plan() for many (from, goal) pairs without bookkeeping: the direct routes as one router batch, then both legs
+    /// of every candidate station as one batch. Each result equals plan(from, goal) (a pure function of the pair).
+    pub fn plan_many<G: PlanGraph + ?Sized>(&self, g: &G, router: &mut dyn Router, ods: &[(i32, i32)]) -> Vec<Option<Plan>> {
+        if self.node.is_empty() { return ods.iter().map(|_| None).collect(); }
+        let directs = router.route_batch(ods, None, None);
+        let mut cand: Vec<(usize, Vec<usize>, f64)> = Vec::new();   // (od index, candidate stations, direct time)
+        let mut qs: Vec<(i32, i32)> = Vec::new();
+        for (k, d) in directs.into_iter().enumerate() {
+            let Some(direct) = to_result(g, d) else { continue };
+            let (from, goal) = ods[k];
+            let stride = 1usize.max((direct.nodes.len() as f64 / 400.0).floor() as usize);
+            let mut scored: Vec<(usize, f64)> = Vec::new();
+            for s in 0..self.node.len() {
+                if self.node[s] == from || self.node[s] == goal { continue; }
+                let mut best = f64::INFINITY;
+                let mut i = 0;
+                while i < direct.nodes.len() { let n = direct.nodes[i] as usize; let dx = g.node_x(n) - self.x[s]; let dz = g.node_z(n) - self.z[s]; let d2 = dx * dx + dz * dz; if d2 < best { best = d2; } i += stride; }
+                scored.push((s, best));
+            }
+            scored.sort_by(|a, b| jm::cmp_of(a.1 - b.1));
+            let cs: Vec<usize> = scored.iter().take(self.cfg.max_candidates).map(|c| c.0).collect();
+            for &s in &cs { qs.push((from, self.node[s])); qs.push((self.node[s], goal)); }
+            cand.push((k, cs, direct.time));
+        }
+        let legs = router.route_batch(&qs, None, None);
+        let mut out: Vec<Option<Plan>> = ods.iter().map(|_| None).collect();
+        let mut q = 0usize;
+        for (k, cs, direct_time) in cand {
+            let mut best: Option<(RouteRes, usize)> = None;
+            for &s in &cs {
+                let (l1, l2) = (&legs[q], &legs[q + 1]); q += 2;
+                let Some(a) = l1 else { continue };
+                let Some(b) = l2 else { continue };
+                let mut all = a.clone(); all.extend_from_slice(b);
+                let Some(r) = to_result(g, Some(all)) else { continue };
+                if best.as_ref().is_none_or(|(br, _)| r.time < br.time) { best = Some((r, s)); }
+            }
+            if let Some((route, st)) = best {
+                if let Some(si) = route.edges.iter().position(|&e| g.edge_to(e as usize) == self.node[st]) {
+                    out[k] = Some(Plan { detour_time: route.time - direct_time, edges: route.edges, station: st, stop_index: si });
                 }
             }
-            None => { self.plan_failed += 1; None }
         }
-    }
-    fn route_via_station<G: PlanGraph + ?Sized>(&self, g: &G, router: &mut dyn Router, from: i32, goal: i32) -> Option<(RouteRes, usize, f64)> {
-        let direct = to_result(g, router.route(from, goal, None, None))?;
-        let stride = 1usize.max((direct.nodes.len() as f64 / 400.0).floor() as usize);
-        let mut scored: Vec<(usize, f64)> = Vec::new();
-        for s in 0..self.node.len() {
-            if self.node[s] == from || self.node[s] == goal { continue; }
-            let mut best = f64::INFINITY;
-            let mut i = 0;
-            while i < direct.nodes.len() { let n = direct.nodes[i] as usize; let dx = g.node_x(n) - self.x[s]; let dz = g.node_z(n) - self.z[s]; let d2 = dx * dx + dz * dz; if d2 < best { best = d2; } i += stride; }
-            scored.push((s, best));
-        }
-        scored.sort_by(|a, b| jm::cmp_of(a.1 - b.1));
-        let mut best: Option<(RouteRes, usize)> = None;
-        for &(s, _) in scored.iter().take(self.cfg.max_candidates) {
-            let a = router.route(from, self.node[s], None, None);
-            let Some(mut all) = a else { continue };
-            let Some(b) = router.route(self.node[s], goal, None, None) else { continue };
-            all.extend_from_slice(&b);
-            let Some(r) = to_result(g, Some(all)) else { continue };
-            if best.as_ref().is_none_or(|(br, _)| r.time < br.time) { best = Some((r, s)); }
-        }
-        best.map(|(r, s)| (r, s, direct.time))
+        out
     }
 }
 

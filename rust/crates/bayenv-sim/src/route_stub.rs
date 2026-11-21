@@ -149,8 +149,8 @@ impl Router for NavRouter {
         self.r.route_with(start as usize, goal as usize, &q).map(to_i)
     }
     fn route_batch(&mut self, queries: &[(i32, i32)], avoid: Option<&std::collections::HashSet<i32>>, penalty: Option<&std::collections::HashMap<i32, f64>>) -> Vec<Option<Vec<i32>>> {
-        let cached = avoid.is_none() && penalty.is_none();
-        if cached || self.pool_size < 2 || queries.len() < 4 || self.graph.is_none() { return queries.iter().map(|&(s, g)| self.route(s, g, avoid, penalty)).collect(); }
+        // (cached queries too: a pool router's result equals the cached one; only the main router's cache misses it)
+        if self.pool_size < 2 || queries.len() < 4 || self.graph.is_none() { return queries.iter().map(|&(s, g)| self.route(s, g, avoid, penalty)).collect(); }
         if self.pool.is_empty() {
             let o = bayenv_world::nav::router::RouterOpts { weight: self.weight, ..Default::default() };
             let g = self.graph.as_ref().unwrap();
