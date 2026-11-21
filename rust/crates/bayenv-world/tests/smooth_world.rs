@@ -6,9 +6,10 @@ use std::path::Path;
 
 fn wrap(a: f64) -> f64 { a.sin().atan2(a.cos()) }
 
-fn load(smooth: bool) -> Option<World> {
+fn load(smooth: bool) -> Option<World> { load_jr(smooth, false) }
+fn load_jr(smooth: bool, jr: bool) -> Option<World> {
     let d = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../../data");
-    match World::load_with(&d, &LoadOptions { verify: false, smooth_geometry: smooth, ..Default::default() }) {
+    match World::load_with(&d, &LoadOptions { verify: false, smooth_geometry: smooth, junction_radii: jr, ..Default::default() }) {
         Ok(w) => Some(w),
         Err(e) => { bayenv_world::oracle::skip("smooth_world", &format!("world: {e}")); None }
     }
@@ -106,4 +107,46 @@ fn smoothed_world_is_consistent_and_continuous() {
     // deterministic: a second smoothing gives the same arrays
     let w2 = load(true).unwrap();
     assert_eq!(&w2.lanes.vx[..], &lg.vx[..]); assert_eq!(&w2.junctions.as_ref().unwrap().pts[..], &j.pts[..]);
+}
+
+/// junction_radii (DECISIONS.md 34): re-fitted turning connectors start and end on the smoothed lanes at their new
+/// s_in / s_out, tangent to them, with s running 0 .. length (= mF length); s_in / s_out stay on their edges; mouths,
+/// turn angles and the conflict list are unchanged and conflict positions lie on the connectors; far fewer turning
+/// connectors are below 6 m.
+#[test]
+fn junction_radii_consistent() {
+    let Some(sm) = load(true) else { return };
+    let w = load_jr(true, true).unwrap();
+    let st = w.junction_radii.clone().expect("re-fitted");
+    eprintln!("{st:#?}");
+    let (lg, g) = (&w.lanes, &w.lane_graph);
+    let (j, j0) = (w.junctions.as_ref().unwrap(), sm.junctions.as_ref().unwrap());
+    assert_eq!(&j.mouth_s[..], &j0.mouth_s[..]); assert_eq!(&j.gore_s[..], &j0.gore_s[..]); assert_eq!(&j.conf[..], &j0.conf[..]);
+    let (mut moved, mut entry, mut hin, mut exit, mut hout) = (0usize, 0f64, 0f64, 0f64, 0f64);
+    for m in 0..j.move_count() {
+        let (d, d0) = (j.describe(m), j0.describe(m));
+        assert_eq!(d.turn, d0.turn); assert_eq!((d.in_edge, d.in_lane, d.out_edge, d.out_lane), (d0.in_edge, d0.in_lane, d0.out_edge, d0.out_lane));
+        let (f, n) = (d.first_pt as usize, d.pt_count as usize);
+        assert_eq!(j.pts[4 * f + 3], 0.0);
+        assert!((j.pts[4 * (f + n - 1) + 3] - d.length).abs() < 1e-3, "movement {m}: length = last point s");
+        assert!((0..n - 1).all(|k| j.pts[4 * (f + k + 1) + 3] > j.pts[4 * (f + k) + 3]), "movement {m}: s increases");
+        assert!(d.s_in >= 0.0 && d.s_in <= g.length[d.in_edge as usize] && d.s_out >= 0.0 && d.s_out <= g.length[d.out_edge as usize]);
+        if d.s_in == d0.s_in && d.s_out == d0.s_out { continue; }
+        moved += 1;
+        assert!(d.s_in <= d0.s_in && d.s_out >= d0.s_out, "movement {m}: only moves s_in back and s_out forward");
+        let pa = lg.lat_point(d.in_edge as usize, d.s_in as f64, (d.in_lane as f64 + 0.5) * lg.lane_width(d.in_edge as usize, d.s_in as f64));
+        let pb = lg.lat_point(d.out_edge as usize, d.s_out as f64, (d.out_lane as f64 + 0.5) * lg.lane_width(d.out_edge as usize, d.s_out as f64));
+        let (a0, a1) = (j.arc_point(m, 0.0), j.arc_point(m, d.length as f64));
+        entry = entry.max((a0.x - pa.x).hypot(a0.z - pa.z)); exit = exit.max((a1.x - pb.x).hypot(a1.z - pb.z));
+        hin = hin.max(wrap(a0.hz.atan2(a0.hx) - pa.hz.atan2(pa.hx)).abs()); hout = hout.max(wrap(a1.hz.atan2(a1.hx) - pb.hz.atan2(pb.hx)).abs());
+    }
+    for c in 0..j.conflict_count() {
+        let (a, b) = (j.conf[3 * c] as usize, j.conf[3 * c + 1] as usize);
+        assert!(j.conf_s[2 * c] <= j.m_f[4 * a + 2] + 0.5 && j.conf_s[2 * c + 1] <= j.m_f[4 * b + 2] + 0.5, "conflict {c} on its connectors");
+    }
+    eprintln!("{moved} movements moved; entry {entry:.4} m / {hin:.3} rad, exit {exit:.4} m / {hout:.3} rad");
+    assert!(moved > 100_000 && moved == st.at_target + st.fit_limited);
+    // (heading: the 0.3 m lead segments in f32 coordinates)
+    assert!(entry < 0.01 && exit < 0.01 && hin < 0.03 && hout < 0.03, "re-fitted connectors start / end on the lanes, tangent");
+    assert!(st.below_floor * 2 < st.below_floor_before, "below 6 m: {} -> {}", st.below_floor_before, st.below_floor);
 }

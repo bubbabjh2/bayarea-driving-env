@@ -107,17 +107,21 @@ fn snap(env: &Env) -> Vec<Snap> {
         edge: vs.edge[i], conn: vs.conn[i], spawn: vs.spawn_time[i], lat: vs.lat[i] as f64, s: vs.s[i] as f64, ty: vs.type_idx[i] }).collect()
 }
 
-/// AUDIT_CURV=1: curvature_dynamics on; AUDIT_SMOOTH=1: also the smoothed frame geometry (DECISIONS.md 33)
-fn audit_flags() -> (bool, bool) { let s = std::env::var("AUDIT_SMOOTH").is_ok(); (s || std::env::var("AUDIT_CURV").is_ok(), s) }
+/// AUDIT_CURV=1: curvature_dynamics on; AUDIT_SMOOTH=1: also the smoothed frame geometry (DECISIONS.md 33);
+/// AUDIT_JR=1: also junction_radii; AUDIT_SPAWN=1: spawn_clearance (DECISIONS.md 34)
+fn audit_flags() -> (bool, bool, bool) {
+    let jr = std::env::var("AUDIT_JR").is_ok(); let s = jr || std::env::var("AUDIT_SMOOTH").is_ok();
+    (s || std::env::var("AUDIT_CURV").is_ok(), s, jr)
+}
 
 fn make_env(data: &str, n: usize, seed: f64, start_h: f64, mode: TrafficMode, dt: f64) -> Env {
-    let (curv, smooth) = audit_flags();
-    let world = Env::load_world_with(Path::new(data), true, smooth).expect("world");
+    let (curv, smooth, jr) = audit_flags();
+    let world = Env::load_world_opts(Path::new(data), true, smooth, jr).expect("world");
     let pop = Arc::new(Population::generate_like_env(&world, "real", n, seed, Some(Path::new(data))).expect("pop"));
     // AUDIT_JS=1: the JS model (all model fixes off)
     let base = if std::env::var("AUDIT_JS").is_ok() { SimOpts::js() } else { SimOpts::default() };
-    let opts = SimOpts { dt, seed, traffic_mode: mode, curvature_dynamics: base.curvature_dynamics || curv, smooth_geometry: smooth, ..base };
-    eprintln!("audit model: {} curvature_dynamics {} smooth_geometry {}", if std::env::var("AUDIT_JS").is_ok() { "js" } else { "default" }, opts.curvature_dynamics, opts.smooth_geometry);
+    let opts = SimOpts { dt, seed, traffic_mode: mode, curvature_dynamics: base.curvature_dynamics || curv, smooth_geometry: smooth, junction_radii: jr, spawn_clearance: std::env::var("AUDIT_SPAWN").is_ok(), ..base };
+    eprintln!("audit model: {} curvature_dynamics {} smooth_geometry {} junction_radii {} spawn_clearance {}", if std::env::var("AUDIT_JS").is_ok() { "js" } else { "default" }, opts.curvature_dynamics, opts.smooth_geometry, opts.junction_radii, opts.spawn_clearance);
     let cfg = EnvConfig { opts, start_time: Some(start_h * 3600.0), static_obstacles: Vec::new(), scenario_obstacles: Vec::new(), obstacles: None };
     Env::new(world.clone(), pop, cfg, Box::new(|w| bayenv_sim::harness::router_for(&w)))
 }
@@ -178,8 +182,8 @@ fn path_point(env: &Env, i: usize, d: f64) -> (f64, f64) {
 }
 
 /// A pure-pursuit driver ("pursuit"): steer towards the lane centre `L_d` = 2 m + 0.8 s x speed ahead along the
-/// planned path, delta = atan(2 L sin(alpha) / L_d); speed as keep_policy, capped at sqrt(0.3 g x radius ahead)
-/// from the lane-heading preview. A look-ahead driver for curvature_dynamics.
+/// planned path, delta = atan(2 L sin(alpha) / L_d); speed as keep_policy, capped so that 3 m/s^2 of braking after the
+/// reaction delay reaches 0.25 g on each piece of the lane-heading preview. A look-ahead driver for curvature_dynamics.
 fn pursuit_policy(env: &Env, i: usize, t: f64) -> Action {
     let mut a = keep_policy(env, i, 0.0, t);
     let vs = &env.sim.vs; let p = &VEHICLE_PARAMS[vs.type_idx[i] as usize];
@@ -194,9 +198,19 @@ fn pursuit_policy(env: &Env, i: usize, t: f64) -> Action {
     // a positive steer turns the world heading towards -heading (heading_rel grows with the yaw rate)
     let delta = -(2.0 * p.l * alpha.sin() / dist).atan().clamp(-p.max_steer, p.max_steer);
     a.steer = Some(delta / p.max_steer);
+    // curve speed: per preview piece (0-5, 5-10, 10-20, 20-40 m) its curvature, the speed for 0.25 g there, and the
+    // speed now from which 3 m/s^2 of braking (after the reaction delay) reaches it
     let pv = bayenv_sim::obs::heading_preview(&env.sim, i);
-    let kmax = (0..4).map(|k| pv[k].abs() / bayenv_sim::obs::HEADING_PREVIEW_D[k]).fold(0.0, f64::max);
-    let v_curve = if kmax > 1e-6 { (0.25 * 9.81 / kmax).sqrt().max(2.5) } else { f64::INFINITY };
+    let dd = bayenv_sim::obs::HEADING_PREVIEW_D;
+    let mut v_curve = f64::INFINITY;
+    for k in 0..4 {
+        let (d0, h0) = if k == 0 { (0.0, 0.0) } else { (dd[k - 1], pv[k - 1]) };
+        let kap = (pv[k] - h0).abs() / (dd[k] - d0);
+        if kap < 1e-4 { continue; }
+        let vc = (0.25 * 9.81 / kap).sqrt().max(2.5);
+        let room = (d0 - u * delay).max(0.0);
+        v_curve = v_curve.min((vc * vc + 2.0 * 3.0 * room).sqrt());
+    }
     if u > v_curve { a.gas = 0.0; a.brake = a.brake.max(((u - v_curve) * 0.4).clamp(0.0, 0.7)); } else { a.gas = a.gas.min(((v_curve - u) * 0.3).clamp(0.0, 1.0)); }
     a
 }
@@ -230,7 +244,7 @@ pub fn sim(data: &str, n: usize, steps: usize, policy: &str) {
         }
         if let Ok(tr) = std::env::var("AUDIT_TRACE") { let i: usize = tr.parse().unwrap(); let vs = &env.sim.vs; if i < vs.high && vs.state[i] == STATE_DRIVING {
             let a = env.sim.actions.get(i).copied().flatten();
-            println!("  trace step {step} slot {i}: edge {} conn {} s {:.2} lat {:.2} hr {:.3} u {:.2} steer_angle {:.3} cmd {:?} pv {:?}", vs.edge[i], vs.conn[i], vs.s[i], vs.lat[i], vs.heading_rel[i], vs.speed[i], vs.steer_angle[i], a.map(|a| (a.steer, a.gas, a.brake)), bayenv_sim::obs::heading_preview(&env.sim, i).map(|x| (x * 1000.0).round() / 1000.0));
+            println!("  trace step {step} slot {i}: rp {} route {:?} edge {} conn {} s {:.2} lat {:.2} hr {:.3} u {:.2} steer_angle {:.3} cmd {:?} pv {:?}", vs.route_pos[i], &vs.routes[i][..vs.routes[i].len().min(4)], vs.edge[i], vs.conn[i], vs.s[i], vs.lat[i], vs.heading_rel[i], vs.speed[i], vs.steer_angle[i], a.map(|a| (a.steer, a.gas, a.brake)), bayenv_sim::obs::heading_preview(&env.sim, i).map(|x| (x * 1000.0).round() / 1000.0));
         } }
         env.step(1);
         c.steps += 1;
@@ -343,8 +357,8 @@ pub fn sim(data: &str, n: usize, steps: usize, policy: &str) {
     let stuck: Vec<_> = stopped.iter().filter(|(_, &t)| tnow - t > 300.0).collect();
     let el = t0.elapsed().as_secs_f64();
     let st: HashMap<_, _> = env.stats().into_iter().collect();
-    println!("== R rollout: policy {policy}, {n} commuters, {steps} steps (dt {dt}), {:.1} s wall, {} car-steps; spawned {}, arrived {}, crash events {}, crashed vehicles {}, minor contacts {} ==",
-        el, c.car_steps, st["spawned"], st["arrived"], st["crash_events"], st["crashed_vehicles"], st["minor_contacts"]);
+    println!("== R rollout: policy {policy}, {n} commuters, {steps} steps (dt {dt}), {:.1} s wall, {} car-steps; spawned {} (moved for clearance {}), arrived {}, crash events {}, crashed vehicles {}, minor contacts {} ==",
+        el, c.car_steps, st["spawned"], st["spawn_moved"], st["arrived"], st["crash_events"], st["crashed_vehicles"], st["minor_contacts"]);
     println!("non-finite pose/speed: {}", c.nan);
     if !crash_by.is_empty() { println!("crashes by kind: {crash_by:?}"); }
     println!("teleports (moved > 1.5 x speed x dt + 0.5 m): {} ({:.3} %): contact {}, connector change {}, edge hop {}, other {}; worst excess {:.2} m: {}", c.tele, 100.0 * c.tele as f64 / c.car_steps.max(1) as f64, c.tele_contact, c.tele_conn, c.tele_edge, c.tele_other, c.tele_max, c.tele_ex);

@@ -25,9 +25,12 @@ pub struct LoadOptions {
     /// derive the smoothed frame geometry for `curvature_dynamics` ([`crate::smooth`], DECISIONS.md 33): replaces
     /// `lanes` and the junction connector points after loading (default false: the JS geometry, bit-exact)
     pub smooth_geometry: bool,
+    /// re-fit the turning junction connectors to vehicle-feasible radii, moving s_in / s_out
+    /// ([`crate::junction_radii`], DECISIONS.md 34); needs `smooth_geometry` (default false)
+    pub junction_radii: bool,
 }
 impl Default for LoadOptions {
-    fn default() -> Self { LoadOptions { local: true, junctions: true, controls: true, stations: true, dem: false, bake: None, verify_bake: false, verify: true, smooth_geometry: false } }
+    fn default() -> Self { LoadOptions { local: true, junctions: true, controls: true, stations: true, dem: false, bake: None, verify_bake: false, verify: true, smooth_geometry: false, junction_radii: false } }
 }
 
 pub struct World {
@@ -49,6 +52,8 @@ pub struct World {
     pub timings: Vec<(&'static str, f64)>,
     /// Some when `lanes` / `junctions` hold the smoothed frame geometry ([`World::smooth_geometry`])
     pub smoothing: Option<crate::smooth::SmoothStats>,
+    /// Some when the junction connectors were re-fitted by [`World::widen_junctions`]
+    pub junction_radii: Option<crate::junction_radii::RadiiStats>,
 }
 
 pub const LG_SECTIONS: [&str; 17] = ["vFirst", "vx", "vy", "vz", "vs", "mx", "mz", "Rd", "Rend", "tau", "tapR", "tapL", "xR", "xL", "laneW", "laneWEnd", "LW"];
@@ -120,8 +125,10 @@ impl World {
         lap("controls", &mut tm);
         let dem = if o.dem { Dem::load(&dir).ok() } else { None };
         lap("dem", &mut tm);
-        let mut w = World { dir, main, local, graph, lane_graph, lanes, junctions, surfaces, controls_pack, controls, stations, contact_pairs, dem, node_grid, timings: tm, smoothing: None };
+        let mut w = World { dir, main, local, graph, lane_graph, lanes, junctions, surfaces, controls_pack, controls, stations, contact_pairs, dem, node_grid, timings: tm, smoothing: None, junction_radii: None };
+        if o.junction_radii && !o.smooth_geometry { return Err(io::Error::new(io::ErrorKind::InvalidInput, "LoadOptions.junction_radii needs smooth_geometry")); }
         if o.smooth_geometry { w.smooth_geometry(); w.timings.push(("smooth", t.elapsed().as_secs_f64() * 1e3)); }
+        if o.junction_radii { w.widen_junctions(); }
         Ok(w)
     }
 }
@@ -216,6 +223,15 @@ impl World {
         if self.smoothing.is_some() { return; }
         let (lg, j, st) = crate::smooth::smooth_geometry(&self.lanes, &self.lane_graph, &self.graph.speed_limit, self.junctions.as_ref(), &crate::smooth::SmoothCfg::default());
         self.lanes = lg; self.junctions = j; self.smoothing = Some(st);
+    }
+    /// Re-fit the turning junction connectors to vehicle-feasible radii ([`crate::junction_radii`], DECISIONS.md 34),
+    /// on the current (smoothed) lane geometry. Needs `smooth_geometry` first; a no-op when already done.
+    pub fn widen_junctions(&mut self) {
+        assert!(self.smoothing.is_some(), "World::widen_junctions needs the smoothed geometry (smooth_geometry)");
+        if self.junction_radii.is_some() { return; }
+        let Some(j) = self.junctions.as_ref() else { self.junction_radii = Some(Default::default()); return };
+        let (nj, st) = crate::junction_radii::widen_junctions(&self.lanes, &self.lane_graph, j, &crate::junction_radii::RadiiCfg::default());
+        self.junctions = Some(nj); self.junction_radii = Some(st);
     }
     /// xxh3 over the derived world content (graph geometry / topology / attributes, lane geometry, junctions, control
     /// plans, stations, contact pairs): equal hashes = the same world.

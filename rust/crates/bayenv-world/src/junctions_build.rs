@@ -603,7 +603,7 @@ fn connector_edge_crossings(g: &LaneGraph, lg: &LaneGeometry, j: &Built) -> Vec<
 }
 
 /// `pairConflict(J, i, j)` on the f32 arrays.
-fn pair_conflict(pts: &[f32], mi: &[u32], i: usize, j: usize) -> Option<(u32, f64, f64)> {
+pub(crate) fn pair_conflict(pts: &[f32], mi: &[u32], i: usize, j: usize) -> Option<(u32, f64, f64)> {
     let p = |k: usize| pts[k] as f64;
     let (fi, ci, fj, cj) = (mi[7 * i + 4] as usize, mi[7 * i + 5] as usize, mi[7 * j + 4] as usize, mi[7 * j + 5] as usize);
     if mi[7 * i] == mi[7 * j] && mi[7 * i + 1] == mi[7 * j + 1] { return None; }
