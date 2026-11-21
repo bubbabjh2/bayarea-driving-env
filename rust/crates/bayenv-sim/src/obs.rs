@@ -619,3 +619,62 @@ pub fn observe_flat(sim: &mut Sim, slots: &[usize], out: &mut [f32], v3: bool) {
     } else { out[..slots.len() * st].chunks_mut(st).zip(slots.iter()).map(|(row, &i)| row_fn(sim, i, row)).collect() };
     for (k, w) in writes.into_iter().enumerate() { if let Some(v) = w { sim.set_yield_by(slots[k], v); } }
 }
+
+// ---------------------------------------------------------------- heading preview (opt-in, not in the JS obs)
+/// Distances (m) of `heading_preview`.
+pub const HEADING_PREVIEW_D: [f64; 4] = [5.0, 10.0, 20.0, 40.0];
+
+/// Lane-heading preview for slot i: the change of the road frame's world heading (rad, wrapped to (-pi, pi], positive
+/// = the frame turns towards +heading) between the car's position and 5, 10, 20 and 40 m further along its planned path
+/// (the current edge or junction connector, then the route: the connector its lane takes into the next route edge,
+/// or a plain hop). With `curvature_dynamics` the road no longer turns the car, so a driver needs this preview to
+/// steer before a curve. Opt-in: it is not part of the JS observation (obs v1 / v2 stay bit-exact).
+pub fn heading_preview(sim: &Sim, i: usize) -> [f64; 4] {
+    let (vs, g) = (&sim.vs, &*sim.g);
+    let dir = |e: usize, m: i32, s: f64| -> f64 {
+        if m >= 0 { if let Some(j) = &g.j { let p = j.connector_point(m as usize, s - j.s_in(m as usize)); return jm::atan2(p.hz, p.hx); } }
+        let p = g.edge_point_dir(e, jm::max(0.0, jm::min(s, g.e_length[e])), -1);
+        jm::atan2(p.hz, p.hx)
+    };
+    let (mut e, mut m, mut s) = (vs.edge[i] as usize, vs.conn[i], f(vs.s[i]));
+    let h0 = dir(e, m, s);
+    let route = &vs.routes[i];
+    let mut pos = vs.route_pos[i].max(0) as usize;
+    let lane = vs.lane[i].max(0) as i32;
+    let mut out = [0.0; 4];
+    let mut walked = 0.0;
+    let mut hops = 0;
+    for (k, &d) in HEADING_PREVIEW_D.iter().enumerate() {
+        // advance to distance d along the path
+        loop {
+            let need = d - walked;
+            // end of the current piece and what follows it
+            let (end, next): (f64, Option<(usize, i32, f64)>) = if m >= 0 {
+                let j = g.j.as_ref().unwrap(); let mu = m as usize;
+                (j.s_in(mu) + j.m_len[mu], Some((j.info(mu, 2) as usize, -1, j.s_out(mu))))
+            } else {
+                let nx = if pos + 1 < route.len() { Some(route[pos + 1]) } else { None };
+                let mv = match (nx, &g.j) {
+                    (Some(n), Some(j)) => {
+                        let ln = (lane.min(g.e_lanes[e] - 1)).max(0);
+                        let mut mv = j.movement(e, ln, n);
+                        let mut l2 = 0; while mv < 0 && l2 < g.e_lanes[e] { mv = j.movement(e, l2, n); l2 += 1; }
+                        mv
+                    }
+                    _ => -1,
+                };
+                if mv >= 0 { let j = g.j.as_ref().unwrap(); (j.s_in(mv as usize), Some((e, mv, j.s_in(mv as usize)))) }
+                else { (g.e_length[e], nx.map(|n| (n as usize, -1, 0.0))) }
+            };
+            let left = jm::max(0.0, end - s);
+            if need <= left || next.is_none() || hops > 16 { s = jm::min(end, s + need); walked = d; break; }
+            walked += left;
+            let (ne, nm, ns) = next.unwrap();
+            if m < 0 && nm < 0 || m >= 0 { if ne != e { pos += 1; } }
+            e = ne; m = nm; s = ns; hops += 1;
+        }
+        let dh = dir(e, m, s) - h0;
+        out[k] = jm::atan2(jm::sin(dh), jm::cos(dh));
+    }
+    out
+}

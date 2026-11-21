@@ -15,7 +15,7 @@ fn main() {
     let (cap, start): (usize, f64) = (p(6, "32768").parse().unwrap(), p(7, "25200").parse().unwrap());
     let (popm, obst, oseed): (String, usize, f64) = (p(8, "1"), p(9, "0").parse().unwrap(), p(10, "3").parse().unwrap());
     let world = Arc::new(bayenv_world::World::load(data).expect("world"));
-    let mut o = GpuOptions { capacity: cap, start_time: start, refuel_budget_ms: f64::INFINITY, cpu_connector_join: false, contact_tangent: false, deterministic_contacts: false, deterministic_spawn: false, deterministic_events: false, deterministic_leaders: false, ..Default::default() };   // JS oracle: legacy model
+    let mut o = GpuOptions { capacity: cap, start_time: start, refuel_budget_ms: f64::INFINITY, deterministic_contacts: false, deterministic_spawn: false, deterministic_events: false, deterministic_leaders: false, ..GpuOptions::default().js_model() };   // JS oracle: legacy model
     o.features.accidents = true;
     o.apply_env();   // BAYENV_GPU_OPTS (e.g. cpu_connector_join=1)
     let mut sim = bayenv_gpu::env::create(world.clone(), o).expect("sim");

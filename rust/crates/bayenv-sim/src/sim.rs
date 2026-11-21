@@ -40,6 +40,44 @@ pub struct SimOpts {
     /// re-plans one step late, so at the connector exit the next-box lookup sees the stale route and the late box
     /// entry is re-projected (headingRel += dh); rust/docs/crash-divergence.md "Cause A".
     pub replan_at_missed_event: bool,
+    /// Model fix (default ON; false = the JS): lane-index ahead / behind use the slot's edge and lanes at the index
+    /// rebuild (spatial.rs LaneIndex::snapshot). The JS reads the slot's current edge / lane_lo; after integrate (in the
+    /// observation) a car that crossed onto another edge can make `behind` return the car itself and the junction-yield
+    /// scan loop for ever (ENV-REQUESTS #15). Walks also stop at Sim::walk_limit, so neither mode can hang.
+    pub lane_index_snapshot: bool,
+    /// Model fix (default ON; false = the JS): resting wrecks and parked obstacles keep their real mass in car-car
+    /// contacts (collide.js treats a crashed car at rest as immovable: a car hitting it bounces as off a wall, with
+    /// twice the delta-v of a real two-body collision, and pileups never move wrecks). Barriers stay immovable.
+    pub wreck_real_mass: bool,
+    /// Model fix (default OFF until the lane polylines are smoothed, DECISIONS.md 23; false = the JS): the road frame's
+    /// rotation no longer turns the car. The JS integrates
+    /// heading_rel (heading relative to the lane) with the yaw rate only, so a car with the wheel straight followed
+    /// every curve and junction turn at any speed (69 deg turns at 108 km/h: 14.6 g). With the fix the world heading
+    /// changes by the yaw rate only; cornering needs steering and is limited by the tyres.
+    pub curvature_dynamics: bool,
+    /// Model fix (default ON; false = the JS): a sliding wreck clamped at the end of its edge / connector loses its
+    /// along-track speed (the JS kept the speed at a fixed position, e.g. 19.5 m/s decaying to 9 m/s standing still).
+    pub wreck_end_stop: bool,
+    /// Model fix (default ON; false = the JS): every contact step with delta-v >= touch_kmh reports an event, with the
+    /// episode's accumulated delta-v as its severity (disables at the crash threshold). The JS reported only the first
+    /// step of a touch, so a car riding a barrier could take a 12 km/h hit with no event.
+    pub contact_episodes: bool,
+    /// Model fix (default ON; false = the JS): junction connectors have a lateral limit (the in-edge's kerbs), with
+    /// the same barrier response as edges. The JS had none: cars drifted up to 15 m off a connector and were pushed
+    /// back in one step at the exit.
+    pub connector_barrier: bool,
+    /// Model fix (default ON; false = the JS): a braked car below 0.02 m/s is held by static friction (the JS let
+    /// stopped cars creep at up to 0.02 m/s under a held brake).
+    pub brake_hold: bool,
+    /// Model fix (default ON; false = the JS): trucks and buses brake at 4.7 m/s^2 (100-0 km/h in about 80 m, as
+    /// loaded heavy vehicles; the JS's 6.5 gave 58 m)
+    pub heavy_brakes: bool,
+    /// Model fix (default ON; false = the JS): barrier penetration is corrected by at most BARRIER_PUSH_MAX per step
+    /// (the JS removed the full depth at once: lateral jumps of up to 1.7 m)
+    pub barrier_soft_push: bool,
+    /// Model fix (default ON; false = the JS): a car knocked backwards by an impact keeps its backward speed while it
+    /// is a wreck (sliding on locked wheels); the JS clamped it to 0. Driving cars still have no reverse.
+    pub impact_reverse: bool,
     /// single-threaded integrate: two cars at a time with interleaved vehicle dynamics (identical results; A/B switch)
     pub batch_dynamics: bool,
 }
@@ -52,9 +90,11 @@ pub(crate) struct Pose { pub x: f32, pub y: f32, pub z: f32, pub heading: f32, p
 impl Pose { fn of(c: &Car, g: &World) -> Pose { let mut pc = *c; pc.update_pose(g); Pose { x: pc.x, y: pc.y, z: pc.z, heading: pc.heading, seg: pc.seg } } }
 
 impl SimOpts {
+    /// the integrate-side model fixes
+    pub fn model_flags(&self) -> crate::vehicle::ModelFlags { crate::vehicle::ModelFlags { fixes: crate::physics::Fixes { hold: self.brake_hold, heavy_brakes: self.heavy_brakes, reverse: self.impact_reverse }, curvature: self.curvature_dynamics, wreck_end_stop: self.wreck_end_stop } }
     /// The JS sim's model (oracle checks, trace_check / v2_check, JS-port tests): Default with the model fixes off
     /// (replan_at_missed_event = false). Checkpoints trained on the JS CPU sim saw this model.
-    pub fn js() -> SimOpts { SimOpts { replan_at_missed_event: false, ..SimOpts::default() } }
+    pub fn js() -> SimOpts { SimOpts { replan_at_missed_event: false, lane_index_snapshot: false, wreck_real_mass: false, curvature_dynamics: false, wreck_end_stop: false, contact_episodes: false, connector_barrier: false, brake_hold: false, heavy_brakes: false, barrier_soft_push: false, impact_reverse: false, ..SimOpts::default() } }
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -67,7 +107,7 @@ impl Default for SimOpts {
             cell_size: 25.0, table_bits: 18, leader_lookahead: 250.0, merge_lookahead: 80.0, lane_end_lookahead: 450.0, control_lookahead: 250.0,
             reroute: true, reroute_sight: 2000.0, squeeze_delay: 900.0, squeeze_speed: 3.0, density_interval: 60.0, path_sight: 0.0,
             deadlock_break: 0.0, spawn_lane_route: 0.0, junction_sight: 0.0, position_mode: true, traffic_mode: TrafficMode::Full, fuel: true,
-            seed: 1.0, wrecks: 0, default_action: Action { steer: Some(0.0), steer_rate: None, gas: 0.0, brake: 0.3 }, fuel_cfg: Default::default(), slot_pool: 0, parallel: false, replan_at_missed_event: true, batch_dynamics: true }
+            seed: 1.0, wrecks: 0, default_action: Action { steer: Some(0.0), steer_rate: None, gas: 0.0, brake: 0.3 }, fuel_cfg: Default::default(), slot_pool: 0, parallel: false, replan_at_missed_event: true, batch_dynamics: true, lane_index_snapshot: true, wreck_real_mass: true, curvature_dynamics: false, wreck_end_stop: true, contact_episodes: true, connector_barrier: true, brake_hold: true, heavy_brakes: true, barrier_soft_push: true, impact_reverse: true }
     }
 }
 
@@ -214,6 +254,11 @@ pub struct Sim {
     pub(crate) off_lane: crate::fx::ListMap<i32>,
     pub(crate) touch: HashSet<i64>,
     pub(crate) barrier_touch: HashSet<usize>, pub(crate) barrier_now: HashSet<usize>,
+    /// contact_episodes: accumulated delta-v of the barrier / pair contact episodes (last step, this step)
+    pub(crate) barrier_ep: HashMap<usize, f64>, pub(crate) barrier_ep_now: HashMap<usize, f64>,
+    pub(crate) touch_ep: HashMap<i64, (f64, f64)>, pub(crate) touch_ep_now: HashMap<i64, (f64, f64)>,
+    /// impact_reverse: backward speed of driving cars from this step's contacts (applied if the car is disabled)
+    pub(crate) reverse_stash: HashMap<usize, f64>,
     pub(crate) yield_by: Option<Vec<i32>>,
     pub(crate) creep_until: Vec<f64>, pub(crate) creep_ignore: Vec<i32>,
     pub(crate) edge_speed: HashMap<i32, f64>,
@@ -267,7 +312,9 @@ impl Sim {
         }
         let trips = pop.trips();
         let cap = if opts.slot_pool > 0 { opts.slot_pool } else { 1024usize.max(((n_c as f64 * 0.6).ceil() as usize + 64).min(1 << 20)) };
+        assert!(opts.dt > 0.0 && opts.dt.is_finite(), "SimOpts.dt must be a positive finite number of seconds (got {})", opts.dt);
         let mut vs = VehicleStore::new(cap);
+        vs.model = opts.model_flags();
         vs.position_mode = opts.position_mode;
         let ne = g.edge_count;
         let mut fwy = Vec::new();
@@ -276,13 +323,13 @@ impl Sim {
         let stations = if opts.fuel && !g.stations.is_empty() { Some(crate::fuel::StationNetwork::new(&g, opts.fuel_cfg.clone())) } else { None };
         let start = opts.start_time;
         let mut sim = Sim {
-            hash: SpatialHash::new(opts.cell_size, opts.table_bits, cap), lanes: LaneIndex::new(ne, cap), drivers: vec![Driver::None; cap], actions: vec![None; cap],
+            hash: SpatialHash::new(opts.cell_size, opts.table_bits, cap), lanes: { let mut l = LaneIndex::new(ne, cap); l.snapshot = opts.lane_index_snapshot; l }, drivers: vec![Driver::None; cap], actions: vec![None; cap],
             routes: crate::fuel::RouteStore::new(&pop), stations, learners, outcome: vec![0; n_c], outcome_back: vec![0; n_c], commuter_fuel,
             fitness: vec![0.0; n_c], actual_arrival: vec![-1.0; n_c], late_by: vec![0.0; n_c], early_by: vec![0.0; n_c],
             trips, trip_ptr: 0, pending: Vec::new(), lot: Vec::new(), crashes: Vec::new(), active: Vec::new(), edge_crashes: HashMap::default(), edge_has_crash: vec![0; ne],
             counters: Counters::default(), accum: Accum::default(), live: Live::default(), density: Density::default(), obstacle_rng: None, brake_every: (15.0, 40.0),
             spawned_keys: HashSet::default(), spawn_dirty: HashSet::default(), plan_prefetch: HashMap::default(), plan_horizon: f64::NEG_INFINITY, phase_a: Vec::new(), indexed: Vec::new(), pair_event: HashMap::default(), stuck_labelled: HashMap::default(), conn_cars: Default::default(), node_conn: Default::default(),
-            passers: Default::default(), conflict_with: HashMap::default(), off_lane: Default::default(), touch: HashSet::default(), barrier_touch: HashSet::default(), barrier_now: HashSet::default(),
+            passers: Default::default(), conflict_with: HashMap::default(), off_lane: Default::default(), touch: HashSet::default(), barrier_touch: HashSet::default(), barrier_now: HashSet::default(), barrier_ep: HashMap::default(), barrier_ep_now: HashMap::default(), touch_ep: HashMap::default(), touch_ep_now: HashMap::default(), reverse_stash: HashMap::default(),
             yield_by: None, creep_until: Vec::new(), creep_ignore: Vec::new(), edge_speed: HashMap::default(), traffic_penalty: None,
             last_reroute: HashMap::default(), next_traffic: 0.0, next_reroute: 0.0, next_density: start, edge_count_scratch: vec![0; ne], fwy, fwy_lane_km,
             near_buf: Vec::new(), static_obstacles: Vec::new(), obstacles: Vec::new(), profile: std::env::var("BAYENV_PROFILE").is_ok(), phase_ns: [0; 10], sub_ns: [0; 12], events: StepEvents::default(), event_log: Vec::new(), p2_reruns: 0, collided_last: Vec::new(), batch_policy: None,
@@ -663,11 +710,11 @@ impl Sim {
             let (time, step, pm) = (self.time, self.step_count, vs.position_mode);
             let eligible = |i: usize| -> Option<bool> {
                 let st = vs.state[i];
-                if st == STATE_DRIVING { Some(false) } else if st == STATE_CRASHED && (vs.speed[i] > 0.01 || jm::abs(f(vs.v_lat[i])) > 0.01 || jm::abs(f(vs.yaw_rate[i])) > 0.01) { Some(true) } else { None }
+                if st == STATE_DRIVING { Some(false) } else if st == STATE_CRASHED && (vs.speed[i].abs() > 0.01 || jm::abs(f(vs.v_lat[i])) > 0.01 || jm::abs(f(vs.yaw_rate[i])) > 0.01) { Some(true) } else { None }
             };
             let ring = |i: usize| &vs.ctrl_ring[i * 120..(i + 1) * 120];
             let start = |i: usize, locked: bool| { let mut c = vs.gather(i); if !locked && !fuel_on { c.fuel = vs.tank[i]; } PhaseA { slot: i as u32, locked, c, out: CarOut::default(), ret: 0, pose: Pose::default() } };
-            let one = |e: &mut PhaseA| { let i = e.slot as usize; e.ret = VehicleStore::integrate_car(&mut e.c, &vs.routes[i], ring(i), vs.missed_t.get(&i).copied(), pm, &mut e.out, dt, time, &g, step, e.locked); };
+            let one = |e: &mut PhaseA| { let i = e.slot as usize; e.ret = VehicleStore::integrate_car(&mut e.c, &vs.routes[i], ring(i), vs.missed_t.get(&i).copied(), pm, &mut e.out, dt, time, &g, step, e.locked, vs.model); };
             if par {
                 use rayon::prelude::*;
                 // eligible slots first (cheap), then an indexed parallel map (collects in place, no concatenation)
@@ -682,12 +729,12 @@ impl Sim {
                             let (ia, ib, ic, id) = (a.slot as usize, b.slot as usize, c.slot as usize, d.slot as usize);
                             let r = VehicleStore::integrate_car4([
                                 (&mut a.c, &vs.routes[ia], ring(ia), vs.missed_t.get(&ia).copied(), &mut a.out, a.locked), (&mut b.c, &vs.routes[ib], ring(ib), vs.missed_t.get(&ib).copied(), &mut b.out, b.locked),
-                                (&mut c.c, &vs.routes[ic], ring(ic), vs.missed_t.get(&ic).copied(), &mut c.out, c.locked), (&mut d.c, &vs.routes[id], ring(id), vs.missed_t.get(&id).copied(), &mut d.out, d.locked)], pm, dt, time, &g, step);
+                                (&mut c.c, &vs.routes[ic], ring(ic), vs.missed_t.get(&ic).copied(), &mut c.out, c.locked), (&mut d.c, &vs.routes[id], ring(id), vs.missed_t.get(&id).copied(), &mut d.out, d.locked)], pm, dt, time, &g, step, vs.model);
                             a.ret = r[0]; b.ret = r[1]; c.ret = r[2]; d.ret = r[3];
                         }
                         [a, b, rest @ ..] => {
                             let (ia, ib) = (a.slot as usize, b.slot as usize);
-                            let (x, y) = VehicleStore::integrate_car2((&mut a.c, &vs.routes[ia], ring(ia), vs.missed_t.get(&ia).copied(), &mut a.out, a.locked), (&mut b.c, &vs.routes[ib], ring(ib), vs.missed_t.get(&ib).copied(), &mut b.out, b.locked), pm, dt, time, &g, step);
+                            let (x, y) = VehicleStore::integrate_car2((&mut a.c, &vs.routes[ia], ring(ia), vs.missed_t.get(&ia).copied(), &mut a.out, a.locked), (&mut b.c, &vs.routes[ib], ring(ib), vs.missed_t.get(&ib).copied(), &mut b.out, b.locked), pm, dt, time, &g, step, vs.model);
                             a.ret = x; b.ret = y;
                             for e in rest { one(e); }
                         }
@@ -730,7 +777,7 @@ impl Sim {
                     continue;
                 }
                 let vs = &mut self.vs;
-                if vs.speed[i] > 0.01 || jm::abs(f(vs.v_lat[i])) > 0.01 || jm::abs(f(vs.yaw_rate[i])) > 0.01 {
+                if vs.speed[i].abs() > 0.01 || jm::abs(f(vs.v_lat[i])) > 0.01 || jm::abs(f(vs.yaw_rate[i])) > 0.01 {
                     vs.save_pose(i); vs.integrate(i, dt, self.time, &g, self.step_count, true); vs.update_pose(i, &g);
                 } else { vs.save_pose(i); }
                 continue;
