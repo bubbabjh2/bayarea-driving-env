@@ -26,7 +26,7 @@ pub fn sim_opts_from(v: &Value) -> SimOpts {
     o.path_sight = n("pathSight", 0.0); o.deadlock_break = n("deadlockBreak", 0.0); o.spawn_lane_route = n("spawnLaneRoute", 0.0); o.junction_sight = n("junctionSight", 0.0);
     o.position_mode = v["actionMode"].as_str() != Some("rate");
     o.traffic_mode = match v["trafficMode"].as_str() { Some("sparse") => TrafficMode::Sparse, Some("empty") => TrafficMode::Empty, _ => TrafficMode::Full };
-    o.fuel = n("fuel", 1.0) != 0.0; o.parallel = std::env::var("BAYENV_PAR").map(|v| !v.is_empty()).unwrap_or(false); o.seed = n("seed", 1.0); o.wrecks = n("wrecks", 0.0) as usize; o.slot_pool = n("slotPool", 0.0) as usize;
+    o.fuel = n("fuel", 1.0) != 0.0; o.parallel = std::env::var("BAYENV_PAR").map(|v| !v.is_empty()).unwrap_or(false); o.batch_dynamics = std::env::var("BAYENV_NOBATCH").map(|v| v.is_empty()).unwrap_or(true); o.seed = n("seed", 1.0); o.wrecks = n("wrecks", 0.0) as usize; o.slot_pool = n("slotPool", 0.0) as usize;
     o
 }
 

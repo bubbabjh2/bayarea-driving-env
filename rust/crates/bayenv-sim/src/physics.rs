@@ -65,6 +65,37 @@ pub struct Surf { pub pk: f64, pub sk: f64, pub crr: f64 }
 
 /// dynamics.js stepDynamics (h0 = PHYS_DT). `position` = actionMode 'position'.
 pub fn step_dynamics(st: &mut DynState, steer_rate: f64, gas: f64, brake: f64, p: &VehicleParams, dt: f64, grade: f64, locked: bool, position: bool, surf: Option<Surf>) {
+    let (mut d, n) = Dyn::new(st, steer_rate, gas, brake, p, dt, grade, locked, position, surf);
+    for _ in 0..n { d.substep(); }
+    d.finish(st);
+}
+
+/// step_dynamics for two cars with the same dt (same substep count), their substeps interleaved: the two dependency
+/// chains are independent, so the core overlaps them. Each car's operations and their order are step_dynamics' own.
+#[allow(clippy::type_complexity)]
+pub fn step_dynamics2(a: (&mut DynState, f64, f64, f64, &VehicleParams, f64, bool, Option<Surf>), b: (&mut DynState, f64, f64, f64, &VehicleParams, f64, bool, Option<Surf>), dt: f64, position: bool) {
+    let (sa, sra, ga, ba, pa, gra, la, sfa) = a;
+    let (sb, srb, gb, bb, pb, grb, lb, sfb) = b;
+    let (mut da, n) = Dyn::new(sa, sra, ga, ba, pa, dt, gra, la, position, sfa);
+    let (mut db, _) = Dyn::new(sb, srb, gb, bb, pb, dt, grb, lb, position, sfb);
+    for _ in 0..n { da.substep(); db.substep(); }
+    da.finish(sa); db.finish(sb);
+}
+
+/// step_dynamics' per-call constants and loop state (the substep body is the JS loop body verbatim)
+#[derive(Clone, Copy)]
+struct Dyn<'a> {
+    h: f64, m: f64, iz: f64, a: f64, b: f64, l: f64, hcg: f64, cf: f64, cr: f64, mu: f64, k_slide: f64, crr_mul: f64,
+    sr: f64, g_: f64, b_: f64, cos_g: f64, sin_g: f64, wg: f64, tgt: f64, k_lag: f64, slew: f64, locked: bool, position: bool,
+    p: &'a VehicleParams, grade: f64,
+    u: f64, v: f64, r: f64, steer: f64, ax: f64, hr: f64, lat: f64, s: f64, sl: f64, fuel: f64, power: f64,
+    m_steer: f64, m_cd: f64, m_sd: f64, m_hr: f64, m_ch: f64, m_sh: f64,
+}
+
+impl<'a> Dyn<'a> {
+    #[allow(clippy::too_many_arguments)]
+    #[inline(always)]
+    fn new(st: &DynState, steer_rate: f64, gas: f64, brake: f64, p: &'a VehicleParams, dt: f64, grade: f64, locked: bool, position: bool, surf: Option<Surf>) -> (Dyn<'a>, i64) {
     let n = jm::max(1.0, jm::ceil(dt / PHYS_DT - 1e-9));
     let h = dt / n;
     let n = n as i64;
@@ -86,7 +117,14 @@ pub fn step_dynamics(st: &mut DynState, steer_rate: f64, gas: f64, brake: f64, p
     // memo of cos/sin(steer): the same input gives the same bits, so reuse while the wheel angle is unchanged
     let (mut m_steer, mut m_cd, mut m_sd) = (f64::NAN, 0.0, 0.0);
     let (mut m_hr, mut m_ch, mut m_sh) = (f64::NAN, 0.0, 0.0);
-    for _ in 0..n {
+        (Dyn { h, m, iz, a, b, l, hcg, cf, cr, mu, k_slide, crr_mul, sr, g_, b_, cos_g, sin_g, wg, tgt, k_lag, slew, locked, position, p, grade, u, v, r, steer, ax, hr, lat, s, sl, fuel, power, m_steer, m_cd, m_sd, m_hr, m_ch, m_sh }, n)
+    }
+
+    #[inline(always)]
+    #[allow(unused_assignments)]
+    fn substep(&mut self) {
+        let Dyn { h, m, iz, a, b, l, hcg, cf, cr, mu, k_slide, crr_mul, sr, g_, b_, cos_g, sin_g, wg, tgt, k_lag, slew, locked, position, p, grade, .. } = *self;
+        let Dyn { mut u, mut v, mut r, mut steer, mut ax, mut hr, mut lat, mut s, mut sl, mut fuel, mut power, mut m_steer, mut m_cd, mut m_sd, mut m_hr, mut m_ch, mut m_sh, .. } = *self;
         if !locked {
             if position { sl += (tgt - sl) * k_lag; let d = sl - steer; steer += if d > slew { slew } else if d < -slew { -slew } else { d }; }
             else { steer += sr * p.max_steer_rate * h; sl = steer; }
@@ -180,9 +218,15 @@ pub fn step_dynamics(st: &mut DynState, steer_rate: f64, gas: f64, brake: f64, p
         let tract = jm::max(0.0, match p.drive { Drive::Front => jm::max(0.0, fxf), Drive::Rear => jm::max(0.0, fxr), Drive::All => jm::max(0.0, fxf) + jm::max(0.0, fxr) }) * u;
         power = if locked { 0.0 } else { (if g_ > 0.0 { tract / 0.88 } else { 0.0 }) + p.accessory_w };
         fuel += (if locked { 0.0 } else { fuel_flow(p, power) }) * h;
+            self.u = u; self.v = v; self.r = r; self.steer = steer; self.ax = ax; self.hr = hr; self.lat = lat; self.s = s; self.sl = sl; self.fuel = fuel; self.power = power; self.m_steer = m_steer; self.m_cd = m_cd; self.m_sd = m_sd; self.m_hr = m_hr; self.m_ch = m_ch; self.m_sh = m_sh;
     }
-    st.u = u; st.v = v; st.r = r; st.steer = steer; st.sl = sl; st.ax = ax; st.hr = hr; st.lat = lat; st.s = s;
-    st.fuel_l += fuel; st.power = power;
+
+    #[inline(always)]
+    fn finish(&self, st: &mut DynState) {
+        let Dyn { u, v, r, steer, sl, ax, hr, lat, s, fuel, power, .. } = *self;
+        st.u = u; st.v = v; st.r = r; st.steer = steer; st.sl = sl; st.ax = ax; st.hr = hr; st.lat = lat; st.s = s;
+        st.fuel_l += fuel; st.power = power;
+    }
 }
 
 // ------------------------------------------------------------------ collide.js
