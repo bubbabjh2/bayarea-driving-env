@@ -273,6 +273,7 @@ pub struct GpuSim {
 
 #[derive(Clone, Copy, Debug, Default)]
 struct CrashX { other: u32, pre_a: f64, pre_b: f64, x: f64, z: f64, nx: f64, nz: f64, ha: f64, hb: f64, closing: f64, lane_a: u32, lane_b: u32, maneuver: u32, any_crashed: bool, strike_edge: i64, has_h: bool }
+static REROUTE_CHECKED: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
 #[derive(Clone, Copy, Debug)]
 struct Reroute { slot: u32, edge: u32, trip: i32, missed: bool, slow: bool, rp: u32, prefix: i64, t: f64 }
 
@@ -1222,6 +1223,15 @@ impl GpuSim {
     fn process_reroutes(&mut self) {
         if self.reroute_queue.is_empty() { return; }
         if self.reroute_queue.len() > 4000 { let (st, t) = (&self.slot_trip, self.time); self.reroute_queue.retain(|r| st[r.slot as usize] == r.trip && (r.missed || t - r.t <= 60.0)); }
+        // The JS filter / budget pass runs in queue order; the A* queries it selects run in parallel
+        // (Router::route_batch, result i = route_with(query i)) and are applied in queue order, so ops, route words and
+        // counters are the same as one query at a time. The penalty list is built once: closures and penalties only
+        // change outside this function. A slot queued twice flushes the batch first (its goal comes from the route
+        // the first reroute wrote).
+        let penalised = !(self.closed_edges.is_empty() && self.traffic_penalty.is_empty());
+        let pen: Vec<(u32, f64)> = if penalised { self.penalty_order.iter().map(|e| (*e, self.traffic_penalty[e])).collect() } else { Vec::new() };
+        let mut jobs: Vec<(Reroute, usize, usize, bool)> = Vec::new();   // (reroute, from, goal, query) ; query false = empty path
+        let mut in_batch: HashSet<u32> = HashSet::new();
         let mut budget = 200;
         while budget > 0 { let Some(r) = self.reroute_queue.pop_front() else { break };
             if self.slot_trip[r.slot as usize] != r.trip || r.trip < 0 { continue; }
@@ -1229,23 +1239,57 @@ impl GpuSim {
             if !r.missed { if let Some(&(lt, ltrip)) = self.last_reroute.get(&r.slot) { if ltrip == r.trip && self.time - lt < if r.slow { 300.0 } else { 120.0 } { continue; } } }
             if !r.missed { self.last_reroute.insert(r.slot, (self.time, r.trip)); }
             budget -= 1;
-            let route = self.route_of(r.slot).to_vec(); if route.is_empty() { continue; }
+            if !in_batch.insert(r.slot) { self.run_reroutes(std::mem::take(&mut jobs), &pen); in_batch.clear(); in_batch.insert(r.slot); }
+            let route = self.route_of(r.slot); if route.is_empty() { continue; }
             let g = &self.world.graph;
             let goal = g.to[(route[route.len() - 1] & 0xFFFFF) as usize] as usize; let from = g.to[r.edge as usize] as usize;
-            if from == goal { if r.missed { self.apply_reroute(r, Some(Vec::new())); } continue; }
-            if self.router.is_none() { self.router = Some(bayenv_world::nav::Router::new(&self.world.graph, &bayenv_world::nav::RouterOpts { weight: 1.25, ..Default::default() })); }
-            let router = self.router.as_mut().unwrap();
-            let path = if r.missed || (self.closed_edges.is_empty() && self.traffic_penalty.is_empty()) { router.route(from, goal) } else {
-                let pen: Vec<(u32, f64)> = self.penalty_order.iter().map(|e| (*e, self.traffic_penalty[e])).collect();
-                router.route_with(from, goal, &bayenv_world::nav::RouteQuery { avoid: &self.closed_edges, penalty: &pen })
-            };
-            self.apply_reroute(r, path);
+            if from == goal { if r.missed { jobs.push((r, from, goal, false)); } continue; }
+            jobs.push((r, from, goal, true));
         }
+        self.run_reroutes(jobs, &pen);
         if self.last_reroute.len() > 300000 { self.last_reroute.clear(); }
     }
-    fn apply_reroute(&mut self, r: Reroute, path: Option<Vec<u32>>) {
+    /// reroutes verified against the one-at-a-time path (env BAYENV_REROUTE_CHECK=1; diagnostics)
+    pub fn reroute_checked() -> u64 { REROUTE_CHECKED.load(std::sync::atomic::Ordering::Relaxed) }
+    /// A* for the selected reroutes (parallel), then `apply_reroute` in order.
+    fn run_reroutes(&mut self, jobs: Vec<(Reroute, usize, usize, bool)>, pen: &[(u32, f64)]) {
+        if jobs.is_empty() { return; }
+        if self.router.is_none() { self.router = Some(bayenv_world::nav::Router::new(&self.world.graph, &bayenv_world::nav::RouterOpts { weight: 1.25, ..Default::default() })); }
+        let paths: Vec<Option<Vec<u32>>> = {
+            let router = self.router.as_ref().unwrap();
+            let plain = bayenv_world::nav::RouteQuery { avoid: &[], penalty: &[] };
+            let qs: Vec<(usize, usize, bayenv_world::nav::RouteQuery)> = jobs.iter().filter(|j| j.3).map(|&(ref r, f, g, _)| {
+                let penalised = !(self.closed_edges.is_empty() && self.traffic_penalty.is_empty());
+                (f, g, if r.missed || !penalised { plain } else { bayenv_world::nav::RouteQuery { avoid: &self.closed_edges, penalty: pen } })
+            }).collect();
+            router.route_batch(&qs)
+        };
+        let check = std::env::var("BAYENV_REROUTE_CHECK").is_ok_and(|v| v != "0");
+        let closed: HashSet<u32> = self.closed_edges.iter().cloned().collect();   // once per batch (was once per reroute)
+        let none: HashSet<u32> = HashSet::new();
+        let mut paths = paths.into_iter();
+        for (r, from, goal, query) in jobs {
+            let p = if query { paths.next().unwrap() } else { Some(Vec::new()) };
+            if check {
+                // the one-at-a-time path: goal from the route as it is now, per-query penalty list, route / route_with
+                let route = self.route_of(r.slot).to_vec(); let g = &self.world.graph;
+                assert_eq!(goal, g.to[(route[route.len() - 1] & 0xFFFFF) as usize] as usize, "reroute check: goal");
+                if query {
+                    let router = self.router.as_mut().unwrap();
+                    let q = if r.missed || (self.closed_edges.is_empty() && self.traffic_penalty.is_empty()) { router.route(from, goal) } else {
+                        let pen: Vec<(u32, f64)> = self.penalty_order.iter().map(|e| (*e, self.traffic_penalty[e])).collect();
+                        router.route_with(from, goal, &bayenv_world::nav::RouteQuery { avoid: &self.closed_edges, penalty: &pen })
+                    };
+                    assert_eq!(q, p, "reroute check: path");
+                }
+                REROUTE_CHECKED.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+            }
+            self.apply_reroute(r, p, if r.missed { &none } else { &closed });
+        }
+    }
+    /// `closed`: the closed edges as a set (empty for missed-exit reroutes)
+    fn apply_reroute(&mut self, r: Reroute, path: Option<Vec<u32>>, closed: &HashSet<u32>) {
         if self.slot_trip[r.slot as usize] != r.trip { return; }
-        let closed: HashSet<u32> = if r.missed { HashSet::new() } else { self.closed_edges.iter().cloned().collect() };
         if r.slow { if let Some(p) = &path {
             let g = &self.world.graph; let pen = &self.traffic_penalty;
             let cost = |x: &[u32]| x.iter().fold(0.0, |t, &e| { let e = (e & 0xFFFFF) as usize; t + g.length[e] / g.speed_limit[e] + pen.get(&(e as u32)).copied().unwrap_or(0.0) });

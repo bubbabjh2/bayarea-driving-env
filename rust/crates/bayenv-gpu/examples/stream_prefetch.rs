@@ -24,7 +24,13 @@ fn main() {
     let world = Arc::new(bayenv_world::World::load(data).expect("world"));
     println!("world {:.0} ms, load {}", t.elapsed().as_secs_f64() * 1e3, load());
     let t = Instant::now();
-    let table = CommuterTable::generate(&world, n, 42.0).expect("table");
+    // BAYENV_TABLE_CACHE=<file>: load the table if the file exists, else generate and save it
+    let cache_file = std::env::var("BAYENV_TABLE_CACHE").ok().map(std::path::PathBuf::from);
+    let table = match &cache_file {
+        Some(f) if f.exists() => CommuterTable::load(f).expect("table cache"),
+        _ => { let t = CommuterTable::generate(&world, n, 42.0).expect("table"); if let Some(f) = &cache_file { t.save(f).expect("save table"); } t }
+    };
+    assert_eq!(table.n, n, "table cache size");
     println!("CommuterTable {n}: {:.1} s (generation routes once, parallel), load {}", t.elapsed().as_secs_f64(), load());
     match mode {
         "route" => {
@@ -145,6 +151,48 @@ fn main() {
             println!("spawn table {h0}-{} h, threads {threads}: {:.1} s, {placed} placed, pool full {}, route words {}, waited {} ({:.1} s), sim-thread A* {}, hash {h:016x}",
                 h0 + hours, t0.elapsed().as_secs_f64(), sim.x.stream_stats.pool_full, sim.route_words, st.waited, st.wait_ns as f64 * 1e-9, st.misses);
         }
-        _ => panic!("mode route | sim | spawn"),
+        "prof" => {
+            // step-time split of a streaming population: host submit (enqueue / scenes / refuels / reroutes / encode),
+            // GPU wait (poll), host finish (readback, events, records). Env PROF_OPTS: record_events=0, stations=0, reroute=0
+            let (h0, warm_min, min, steps): (f64, f64, f64, usize) = (arg(&a, 5, 7.5), arg(&a, 6, 2.0), arg(&a, 7, 3.0), arg(&a, 8, 20));
+            let cap: usize = arg(&a, 9, 131072);
+            let mut o = GpuOptions { capacity: cap, start_time: h0 * 3600.0, refuel_budget_ms: f64::INFINITY, route_threads: threads, ..Default::default() };
+            let po = std::env::var("PROF_OPTS").unwrap_or_default();
+            let flag = |k: &str| po.split(',').find_map(|kv| kv.strip_prefix(&format!("{k}=")).map(|v| v != "0"));
+            if let Some(v) = flag("record_events") { o.record_events = v; }
+            if let Some(v) = flag("reroute") { o.reroute = v; }
+            if let Some(v) = flag("collisions") { o.features.collisions = v; }
+            if let Some(v) = flag("accidents") { o.features.accidents = v; }
+            let stations = flag("stations").unwrap_or(true);
+            let mut sim = bayenv_gpu::env::create(world.clone(), o).expect("sim");
+            sim.set_streaming(Arc::new(table), stations, None);
+            let dt = sim.dt; let calls = |m: f64| (m * 60.0 / dt).round() as usize / steps;
+            let tw = Instant::now();
+            for _ in 0..calls(warm_min) { sim.run_steps(steps); }
+            sim.sync();
+            println!("prof: start {h0} h, warm-up {warm_min} sim min in {:.1} s, cars on road {}, PROF_OPTS '{po}', steps/call {steps}, capacity {cap}, load {}", tw.elapsed().as_secs_f64(), cap - sim.free_len(), load());
+            let (mut ts, mut tw, mut tf) = (0f64, 0f64, 0f64); let k = calls(min); let (r0, e0) = (sim.counters.reroutes, sim.rec.len());
+            let t_all = Instant::now();
+            for _ in 0..k {
+                let t0 = Instant::now(); let p = sim.submit_steps(steps, 0, 0); let t1 = Instant::now();
+                sim.gpu.device.poll(wgpu::PollType::wait_indefinitely()).expect("poll"); let t2 = Instant::now();
+                sim.finish_steps(p, None, None); let t3 = Instant::now();
+                ts += (t1 - t0).as_secs_f64(); tw += (t2 - t1).as_secs_f64(); tf += (t3 - t2).as_secs_f64();
+            }
+            let n = (k * steps) as f64;
+            println!("prof: {} steps in {:.1} s = {:.2} ms/step: submit {:.2}, GPU wait {:.2}, finish {:.2} ms/step; cars on road {}, reroutes {}, records {}, load {}",
+                k * steps, t_all.elapsed().as_secs_f64(), t_all.elapsed().as_secs_f64() * 1e3 / n, ts * 1e3 / n, tw * 1e3 / n, tf * 1e3 / n, cap - sim.free_len(), sim.counters.reroutes - r0, sim.rec.len() - e0, load());
+            // state hash (bit-identity checks between builds): GPU state, slot tables, route mirror, records, counters
+            let stt = sim.read_state(); let mut h = 0xcbf29ce484222325u64;
+            for &w in stt.veh.iter().chain(&stt.par) { fnv(&mut h, w); } for &f in &stt.pose { fnv(&mut h, f.to_bits()); }
+            let hs = h; let mut h2 = 0xcbf29ce484222325u64;
+            for &x in &sim.slot_trip { fnv(&mut h2, x as u32); } for &x in &sim.slot_route { fnv(&mut h2, x); } for &x in &sim.route_mirror[..sim.route_words] { fnv(&mut h2, x); }
+            let mut h3 = 0xcbf29ce484222325u64; let r = &sim.rec;
+            for i in 0..r.len() { for v in [r.step[i] as u32, r.kind[i] as u32, r.slot[i] as u32, r.agent[i] as u32, r.other[i] as u32, r.progress_m[i].to_bits(), r.late_by[i].to_bits(), r.dv_kmh[i].to_bits(), r.time[i].to_bits() as u32] { fnv(&mut h3, v); } }
+            let c = &sim.counters;
+            println!("prof hash: state {hs:016x} tables {h2:016x} records {h3:016x} ({} rows) spawn {:016x}; reroutes {} failed {} checked {} crashes {} arrived-spawned {} route_words {}",
+                r.len(), sim.x.stream_stats.spawn_hash, c.reroutes, c.reroute_failed, bayenv_gpu::sim::GpuSim::reroute_checked(), c.crashes, sim.stats()[bayenv_gpu::layout::stat::ARRIVED], sim.route_words);
+        }
+        _ => panic!("mode route | sim | spawn | prof"),
     }
 }

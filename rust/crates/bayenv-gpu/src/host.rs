@@ -42,6 +42,13 @@ impl bayenv_sim::sim::Router for NavRouter {
 struct NavRef<'a>(&'a mut bayenv_world::nav::Router);
 impl bayenv_sim::sim::Router for NavRef<'_> {
     fn route(&mut self, s: i32, g: i32, a: Option<&HashSet<i32>>, p: Option<&HashMap<i32, f64>>) -> Option<Vec<i32>> { nav_route(self.0, s, g, a, p) }
+    /// Plain queries in parallel (`nav::Router::route_batch`: result i = `route(queries[i])`, same OD cache).
+    fn route_batch(&mut self, qs: &[(i32, i32)], a: Option<&HashSet<i32>>, p: Option<&HashMap<i32, f64>>) -> Vec<Option<Vec<i32>>> {
+        if a.is_some() || p.is_some() { return qs.iter().map(|&(s, g)| nav_route(self.0, s, g, a, p)).collect(); }
+        let plain = bayenv_world::nav::RouteQuery { avoid: &[], penalty: &[] };
+        let q: Vec<(usize, usize, bayenv_world::nav::RouteQuery)> = qs.iter().map(|&(s, g)| (s as usize, g as usize, plain)).collect();
+        self.0.route_batch(&q).into_iter().map(|r| r.map(|v| v.into_iter().map(|x| x as i32).collect())).collect()
+    }
 }
 
 // ------------------------------------------------------------------ populations
@@ -120,6 +127,28 @@ impl CommuterTable {
             order: Vec::new(), sorted_depart: Vec::new(), base: pg::make_genome(None, cfg.delta_norm_cap), seed_str: pg::js_num_str(cfg.seed), cfg };
         for p in parts { for r in p? { t.home.push(r.0); t.work.push(r.1); t.depart.push(r.2); t.work_start.push(r.3); t.return_depart.push(r.4); t.reaction_time.push(r.5); t.fuel_fill.push(r.6); t.vehicle_type.push(r.7); } }
         Ok(t.finish())
+    }
+    /// Raw cache file (examples / benchmarks): n, seed, then the arrays. Regenerating 1.38M commuters takes minutes.
+    pub fn save(&self, path: &std::path::Path) -> std::io::Result<()> {
+        let mut b: Vec<u8> = Vec::new();
+        b.extend_from_slice(&(self.n as u64).to_le_bytes()); b.extend_from_slice(&self.cfg.seed.to_le_bytes());
+        for v in [bytemuck::cast_slice::<i32, u8>(&self.home), bytemuck::cast_slice(&self.work), bytemuck::cast_slice(&self.depart), bytemuck::cast_slice(&self.work_start),
+            bytemuck::cast_slice(&self.return_depart), bytemuck::cast_slice(&self.reaction_time), bytemuck::cast_slice(&self.fuel_fill), &self.vehicle_type[..]] { b.extend_from_slice(v); }
+        std::fs::write(path, b)
+    }
+    pub fn load(path: &std::path::Path) -> Result<CommuterTable, String> {
+        let b = std::fs::read(path).map_err(|e| e.to_string())?;
+        let n = u64::from_le_bytes(b[0..8].try_into().unwrap()) as usize; let seed = f64::from_le_bytes(b[8..16].try_into().unwrap());
+        if b.len() != 16 + n * 29 { return Err(format!("{}: bad size", path.display())); }
+        let mut o = 16;
+        let mut take = |k: usize| { let r = &b[o..o + k * n]; o += k * n; r };
+        let (home, work, depart, work_start, return_depart, reaction_time, fuel_fill): (Vec<i32>, Vec<i32>, Vec<f32>, Vec<f32>, Vec<f32>, Vec<f32>, Vec<f32>) =
+            (bytemuck::pod_collect_to_vec(take(4)), bytemuck::pod_collect_to_vec(take(4)), bytemuck::pod_collect_to_vec(take(4)), bytemuck::pod_collect_to_vec(take(4)),
+             bytemuck::pod_collect_to_vec(take(4)), bytemuck::pod_collect_to_vec(take(4)), bytemuck::pod_collect_to_vec(take(4)));
+        let vehicle_type = take(1).to_vec();
+        let cfg = PopConfig { n, seed, return_trips: false, ..Default::default() };
+        Ok(CommuterTable { n, home, work, depart, work_start, return_depart, reaction_time, fuel_fill, vehicle_type, order: Vec::new(), sorted_depart: Vec::new(),
+            base: pg::make_genome(None, cfg.delta_norm_cap), seed_str: pg::js_num_str(cfg.seed), cfg }.finish())
     }
     /// `finish()`: ids sorted by departure (f32), ties by id.
     pub fn finish(mut self) -> CommuterTable {
@@ -300,6 +329,10 @@ impl RouteProvider {
     }
 }
 
+/// A queued refuel plan of `process_refuels_batched` (slot; or slot, edge, from node, goal node).
+#[derive(Clone, Copy)]
+enum RefuelJob { Fail(u32), Plan(u32, u32, i32, i32) }
+
 #[derive(Clone, Debug, Default)]
 struct Arena { free: HashMap<u32, Vec<u32>>, slot: Vec<i32>, cls: Vec<u8> }
 
@@ -349,7 +382,7 @@ pub struct Ext {
     pub trips: Vec<i32>, pub trip_depart: Vec<f32>, pub trip_ptr: usize,
     /// per commuter: fuel left after the last leg (-1 none), outcome of the outbound leg (1 arrived, 2 crash, 3 stranded, 4 stuck, 5 no route)
     pub fuel_left: Vec<f32>, pub outcome: Vec<u8>,
-    pub table: Option<Arc<CommuterTable>>, table_ptr: usize, pending_stream: Vec<u32>, prefetch_ptr: usize, provider: Option<RouteProvider>, arena: Option<Arena>,
+    pub table: Option<Arc<CommuterTable>>, table_ptr: usize, pending_stream: Vec<u32>, prefetch_ptr: usize, pending_pf: usize, prefetched: Vec<bool>, provider: Option<RouteProvider>, arena: Option<Arena>,
     pub stream_deltas: Option<Arc<Vec<f32>>>, pub stream_stats: StreamStats,
     pub stations: Option<Stations>, pumping: Vec<Pump>, pub(super) in_lot: HashSet<u32>,
     pub obstacles: Vec<Placed>,
@@ -466,7 +499,7 @@ impl GpuSim {
         let n = table.n;
         self.resize_agents(n);
         self.x.trips.clear(); self.x.trip_ptr = 0;
-        self.x.table_ptr = table.index_at(self.time - 3600.0); self.x.pending_stream.clear(); self.x.prefetch_ptr = self.x.table_ptr;
+        self.x.table_ptr = table.index_at(self.time - 3600.0); self.x.pending_stream.clear(); self.x.prefetch_ptr = self.x.table_ptr; self.x.pending_pf = 0; self.x.prefetched.clear();
         self.x.fuel_left = vec![-1.0; n]; self.x.outcome = vec![0; n];
         self.route_words = self.route_words.max(1); self.route_mirror.clear();
         self.x.arena = Some(Arena { free: HashMap::new(), slot: vec![-1; self.cap], cls: vec![0; self.cap] });
@@ -534,20 +567,32 @@ impl GpuSim {
         // prefetch (RouteWorkers.prefetch): departures up to route_ahead sim s ahead go to the route workers first, so
         // this frame's departures are routed in parallel too. place_stream waits for a route in flight: same routes,
         // same spawn steps as serial.
+        // Departures waiting for a slot (pending_stream, FIFO: they are placed first) are prefetched before the window;
+        // `prefetched` keeps one request per commuter (every request is taken by exactly one departure).
         if self.x.provider.as_ref().is_some_and(|p| p.threads() > 0) {
-            let p = self.x.provider.as_mut().unwrap();
-            if self.x.prefetch_ptr < self.x.table_ptr { self.x.prefetch_ptr = self.x.table_ptr; }
+            let x = &mut self.x;
+            let p = x.provider.as_mut().unwrap();
+            if x.prefetched.len() != t.n { x.prefetched = vec![false; t.n]; }
+            let mut full = false;
+            while x.pending_pf < x.pending_stream.len() {
+                let id = x.pending_stream[x.pending_pf] as usize;
+                if !x.prefetched[id] { if !p.prefetch(t.home[id], t.work[id]) { full = true; break; } x.prefetched[id] = true; }
+                x.pending_pf += 1;
+            }
+            if x.prefetch_ptr < x.table_ptr { x.prefetch_ptr = x.table_ptr; }
             let ahead = t_end + self.opts.route_ahead.max(2.0);
-            while self.x.prefetch_ptr < t.n && t.sorted_depart[self.x.prefetch_ptr] as f64 <= ahead {
-                let id = t.order[self.x.prefetch_ptr] as usize;
-                if !p.prefetch(t.home[id], t.work[id]) { break; }
-                self.x.prefetch_ptr += 1;
+            while !full && x.prefetch_ptr < t.n && t.sorted_depart[x.prefetch_ptr] as f64 <= ahead {
+                let id = t.order[x.prefetch_ptr] as usize;
+                if !x.prefetched[id] { if !p.prefetch(t.home[id], t.work[id]) { break; } x.prefetched[id] = true; }
+                x.prefetch_ptr += 1;
             }
             p.flush();
         }
         if !self.x.pending_stream.is_empty() {
-            let pend = std::mem::take(&mut self.x.pending_stream); let mut keep = Vec::new();
+            let pend = std::mem::take(&mut self.x.pending_stream); let mut keep = Vec::new(); let n0 = pend.len();
             for id in pend { if !self.place_stream(&t, id) { keep.push(id); } }
+            // placed departures are a prefix (place fails only when the pool / queue is full, which lasts the frame)
+            self.x.pending_pf = self.x.pending_pf.saturating_sub(n0 - keep.len());
             self.x.pending_stream = keep;
         }
         while self.x.table_ptr < t.n && t.sorted_depart[self.x.table_ptr] as f64 <= t_end + 2.0 {
@@ -596,6 +641,7 @@ impl GpuSim {
         if self.refuel_queue.is_empty() { return; }
         if self.x.stations.is_none() { for (slot, _) in std::mem::take(&mut self.refuel_queue) { self.op(op::FUEL_PLAN_FAILED, slot, 0, 0); } return; }
         let budget = self.x.refuel_budget_ms.unwrap_or(self.opts.refuel_budget_ms);
+        if budget.is_infinite() { return self.process_refuels_batched(); }
         let t0 = std::time::Instant::now();
         let mut q: VecDeque<(u32, u32)> = std::mem::take(&mut self.refuel_queue).into();
         while !q.is_empty() && t0.elapsed().as_secs_f64() * 1e3 < budget {
@@ -613,6 +659,48 @@ impl GpuSim {
             self.apply_refuel(slot, trip, edge, plan);
         }
         self.refuel_queue = q.into();
+    }
+    /// Every queued plan this frame (no wall-clock budget): the same filter in queue order, the plans as one
+    /// `StationNetwork::plan_many` (parallel router batches; each result = `plan` of the pair), then results and
+    /// failures applied in queue order (same ops, route words and counters as one plan at a time). A slot queued
+    /// twice flushes the batch first (its goal comes from the route the first plan wrote).
+    fn process_refuels_batched(&mut self) {
+        use RefuelJob as J;
+        let q = std::mem::take(&mut self.refuel_queue);
+        let mut jobs: Vec<J> = Vec::new(); let mut seen: HashSet<u32> = HashSet::new();
+        for (slot, edge) in q {
+            if self.slot_trip[slot as usize] < 0 { continue; }
+            if !seen.insert(slot) { self.run_refuel_jobs(std::mem::take(&mut jobs)); seen.clear(); seen.insert(slot); }
+            let route = self.route_of(slot);
+            if route.is_empty() { jobs.push(J::Fail(slot)); continue; }
+            let g = &self.world.graph;
+            let goal = g.to[(route[route.len() - 1] & 0xFFFFF) as usize] as i32; let from = g.to[edge as usize] as i32;
+            if from == goal { jobs.push(J::Fail(slot)); continue; }
+            jobs.push(J::Plan(slot, edge, from, goal));
+        }
+        self.run_refuel_jobs(jobs);
+    }
+    fn run_refuel_jobs(&mut self, jobs: Vec<RefuelJob>) {
+        if jobs.is_empty() { return; }
+        let ods: Vec<(i32, i32)> = jobs.iter().filter_map(|j| if let RefuelJob::Plan(_, _, f, g) = *j { Some((f, g)) } else { None }).collect();
+        let plans = if ods.is_empty() { Vec::new() } else {
+            self.ensure_router();
+            let world = self.world.clone();
+            let st = self.x.stations.as_mut().unwrap(); let mut r = NavRef(self.router.as_mut().unwrap());
+            st.net.plan_many(&world.graph, &mut r, &ods)
+        };
+        let mut plans = plans.into_iter();
+        for j in jobs {
+            match j {
+                RefuelJob::Fail(slot) => self.op(op::FUEL_PLAN_FAILED, slot, 0, 0),
+                RefuelJob::Plan(slot, edge, _, _) => {
+                    let plan = plans.next().unwrap();
+                    { let net = &mut self.x.stations.as_mut().unwrap().net; if !net.node.is_empty() { net.count(&plan); } }   // plan() counts only with stations
+                    let trip = self.slot_trip[slot as usize];
+                    self.apply_refuel(slot, trip, edge, plan);
+                }
+            }
+        }
     }
     /// `_applyRefuel`: SET_ROUTE_REFUEL with [stop index + 1, total length, route words] (or FUEL_PLAN_FAILED).
     fn apply_refuel(&mut self, slot: u32, trip: i32, edge: u32, plan: Option<bayenv_sim::fuel::Plan>) {
@@ -911,7 +999,7 @@ impl GpuSim {
         self.reroute_queue.clear(); self.last_reroute.clear(); self.closed_key = None; self.closed_n = 0; self.closed_edges.clear();
         self.edge_speed_ema.clear(); self.edge_speed_order.clear(); self.traffic_penalty.clear(); self.penalty_order.clear(); self.pending_penalty = None; self.next_traffic = -1e9;
         if let Some(t) = self.x.table.clone() {
-            self.x.table_ptr = t.index_at(start - 3600.0); self.x.pending_stream.clear(); self.x.prefetch_ptr = self.x.table_ptr;
+            self.x.table_ptr = t.index_at(start - 3600.0); self.x.pending_stream.clear(); self.x.prefetch_ptr = self.x.table_ptr; self.x.pending_pf = 0; self.x.prefetched.clear();
             if let Some(p) = self.x.provider.as_mut() { p.drain(); p.clear_done(); }
             self.x.fuel_left.iter_mut().for_each(|x| *x = -1.0); self.x.outcome.iter_mut().for_each(|x| *x = 0);
             self.x.arena = Some(Arena { free: HashMap::new(), slot: vec![-1; self.cap], cls: vec![0; self.cap] }); self.route_words = 1;
