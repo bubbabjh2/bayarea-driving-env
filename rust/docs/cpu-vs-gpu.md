@@ -33,3 +33,28 @@ What this means:
   the trajectories (same order of magnitude, different agents).
 * For training, treat the backends as two related environments. Compare policies within one backend. Use the
   harness when you need to check that a reward or metric behaves the same on both.
+
+## Crash divergence dumps (CPU half: `rust/tools/cpu_divergence.py`)
+
+`python rust/tools/cpu_divergence.py data [n=5000] [steps=3000] [start=25200] [seed=42] [--agents a,b,c] [--k 3] [--window 50]`
+runs the `compare_backends.py --cpu-connector-join --spawn-default` setup on both backends, picks the first k agents
+that are CRASHED (event kind 2) on the CPU only, reruns the CPU and writes `rust/oracle/divergence/cpu-<agent>.jsonl`:
+one JSON object per step for the `window` steps before the agent's crash step and the crash step itself, read from
+`env.state()` after `env.step(1)` (the state at the END of that step), for the slot holding that agent:
+
+| key | meaning |
+|---|---|
+| step | 1-based global step index (= events `step`) |
+| time | sim time (s) at the end of the step |
+| agent, slot | 2 * commuter + leg; slot index (slots differ between backends: match by agent) |
+| edge, s, route_pos | current directed edge, m along it, index in the route |
+| lane, lane_lo, lane_hi | lane under the centre; footprint lanes (lane_hi < lane_lo = off the lanes) |
+| lat, heading_rel | m from the right carriageway edge (+ left); rad heading minus lane direction (+ left) |
+| x, y, z, heading | world pose (heading = atan2(dz, dx)) |
+| speed, v_lat, yaw_rate | body u (m/s), body v (+ left), r (rad/s, + left) |
+| steer, gas, brake | road-wheel angle (rad), applied (reaction-delayed) pedals |
+| leader, gap | leader slot (-1 none, -2 lane end, -3 junction conflict point) and bumper gap (m); a slot number is a slot of the same backend |
+| ctl_type, ctl_state, ctl_dist | next traffic control: -1 none / 0 signal / 1 stop / 2 give way / 3 ramp meter / 4 crossing; 0 green / 1 yellow / 2 red / 3 sign / 4 dark; m to its stop line |
+| flags, state, conn | vehicle flags (bit5 DISABLED, bit1 COLLIDED, ...), 1 driving / 2 crashed, junction connector (-1 none) |
+
+Non-finite floats are written as null. The GPU half should write `gpu-<agent>.jsonl` with the same keys and steps.
