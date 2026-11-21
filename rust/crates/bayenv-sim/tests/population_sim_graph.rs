@@ -65,7 +65,7 @@ fn sim_graph_population_matches_world() {
     let mut checked = 0;
     for d in scn {
         let name = d.file_name().unwrap().to_string_lossy().to_string();
-        let bw = match bayenv_world::World::load(&d) { Ok(w) => w, Err(e) => { eprintln!("skip scenario {name}: load failed: {e}"); continue; } };
+        let bw = match bayenv_world::World::load_with(&d, &bayenv_world::LoadOptions { verify: false, ..Default::default() }) { Ok(w) => w, Err(e) => { eprintln!("skip scenario {name}: load failed: {e}"); continue; } };
         let sc: serde_json::Value = serde_json::from_str(&std::fs::read_to_string(d.join("scenario.json")).unwrap()).unwrap();
         let rw = Arc::new(World::routing_from_bayenv(&bw));
         let o = ScenarioOpts { seed: Some(1.0), ..Default::default() };
