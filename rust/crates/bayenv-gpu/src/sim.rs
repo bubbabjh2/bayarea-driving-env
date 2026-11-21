@@ -53,6 +53,9 @@ pub struct GpuOptions {
     /// crash fault shares in the records: runs contacts.wgsl's reward-v2 crash charge with zero penalties (P.crashOn;
     /// only veh.eventTime of crashing cars and the reward sums are touched) to get its per-car share (1/255 steps)
     pub record_share: bool,
+    /// event records: a missed exit through a junction connector is reported when the car is on the out-edge it took
+    /// (the CPU sim's `_missedExits` timing) instead of at the connector decision (the JS GPU kernels' timing)
+    pub missed_at_out_edge: bool,
     /// size the contact-resolve rounds by the contacts found (indirect dispatch; identical results). JS: off
     pub indirect_resolve: bool,
     /// contact resolve in one dispatch (kernels/resolve_fused.wgsl: one workgroup runs the rounds with barriers
@@ -114,7 +117,7 @@ impl Default for GpuOptions {
     fn default() -> Self {
         GpuOptions { capacity: 131072, dt: 0.05, start_time: 5.0 * 3600.0, seed: 1, obs: ObsMode::V2, steer_rate: false, decide_every: 1, features: Features::default(),
             controls: true, junctions: true, table_bits: 18, contact_cap: 131072, ev_cap: 16384, spawn_queue: 16384, op_cap: 16384, max_blocks: 4096, route_slack: 1 << 22,
-            resolve_rounds: 12, progress_weight: 1.0, jerk_weight: 0.5, jerk_reward: false, grade_obs: true, squeeze_delay: 15.0 * 60.0, deadlock_break: 0, reroute: true, keep_events: false, record_events: true, record_share: false, indirect_resolve: true, fused_resolve: true, sorted_order: true, fast_scan: true, fast_search: true, cpu_connector_join: true, zero_init_workgroup: false, profile: false, return_trips: true, refuel_budget_ms: 4.0 }
+            resolve_rounds: 12, progress_weight: 1.0, jerk_weight: 0.5, jerk_reward: false, grade_obs: true, squeeze_delay: 15.0 * 60.0, deadlock_break: 0, reroute: true, keep_events: false, record_events: true, record_share: false, missed_at_out_edge: false, indirect_resolve: true, fused_resolve: true, sorted_order: true, fast_scan: true, fast_search: true, cpu_connector_join: true, zero_init_workgroup: false, profile: false, return_trips: true, refuel_budget_ms: 4.0 }
     }
 }
 
@@ -239,6 +242,8 @@ pub struct GpuSim {
     /// per-slot event records (opts.record_events)
     pub rec: crate::events::EventLog,
     rec_mark: usize,
+    /// missed exits via a connector waiting for the car to reach the taken edge: (slot, took edge, agent)
+    missed_pending: Vec<(u32, u32, i64)>,
     /// kernels/obs_f16.wgsl + its bind group (built on the first F16 readback)
     half: Option<(Kernel, wgpu::BindGroup)>,
     /// a submitted batch whose readback / events are processed lazily (`run_steps_async`, `sync`)
@@ -359,7 +364,7 @@ impl GpuSim {
             refuel_queue: Vec::new(), reroute_queue: Default::default(), last_reroute: HashMap::new(), lot: 0, new_pose: false, crashes: Vec::new(), active: Vec::new(),
             counters: Counters::default(), gpu_stats: [0; 64], events: Vec::new(), closed_key: None, closed_n: 0, closed_edges: Vec::new(),
             edge_speed_ema: HashMap::new(), edge_speed_order: Vec::new(), traffic_penalty: HashMap::new(), penalty_order: Vec::new(), pending_penalty: None, next_traffic: -1e9,
-            router: None, packer: None, out_staging: None, half: None, rec: Default::default(), rec_mark: 0, pending: None, staging, io_host: vec![0; io_words], profiler: None, js_stages: false, fast_search_ok: false, x: Default::default(), blob, gpu, opts,
+            router: None, packer: None, out_staging: None, half: None, rec: Default::default(), rec_mark: 0, missed_pending: Vec::new(), pending: None, staging, io_host: vec![0; io_words], profiler: None, js_stages: false, fast_search_ok: false, x: Default::default(), blob, gpu, opts,
         };
         if !use_j { sim.blob.j_m = None; }
         if sim.opts.fast_search { sim.fast_search_ok = sim.polylines_monotone(); if !sim.fast_search_ok { eprintln!("bayenv-gpu: fast_search off (an edge / connector polyline has decreasing cumulative distance)"); } }
@@ -968,14 +973,17 @@ impl GpuSim {
                 }
                 ev::STRANDED => self.rec.push(st, t_step, K::STRANDED, slot, agent(&self.slot_trip, slot), -1, f32::NAN, f32::NAN, f32::NAN),
                 ev::SPAWN => self.rec.push(st, t_step, K::SPAWNED, slot, agent(&self.slot_trip, slot), -1, f32::NAN, f32::NAN, f32::NAN),
-                ev::MISSED => self.rec.push(st, t_step, K::MISSED_EXIT, slot, agent(&self.slot_trip, slot), -1, f32::NAN, f32::NAN, f32::NAN),
+                ev::MISSED => {
+                    if self.opts.missed_at_out_edge && (a >> 31) == 1 { self.missed_pending.push((slot, a & 0x7fff_ffff, agent(&self.slot_trip, slot))); }
+                    else { self.rec.push(st, t_step, K::MISSED_EXIT, slot, agent(&self.slot_trip, slot), -1, f32::NAN, f32::NAN, f32::NAN); }
+                }
                 ev::CTLVIOL => self.rec.push(st, t_step, K::VIOLATION, slot, agent(&self.slot_trip, slot), -1, f32::NAN, f32::NAN, f32::NAN),
                 _ => {}
             }
         }
-        if self.rec.len() == first { return; }
+        if self.rec.len() == first && self.missed_pending.is_empty() { return; }
         // gather the involved slots' records (one submit, one map)
-        let mut slots: Vec<u32> = self.rec.slot[first..].iter().map(|&s| s as u32).collect(); slots.sort_unstable(); slots.dedup();
+        let mut slots: Vec<u32> = self.rec.slot[first..].iter().map(|&s| s as u32).chain(self.missed_pending.iter().map(|p| p.0)).collect(); slots.sort_unstable(); slots.dedup();
         let (vw, pw) = (L::VEH_WORDS * 4, L::PAR_WORDS * 4); let n = slots.len();
         let rb = self.gpu.device.create_buffer(&wgpu::BufferDescriptor { label: Some("recGather"), size: (n * (vw + pw)) as u64, usage: wgpu::BufferUsages::MAP_READ | wgpu::BufferUsages::COPY_DST, mapped_at_creation: false });
         let mut enc = self.gpu.device.create_command_encoder(&Default::default());
@@ -991,6 +999,16 @@ impl GpuSim {
         rb.unmap();
         let vrec = |i: usize, f: usize| f32::from_bits(words[i * L::VEH_WORDS + f]);
         let prec = |i: usize, f: usize| f32::from_bits(words[n * L::VEH_WORDS + i * L::PAR_WORDS + f]);
+        // pending connector missed exits: report once the car is on the taken edge (step = end of this batch; exact with k = 1)
+        if !self.missed_pending.is_empty() {
+            let pend = std::mem::take(&mut self.missed_pending);
+            for (sl, took, ag) in pend {
+                let i = slots.binary_search(&sl).unwrap();
+                let (vs, ve) = (words[i * L::VEH_WORDS + veh::STATE], words[i * L::VEH_WORDS + veh::EDGE]);
+                if self.slot_trip[sl as usize] as i64 != ag || vs == 0 { continue; }   // trip ended / slot reused: drop
+                if ve == took { self.rec.push(self.step, t_now, K::MISSED_EXIT, sl, ag, -1, f32::NAN, f32::NAN, f32::NAN); } else { self.missed_pending.push((sl, took, ag)); }
+            }
+        }
         for r in first..self.rec.len() {
             let i = slots.binary_search(&(self.rec.slot[r] as u32)).unwrap();
             self.rec.progress_m[r] = vrec(i, veh::ROUTE_DIST);

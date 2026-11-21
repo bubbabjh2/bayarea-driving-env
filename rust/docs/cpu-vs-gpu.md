@@ -63,3 +63,13 @@ one JSON object per step for the `window` steps before the agent's crash step an
 | flags, state, conn | vehicle flags (bit5 DISABLED, bit1 COLLIDED, ...), 1 driving / 2 crashed, junction connector (-1 none) |
 
 Non-finite floats are written as null. The GPU half should write `gpu-<agent>.jsonl` with the same keys and steps.
+## Missed-exit timing
+
+The JS GPU kernel (`integrate.wgsl`, the `EV_MISSED` emit inside the junction-connector choice) reports a missed exit
+through a junction when the car commits to the wrong connector. The JS CPU sim (`sim.js _missedExits`) reports it once
+the car is on the out-edge it took, after the junction box. The Rust GPU host reproduces the JS GPU by default.
+`GpuOptions.missed_at_out_edge` (Python `Env(missed_at_out_edge=True)`) delays these rows until the car is on the taken
+edge, matching the CPU timing. The row's `step` is then the end of the step batch: exact with k = 1.
+
+compare_backends `--spawn-default --missed-out-edge` (5,000 commuters, 3,000 steps, 07:00, seed 42):
+missed_exit 603 vs 603 rows. Of the 386 agents both backends report, 383 are on the same step (142 without the option).
