@@ -40,6 +40,7 @@ pub const HOST_SOURCES: &[(&str, &str)] = &[
     ("resolve_fused", include_str!("../kernels/resolve_fused.wgsl")),
     ("sorted", include_str!("../kernels/sorted.wgsl")),
     ("list_args", include_str!("../kernels/list_args.wgsl")),
+    ("scan4k", include_str!("../kernels/scan4k.wgsl")),
 ];
 
 /// Lane-list-order variant of a per-car kernel (kernels/sorted.wgsl): the entry `entry` of `src` becomes the

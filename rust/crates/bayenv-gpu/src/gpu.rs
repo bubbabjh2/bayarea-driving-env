@@ -78,7 +78,10 @@ impl Gpu {
     pub fn memory_bytes(&self) -> u64 { self.buffers.values().map(|b| b.size()).sum() }
 
     /// Compile one compute pipeline with explicit layouts from the binding declarations.
-    pub fn kernel(&self, label: &str, code: &str, entry: &str) -> Result<Kernel, String> {
+    pub fn kernel(&self, label: &str, code: &str, entry: &str) -> Result<Kernel, String> { self.kernel_with(label, code, entry, true) }
+    /// As `kernel`; `zero_init = false` skips the workgroup-memory zero fill (for kernels that write their
+    /// workgroup arrays before reading them).
+    pub fn kernel_with(&self, label: &str, code: &str, entry: &str, zero_init: bool) -> Result<Kernel, String> {
         let decls = parse_bindings(code);
         let ng = decls.iter().map(|d| d.group + 1).max().unwrap_or(0) as usize;
         let mut groups: Vec<Vec<Decl>> = vec![Vec::new(); ng];
@@ -96,7 +99,8 @@ impl Gpu {
         let refs: Vec<Option<&wgpu::BindGroupLayout>> = layouts.iter().map(Some).collect();
         let pl = self.device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor { label: Some(label), bind_group_layouts: &refs, immediate_size: 0 });
         let pipeline = self.device.create_compute_pipeline(&wgpu::ComputePipelineDescriptor {
-            label: Some(label), layout: Some(&pl), module: &module, entry_point: Some(entry), compilation_options: Default::default(), cache: None });
+            label: Some(label), layout: Some(&pl), module: &module, entry_point: Some(entry),
+            compilation_options: wgpu::PipelineCompilationOptions { zero_initialize_workgroup_memory: zero_init, ..Default::default() }, cache: None });
         if let Some(e) = pollster::block_on(scope.pop()) { return Err(format!("kernel {label}: {e}")); }
         Ok(Kernel { label: label.to_string(), pipeline, layouts, groups })
     }
