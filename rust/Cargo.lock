@@ -56,10 +56,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "bayenv-jsmath"
-version = "0.1.0"
-
-[[package]]
 name = "bayenv-py"
 version = "0.1.0"
 dependencies = [
@@ -75,7 +71,6 @@ dependencies = [
 name = "bayenv-sim"
 version = "0.1.0"
 dependencies = [
- "bayenv-jsmath",
  "bayenv-world",
  "rayon",
  "serde",

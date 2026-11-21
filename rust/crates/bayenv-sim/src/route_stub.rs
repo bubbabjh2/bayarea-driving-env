@@ -102,3 +102,33 @@ impl Router for AStar {
         result
     }
 }
+
+/// The shared router (bayenv_world::nav::Router, the route.js makeRouter port) behind the sim's Router trait.
+pub struct NavRouter { r: bayenv_world::nav::router::Router, avoid: Vec<u32>, pen: Vec<(u32, f64)> }
+
+impl NavRouter {
+    /// makeRouter(graph, { weight }) over the sim's world.
+    pub fn new(w: &World, weight: f64) -> NavRouter {
+        let mut g = bayenv_world::graph::SimGraph { node_count: w.node_count, edge_count: w.edge_count, nx: w.nx.clone(), nz: w.nz.clone(), max_speed: w.max_speed, ..Default::default() };
+        g.from = w.e_from.iter().map(|&x| x as u32).collect(); g.to = w.e_to.iter().map(|&x| x as u32).collect();
+        g.length = w.e_length.clone(); g.speed_limit = w.e_speed.clone(); g.rank = w.e_rank.iter().map(|&x| x as u8).collect();
+        g.out_start = w.out_start.iter().map(|&x| x as u32).collect(); g.out_edges = w.out_edges.iter().map(|&x| x as u32).collect();
+        g.in_start = w.in_start.iter().map(|&x| x as u32).collect(); g.in_edges = w.in_edges.iter().map(|&x| x as u32).collect();
+        g.banned_hops = w.banned_hops.iter().map(|(&k, v)| (k as u64, v.iter().map(|&x| x as u32).collect())).collect();
+        g.bounds = bayenv_world::graph::Bounds { min_x: w.bounds.0, max_x: w.bounds.1, min_z: w.bounds.2, max_z: w.bounds.3 };
+        let o = bayenv_world::nav::router::RouterOpts { weight, ..Default::default() };
+        NavRouter { r: bayenv_world::nav::router::Router::new(&g, &o), avoid: Vec::new(), pen: Vec::new() }
+    }
+}
+
+impl Router for NavRouter {
+    fn route(&mut self, start: i32, goal: i32, avoid: Option<&HashSet<i32>>, penalty: Option<&HashMap<i32, f64>>) -> Option<Vec<i32>> {
+        let to_i = |p: Vec<u32>| p.into_iter().map(|x| x as i32).collect::<Vec<i32>>();
+        if avoid.is_none() && penalty.is_none() { return self.r.route(start as usize, goal as usize).map(to_i); }
+        self.avoid.clear(); self.pen.clear();
+        if let Some(a) = avoid { self.avoid.extend(a.iter().map(|&x| x as u32)); }
+        if let Some(p) = penalty { self.pen.extend(p.iter().map(|(&e, &v)| (e as u32, v))); }
+        let q = bayenv_world::nav::router::RouteQuery { avoid: &self.avoid, penalty: &self.pen };
+        self.r.route_with(start as usize, goal as usize, &q).map(to_i)
+    }
+}

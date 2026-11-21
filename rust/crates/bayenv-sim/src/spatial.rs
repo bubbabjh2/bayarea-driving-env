@@ -2,16 +2,18 @@
 use crate::vehicle::{VehicleStore, STATE_CRASHED, STATE_DRIVING, MAX_LANES, MAX_OCC};
 
 pub struct SpatialHash {
-    pub cell_size: f64, table_size: usize, w_bits: u32, w_mask: i32, h_mask: i32,
-    pub start: Vec<i32>, fill: Vec<i32>, pub items: Vec<i32>, cell_of_item: Vec<i32>,
+    pub cell_size: f64, w_bits: u32, w_mask: i32, h_mask: i32,
+    /// per cell: first item and item count (only cells touched by the last rebuild are non-zero; JS keeps a dense
+    /// CSR over the whole 2^tableBits table, which gives the same per-cell item lists: slots in ascending order)
+    beg: Vec<i32>, cnt: Vec<i32>, touched: Vec<u32>, pub items: Vec<i32>, cell_of_item: Vec<i32>,
 }
 
 impl SpatialHash {
     pub fn new(cell_size: f64, table_bits: u32, capacity: usize) -> Self {
         let ts = 1usize << table_bits;
         let w_bits = table_bits.div_ceil(2);
-        SpatialHash { cell_size, table_size: ts, w_bits, w_mask: (1 << w_bits) - 1, h_mask: (1 << (table_bits - w_bits)) - 1,
-            start: vec![0; ts + 1], fill: vec![0; ts], items: vec![0; capacity], cell_of_item: vec![0; capacity] }
+        SpatialHash { cell_size, w_bits, w_mask: (1 << w_bits) - 1, h_mask: (1 << (table_bits - w_bits)) - 1,
+            beg: vec![0; ts], cnt: vec![0; ts], touched: Vec::new(), items: vec![0; capacity], cell_of_item: vec![0; capacity] }
     }
     #[inline(always)]
     pub fn hash(&self, cx: f64, cz: f64) -> usize {
@@ -21,16 +23,21 @@ impl SpatialHash {
     pub fn rebuild(&mut self, vs: &VehicleStore) {
         let high = vs.high;
         if self.items.len() < high { self.items = vec![0; high * 2]; self.cell_of_item = vec![0; high * 2]; }
-        self.start.iter_mut().for_each(|x| *x = 0);
+        for &c in &self.touched { self.cnt[c as usize] = 0; }
+        self.touched.clear();
         let inv = 1.0 / self.cell_size;
         for i in 0..high {
             if vs.state[i] != STATE_DRIVING && vs.state[i] != STATE_CRASHED { self.cell_of_item[i] = -1; continue; }
             let c = self.hash((vs.x[i] as f64 * inv).floor(), (vs.z[i] as f64 * inv).floor());
-            self.cell_of_item[i] = c as i32; self.start[c + 1] += 1;
+            self.cell_of_item[i] = c as i32;
+            if self.cnt[c] == 0 { self.touched.push(c as u32); }
+            self.cnt[c] += 1;
         }
-        for c in 0..self.table_size { self.start[c + 1] += self.start[c]; }
-        self.fill.copy_from_slice(&self.start[..self.table_size]);
-        for i in 0..high { let c = self.cell_of_item[i]; if c >= 0 { let c = c as usize; self.items[self.fill[c] as usize] = i as i32; self.fill[c] += 1; } }
+        let mut acc = 0i32;
+        for &c in &self.touched { let c = c as usize; self.beg[c] = acc; acc += self.cnt[c]; }
+        // fill cursor: reuse beg + running count (beg is restored below)
+        for i in 0..high { let c = self.cell_of_item[i]; if c >= 0 { let c = c as usize; self.items[self.beg[c] as usize] = i as i32; self.beg[c] += 1; } }
+        for &c in &self.touched { let c = c as usize; self.beg[c] -= self.cnt[c]; }
     }
     /// forEachNear: calls f(slot) for every car within r of (x, z) (positions read live from vs), in cell order.
     /// f returns false to stop.
@@ -45,7 +52,8 @@ impl SpatialHash {
             let mut cx = cx0;
             while cx <= cx1 {
                 let c = self.hash(cx as f64, cz as f64);
-                for k in self.start[c]..self.start[c + 1] {
+                let b = self.beg[c];
+                for k in b..b + self.cnt[c] {
                     let i = self.items[k as usize] as usize;
                     let dx = vs_x[i] as f64 - x; let dz = vs_z[i] as f64 - z;
                     if dx * dx + dz * dz <= r2 && !f(i) { return; }

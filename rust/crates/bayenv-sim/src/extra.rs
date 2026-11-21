@@ -447,7 +447,7 @@ impl Sim {
     }
 
     /// ctx.yieldRequired(i, e, dist)
-    fn yield_required(&mut self, i: usize, e: usize, dist: f64) -> bool {
+    pub(crate) fn yield_required(&mut self, i: usize, e: usize, dist: f64) -> bool {
         if self.empty { return false; }
         let g = self.g.clone();
         if g.j.is_some() {
