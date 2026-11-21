@@ -358,8 +358,8 @@ impl Env {
     /// Per-slot vehicle state as numpy arrays (one GPU readback): edge, s, speed, accel, lat, heading_rel, steer,
     /// state (0 free, 1 driving, 2 crashed / stranded, 5 refuelling), flags, crashed, disabled, collided, lane,
     /// route_pos, odometer, progress_m (route metres driven), speed_limit (m/s, current edge), fuel, gas, brake, yaw_rate, v_lat,
-    /// x, y, z, heading. `collided` = COLLIDED flag of the last step (any contact >= touchKmh in that step; act.wgsl
-    /// clears it at each decision). For k-step batches count the steps per slot from events() rows (kind 2/3, `step`).
+    /// x, y, z, heading. `collided` = FLAG_COLLIDED at sense time of the last step (the JS external-protocol training
+    /// signal; act.wgsl clears the flag right after), `collided_steps` = steps of the last step() call with it set.
     fn state<'py>(&mut self, py: Python<'py>) -> PyResult<Bound<'py, PyDict>> {
         if let Some(e) = cpu_only(self) {
             let d = PyDict::new(py);
@@ -391,7 +391,10 @@ impl Env {
         let st = col_u(veh::STATE); let fl = col_u(veh::FLAGS);
         d.set_item("crashed", PyArray1::from_vec(py, st.iter().map(|&s| s == vstate::CRASHED).collect::<Vec<bool>>()))?;
         d.set_item("disabled", PyArray1::from_vec(py, fl.iter().map(|&f| f & flag::DISABLED != 0).collect::<Vec<bool>>()))?;
-        d.set_item("collided", PyArray1::from_vec(py, fl.iter().map(|&f| f & flag::COLLIDED != 0).collect::<Vec<bool>>()))?;
+        // JS external protocol signal: FLAG_COLLIDED at sense time (kernels/collided.wgsl, between sense and act)
+        let mut cf = vec![0u32; 2 * n]; if n > 0 { sim.read_into("cflag", 0, bytemuck::cast_slice_mut(&mut cf)); }
+        d.set_item("collided", PyArray1::from_vec(py, (0..n).map(|i| cf[2 * i + 1] != 0).collect::<Vec<bool>>()))?;
+        d.set_item("collided_steps", PyArray1::from_vec(py, (0..n).map(|i| cf[2 * i]).collect::<Vec<u32>>()))?;
         d.set_item("lane", PyArray1::from_vec(py, col_u(veh::LANES).iter().map(|&w| (w & 255) as u8).collect::<Vec<u8>>()))?;
         // speed limit (m/s) of each car's current edge (reward.js normalises route progress by it)
         let g = &self.world.graph;
