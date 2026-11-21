@@ -35,26 +35,32 @@ impl Policy {
     pub fn new(name: &str, seed: f64) -> Policy { Policy { name: name.to_string(), r: Rng::from_u32(crate::jm::to_u32(seed * 7919.0 + 13.0)) } }
     pub fn act(&mut self, env: &mut Env) {
         if self.name == "idle" { return; }
-        let g = env.world.clone();
+        let slots: Vec<usize> = (0..env.sim.vs.high).filter(|&i| env.sim.vs.state[i] == STATE_DRIVING).collect();
+        let acts: Vec<(usize, Action)> = slots.iter().map(|&i| (i, self.action(&env.sim, i))).collect();
+        for (i, a) in acts { env.act(i, a); }
+    }
+    /// The policy as a Sim::batch_policy hook body (same actions, same order).
+    pub fn act_hook(&mut self, sim: &crate::sim::Sim, slots: &[usize], out: &mut [Option<Action>]) {
+        if self.name == "idle" { return; }
+        for &i in slots { out[i] = Some(self.action(sim, i)); }
+    }
+    fn action(&mut self, sim: &crate::sim::Sim, i: usize) -> Action {
+        let g = sim.gw();
         let clamp = |x: f64| if x > 1.0 { 1.0 } else if x < -1.0 { -1.0 } else { x };
-        for i in 0..env.sim.vs.high {
-            if env.sim.vs.state[i] != STATE_DRIVING { continue; }
-            let a = match self.name.as_str() {
-                "const" => Action { steer: Some(0.0), steer_rate: None, gas: 0.3, brake: 0.0 },
-                "random" => { let a = self.r.random(); let b = self.r.random(); let c = self.r.random(); Action { steer: Some(a * 0.2 - 0.1), steer_rate: None, gas: b, brake: c * 0.2 } }
-                _ => {
-                    let vs = &env.sim.vs;
-                    let e = vs.edge[i] as usize;
-                    let lw = g.lane_w(e, vs.s[i] as f64);
-                    let off = vs.lat[i] as f64 - (vs.lane[i] as f64 + 0.5) * lw;
-                    let mut steer = clamp((-0.08 * off - 1.2 * vs.heading_rel[i] as f64) / vs.max_steer[i] as f64);
-                    let mut gas = if (vs.speed[i] as f64) < 0.8 * g.e_speed[e] { 0.4 } else { 0.0 };
-                    let mut brake = if vs.gap[i] < 15.0 { 0.6 } else { 0.0 };
-                    if self.name == "cruisenoise" { let a = self.r.random(); let b = self.r.random(); steer = clamp(steer + (a - 0.5) * 0.1); if b < 0.05 { gas = 1.0; brake = 0.0; } else if b < 0.08 { brake = 0.0; } }
-                    Action { steer: Some(steer), steer_rate: None, gas, brake }
-                }
-            };
-            env.act(i, a);
+        match self.name.as_str() {
+            "const" => Action { steer: Some(0.0), steer_rate: None, gas: 0.3, brake: 0.0 },
+            "random" => { let a = self.r.random(); let b = self.r.random(); let c = self.r.random(); Action { steer: Some(a * 0.2 - 0.1), steer_rate: None, gas: b, brake: c * 0.2 } }
+            _ => {
+                let vs = &sim.vs;
+                let e = vs.edge[i] as usize;
+                let lw = g.lane_w(e, vs.s[i] as f64);
+                let off = vs.lat[i] as f64 - (vs.lane[i] as f64 + 0.5) * lw;
+                let mut steer = clamp((-0.08 * off - 1.2 * vs.heading_rel[i] as f64) / vs.max_steer[i] as f64);
+                let mut gas = if (vs.speed[i] as f64) < 0.8 * g.e_speed[e] { 0.4 } else { 0.0 };
+                let mut brake = if vs.gap[i] < 15.0 { 0.6 } else { 0.0 };
+                if self.name == "cruisenoise" { let a = self.r.random(); let b = self.r.random(); steer = clamp(steer + (a - 0.5) * 0.1); if b < 0.05 { gas = 1.0; brake = 0.0; } else if b < 0.08 { brake = 0.0; } }
+                Action { steer: Some(steer), steer_rate: None, gas, brake }
+            }
         }
     }
 }
@@ -116,8 +122,11 @@ pub fn check(dir: &str, max: usize, verbose: bool) -> (usize, Vec<Mismatch>, f64
     let (mut obs_off, mut obs_time, mut obs_agents) = (0usize, 0.0f64, 0usize);
     let mut obs = crate::obs::Obs::default();
     let mut v3 = [0f32; crate::obs::OBS3];
+    let hook = run["hook"].as_bool().unwrap_or(false);
+    let pol_shared = std::sync::Arc::new(std::sync::Mutex::new(Policy::new(run["policy"].as_str().unwrap(), run["seed"].as_f64().unwrap())));
+    if hook { let p = pol_shared.clone(); env.sim.batch_policy = Some(Box::new(move |sim, slots, out| p.lock().unwrap().act_hook(sim, slots, out))); }
     for k in 1..=steps {
-        pol.act(&mut env);
+        if !hook { pol.act(&mut env); }
         let ts = std::time::Instant::now();
         env.step(1);
         sim_time += ts.elapsed().as_secs_f64();

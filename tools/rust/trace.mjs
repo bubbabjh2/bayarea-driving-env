@@ -107,11 +107,14 @@ async function main() {
   exportPopulation(env.population, `${out}/pop.pack`);
   const simOpts = {};
   for (const [k, v] of Object.entries(sim.opts)) if (typeof v === 'number' || typeof v === 'string' || typeof v === 'boolean') simOpts[k] = Number.isFinite(v) || typeof v !== 'number' ? v : (v > 0 ? 'Infinity' : '-Infinity');
-  const run = { world, n, seed, mode, steps, every, policy, opts, obs: withObs, simOpts, obstacles, startTime: sim.opts.startTime, wrecks: sim.opts.wrecks ?? 0,
+  const run = { world, n, seed, mode, steps, every, policy, hook: arg('hook', '0') === '1', opts, obs: withObs, simOpts, obstacles, startTime: sim.opts.startTime, wrecks: sim.opts.wrecks ?? 0,
     defaultAction: sim.defaultAction, obstaclesSpec: sim.opts.obstacles || null, staticObstacles: sim.opts.staticObstacles || null };
   fs.writeFileSync(`${out}/run.json`, JSON.stringify(run, null, 1));
   const tLoad = Date.now() - t0;
-  const act = makePolicy(policy, seed);
+  const act0 = makePolicy(policy, seed), hook = arg('hook', '0') === '1';
+  // --hook 1: the policy runs inside sim._drive (batchDrive / Rust Sim::batch_policy semantics) instead of before env.step
+  if (hook) { const orig = sim._drive.bind(sim); sim._drive = (dt) => { act0(env); orig(dt); }; }
+  const act = hook ? () => {} : act0;
   const vs0 = sim.vs;
   const fields = Object.keys(vs0).filter((k) => ArrayBuffer.isView(vs0[k]) && vs0[k].length % vs0.capacity === 0 && (fieldSet === 'all' || POSE.includes(k)));
   const chunks = Object.fromEntries(fields.map((k) => [k, []]));

@@ -9,6 +9,16 @@ use crate::world::{World, HW_PULLOVER};
 
 pub const DISABLE_KMH: f64 = 10.0;
 
+/// reward.js crashShare: share of the closing speed along the normal that car A brought.
+pub fn crash_share(speed_a: f64, yaw_a: f64, speed_b: f64, yaw_b: f64, nx: f64, nz: f64) -> f64 {
+    let mut ca = speed_a * (jm::cos(yaw_a) * nx + jm::sin(yaw_a) * nz);
+    let mut cb = -jm::or(speed_b, 0.0) * (jm::cos(jm::or(yaw_b, 0.0)) * nx + jm::sin(jm::or(yaw_b, 0.0)) * nz);
+    if ca + cb < 0.0 { ca = -ca; cb = -cb; }
+    ca = jm::max(0.0, ca); cb = jm::max(0.0, cb);
+    let s = ca + cb;
+    if s < 1e-3 { 0.5 } else { ca / s }
+}
+
 pub fn severity_of(dv: f64) -> &'static str { if dv < 10.0 { "minor" } else if dv < 25.0 { "moderate" } else if dv < 50.0 { "severe" } else { "very severe" } }
 
 pub struct Timeline { pub notify: f64, pub arrive: f64, pub block: f64, pub clear: f64 }
@@ -198,6 +208,15 @@ impl Sim {
         let e = self.vs.edge[slots[0]] as usize;
         let tl = incident_timeline(severity, &mut self.rng);
         let (crash_type, maneuver) = self.classify_crash(slots, c, pre.as_ref());
+        for (k, &sl) in slots.iter().enumerate() {
+            if self.vs.state[sl] != STATE_DRIVING { continue; }
+            let share = match (slots.len(), pre) {
+                (2, Some(p)) => crash_share(p.speed[k], p.heading[k], p.speed[1 - k], p.heading[1 - k], p.nx, p.nz),
+                (_, Some(p)) => crash_share(p.speed[0], p.heading[0], 0.0, 0.0, p.nx, p.nz),
+                _ => 0.5,
+            };
+            self.events.crashed.push(crate::sim::CrashedEv { slot: sl, agent: self.vs.commuter[sl], dv_kmh: kmh[k], share, disabled: kmh[k] >= DISABLE_KMH });
+        }
         // the involved drivers step once (collision signal); only the braking prop has state
         for &s in slots { if self.vs.state[s] == STATE_DRIVING && matches!(self.drivers[s], Driver::PropBraking { .. }) { let _ = self.driver_cmd(s); } }
         if !disabled.is_empty() {

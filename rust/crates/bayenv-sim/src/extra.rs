@@ -469,7 +469,7 @@ impl Sim {
     }
 
     /// ctx.yieldRequired(i, e, dist)
-    pub(crate) fn yield_required(&mut self, i: usize, e: usize, dist: f64) -> bool {
+    pub fn yield_required(&mut self, i: usize, e: usize, dist: f64) -> bool {
         if self.empty { return false; }
         let g = self.gw();
         if g.j.is_some() {
@@ -614,11 +614,126 @@ impl Sim {
     }
 
     pub(crate) fn strand(&mut self, i: usize) {
+        self.events.stranded.push((i, self.vs.commuter[i]));
         self.vs.flags[i] |= FLAG_STRANDED;
         self.counters.stranded += 1;
         let tow = self.opts.fuel_cfg.tow_median * jm::exp(self.opts.fuel_cfg.tow_sigma * self.rng.gaussian());
         let e = self.vs.edge[i] as usize;
         self.open_scene(&[i], "stranded", "stranded", tow, tow, e, false, None);
         self.fail_trip(i, FAIL_STRANDED, false);
+    }
+}
+
+/// sim.ctx: the junction / scene queries a built-in driver (IDM, src/sim/driver.js in the training repo) uses.
+/// Stable API for external drivers run through `Sim::batch_policy`.
+impl Sim {
+    /// ctx.rubberneck(i, e): desired-speed factor near an active crash scene (1 = none).
+    pub fn rubberneck(&self, i: usize, e: usize) -> f64 {
+        const DIST: f64 = 120.0; const FACTOR: f64 = 0.8;
+        if self.edge_has_crash[e] == 0 { return 1.0; }
+        let vs = &self.vs;
+        let (s, lane) = (f(vs.s[i]), vs.lane[i] as i64);
+        if let Some(own) = self.edge_crashes.get(&(e as i32)) { for &ri in own { let r = &self.crashes[ri]; if r.is_crash && ((r.lane_mask >> lane) & 1 == 0 || r.response == Response::Shoulder) && jm::abs(r.s - s) < DIST { return FACTOR; } } }
+        let rv = self.g.e_rev[e];
+        if rv >= 0 { if let Some(opp) = self.edge_crashes.get(&rv) { for &ri in opp { let r = &self.crashes[ri]; if r.is_crash && jm::abs((self.g.e_length[e] - r.s) - s) < DIST { return FACTOR; } } } }
+        1.0
+    }
+    /// ctx.speedCap(i, e): squeeze speed past a full closure (Infinity = none).
+    pub fn speed_cap(&self, i: usize, e: usize) -> f64 {
+        if self.edge_has_crash[e] == 0 { return f64::INFINITY; }
+        let s = f(self.vs.s[i]);
+        if let Some(own) = self.edge_crashes.get(&(e as i32)) { for &ri in own { let r = &self.crashes[ri]; if r.squeeze && r.response == Response::Active && r.s - s < 60.0 && s - r.s < 20.0 { return self.opts.squeeze_speed; } } }
+        f64::INFINITY
+    }
+    /// ctx.laneOpen(i, e, lane, within)
+    pub fn lane_open(&self, i: usize, e: usize, lane: i32, within: f64) -> bool {
+        if lane < 0 || lane >= self.g.e_lanes[e] { return false; }
+        if self.edge_has_crash[e] == 0 { return true; }
+        let s = f(self.vs.s[i]);
+        if let Some(recs) = self.edge_crashes.get(&(e as i32)) { for &ri in recs { let r = &self.crashes[ri]; if r.response == Response::Active && !r.squeeze && (r.lane_mask >> lane) & 1 != 0 && r.s > s && r.s - s < within { return false; } } }
+        true
+    }
+    /// ctx.blockedAhead(i, e): +1 / -1 escape side when my lane is blocked by a stopped obstacle / scene, 0 otherwise.
+    pub fn blocked_ahead(&self, i: usize, e: usize) -> i32 {
+        let vs = &self.vs;
+        let l = vs.leader[i];
+        let direct = l >= 0 && vs.state[l as usize] == STATE_CRASHED && vs.lane_hi[l as usize] >= vs.lane_lo[l as usize] && vs.gap[i] < 150.0;
+        if !direct && !(self.edge_has_crash[e] != 0 && !self.lane_open(i, e, vs.lane[i] as i32, 150.0)) { return 0; }
+        let lane = vs.lane[i] as i32;
+        for d in 1..self.g.e_lanes[e] {
+            if lane + d < self.g.e_lanes[e] && self.lane_open(i, e, lane + d, 1e9) { return 1; }
+            if lane - d >= 0 && self.lane_open(i, e, lane - d, 1e9) { return -1; }
+        }
+        0
+    }
+    /// ctx.boxBusy(i, e): a car in the junction box ahead whose path I would cross.
+    pub fn box_busy(&mut self, i: usize, e: usize) -> bool {
+        let g = self.gw();
+        if g.j.is_some() { return self.box_busy_j(i, e); }
+        let vs = &self.vs;
+        let rp = vs.route_pos[i] as usize;
+        let next = if rp + 1 < vs.routes[i].len() { vs.routes[i][rp + 1] } else { -1 };
+        let to = g.e_to[e] as usize;
+        for q in g.out_start[to]..g.out_start[to + 1] {
+            let eo = g.out_edges[q as usize];
+            if eo == g.e_rev[e] { continue; }
+            for l in 0..g.e_lanes[eo as usize] {
+                let j = self.lanes.first(eo, l); if j < 0 || vs.state[j as usize] == STATE_FREE { continue; }
+                if eo == next { continue; }
+                if f(vs.s[j as usize]) < f(vs.length[j as usize]) + 4.0 { return true; }
+            }
+        }
+        for q in g.in_start[to]..g.in_start[to + 1] {
+            let e2 = g.in_edges[q as usize];
+            if e2 as usize == e { continue; }
+            for l in 0..g.e_lanes[e2 as usize] {
+                let j = self.lanes.last(e2, l); if j < 0 || vs.state[j as usize] != STATE_DRIVING { continue; }
+                if g.e_length[e2 as usize] - f(vs.s[j as usize]) < 3.0 && vs.speed[j as usize] > 1.0 { return true; }
+            }
+        }
+        false
+    }
+    /// ctx.laneGapOk(i, e, target, relaxed, transit): delay-aware gap acceptance for a lane change into `target`.
+    pub fn lane_gap_ok(&self, i: usize, e: usize, target: i32, relaxed: bool, transit: bool) -> bool {
+        let g = self.gw();
+        let vs = &self.vs;
+        if target < 0 || target >= g.e_lanes[e] { return false; }
+        let si = f(vs.s[i]);
+        if !transit && self.edge_has_crash[e] != 0 {
+            if let Some(recs) = self.edge_crashes.get(&(e as i32)) { for &ri in recs { let r = &self.crashes[ri]; if r.response == Response::Active && !r.squeeze && (r.lane_mask >> target) & 1 != 0 && r.s > si && r.s - si < 60.0 { return false; } } }
+        }
+        let (a0, bh) = self.lanes.neighbors_at(vs, e as i32, target, si, i as i32);
+        let v = f(vs.speed[i]); let half = 0.5 * f(vs.length[i]);
+        let ah = self.blocking(a0, target);
+        let t_lc = 3.0;
+        if ah >= 0 {
+            let a = ah as usize;
+            let ga = f(vs.s[a]) - si - half - 0.5 * f(vs.length[a]);
+            let dv = v - if vs.state[a] == STATE_DRIVING { f(vs.speed[a]) } else { 0.0 };
+            let need = if relaxed && v < 2.0 { 1.0 } else { jm::max(3.0, 2.0 + v * 0.5 + jm::max(0.0, dv) * (f(vs.reaction_time[i]) + t_lc)) };
+            if ga < need { return false; }
+        }
+        if bh >= 0 && vs.state[bh as usize] == STATE_DRIVING {
+            let b = bh as usize;
+            let gb = si - f(vs.s[b]) - half - 0.5 * f(vs.length[b]); let vb = f(vs.speed[b]);
+            let need = if relaxed && vb < 2.0 { 1.0 } else { jm::max(3.0, 2.0 + vb * 0.5 + jm::max(0.0, vb - v) * (f(vs.reaction_time[b]) + t_lc)) };
+            if gb < need { return false; }
+        }
+        let far = target + (target - vs.lane[i] as i32);
+        if far >= 0 && far < g.e_lanes[e] && far != vs.lane[i] as i32 {
+            let dir = (target - far) as f64;
+            let (p0, p1) = self.lanes.neighbors_at(vs, e as i32, far, si, i as i32);
+            for j in [p0, p1] {
+                if j < 0 || vs.state[j as usize] != STATE_DRIVING { continue; }
+                let j = j as usize;
+                let hr = f(vs.heading_rel[j]);
+                let lat_vel = f(vs.speed[j]) * jm::sin(hr) + f(vs.v_lat[j]) * jm::cos(hr);
+                let heading = lat_vel * dir > 0.2 || (vs.target_lane[j] as i32 == target && vs.flags[j] & FLAG_BRAIN == 0);
+                if !heading { continue; }
+                let gap = jm::abs(f(vs.s[j]) - si) - half - 0.5 * f(vs.length[j]);
+                if gap < 5.0 + jm::abs(f(vs.speed[j]) - v) * 2.0 { return false; }
+            }
+        }
+        true
     }
 }
