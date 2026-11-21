@@ -60,6 +60,15 @@ pub struct SimOpts {
     /// built at load time with `LoadOptions::smooth_geometry` / `World::smooth_geometry`. Positions and frames both
     /// come from it. Meant for `curvature_dynamics` (required); `Sim::new` checks that it matches the world.
     pub smooth_geometry: bool,
+    /// The world's turning junction connectors are re-fitted to vehicle-feasible radii (default OFF; DECISIONS.md 34):
+    /// one arc of 8 m (local) / 12 m (arterial) / 15 m (freeway system), s_in / s_out moved to fit, never below 6 m
+    /// where it can be helped (LoadOptions::junction_radii). Needs smooth_geometry; must match the world.
+    pub junction_radii: bool,
+    /// Spawn cars at least `spawn_clearance_m` before the junction entry their route takes next (default OFF;
+    /// DECISIONS.md 34): when the first route edge leaves less, the car starts on the next route edge (after the
+    /// junction) instead, as far as the route allows. The JS spawns at the first edge's s_exit.
+    pub spawn_clearance: bool,
+    pub spawn_clearance_m: f64,
     /// Model fix (default ON; false = the JS): a sliding wreck clamped at the end of its edge / connector loses its
     /// along-track speed (the JS kept the speed at a fixed position, e.g. 19.5 m/s decaying to 9 m/s standing still).
     pub wreck_end_stop: bool,
@@ -99,7 +108,7 @@ impl SimOpts {
     pub fn model_flags(&self) -> crate::vehicle::ModelFlags { crate::vehicle::ModelFlags { fixes: crate::physics::Fixes { hold: self.brake_hold, heavy_brakes: self.heavy_brakes, reverse: self.impact_reverse }, curvature: self.curvature_dynamics, wreck_end_stop: self.wreck_end_stop } }
     /// The JS sim's model (oracle checks, trace_check / v2_check, JS-port tests): Default with the model fixes off
     /// (replan_at_missed_event = false). Checkpoints trained on the JS CPU sim saw this model.
-    pub fn js() -> SimOpts { SimOpts { replan_at_missed_event: false, lane_index_snapshot: false, wreck_real_mass: false, curvature_dynamics: false, smooth_geometry: false, wreck_end_stop: false, contact_episodes: false, connector_barrier: false, brake_hold: false, heavy_brakes: false, barrier_soft_push: false, impact_reverse: false, ..SimOpts::default() } }
+    pub fn js() -> SimOpts { SimOpts { replan_at_missed_event: false, lane_index_snapshot: false, wreck_real_mass: false, curvature_dynamics: false, smooth_geometry: false, junction_radii: false, spawn_clearance: false, wreck_end_stop: false, contact_episodes: false, connector_barrier: false, brake_hold: false, heavy_brakes: false, barrier_soft_push: false, impact_reverse: false, ..SimOpts::default() } }
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -112,7 +121,7 @@ impl Default for SimOpts {
             cell_size: 25.0, table_bits: 18, leader_lookahead: 250.0, merge_lookahead: 80.0, lane_end_lookahead: 450.0, control_lookahead: 250.0,
             reroute: true, reroute_sight: 2000.0, squeeze_delay: 900.0, squeeze_speed: 3.0, density_interval: 60.0, path_sight: 0.0,
             deadlock_break: 0.0, spawn_lane_route: 0.0, junction_sight: 0.0, position_mode: true, traffic_mode: TrafficMode::Full, fuel: true,
-            seed: 1.0, wrecks: 0, default_action: Action { steer: Some(0.0), steer_rate: None, gas: 0.0, brake: 0.3 }, fuel_cfg: Default::default(), slot_pool: 0, parallel: false, replan_at_missed_event: true, batch_dynamics: true, lane_index_snapshot: true, wreck_real_mass: true, curvature_dynamics: false, smooth_geometry: false, wreck_end_stop: true, contact_episodes: true, connector_barrier: true, brake_hold: true, heavy_brakes: true, barrier_soft_push: true, impact_reverse: true }
+            seed: 1.0, wrecks: 0, default_action: Action { steer: Some(0.0), steer_rate: None, gas: 0.0, brake: 0.3 }, fuel_cfg: Default::default(), slot_pool: 0, parallel: false, replan_at_missed_event: true, batch_dynamics: true, lane_index_snapshot: true, wreck_real_mass: true, curvature_dynamics: false, smooth_geometry: false, junction_radii: false, spawn_clearance: false, spawn_clearance_m: 18.0, wreck_end_stop: true, contact_episodes: true, connector_barrier: true, brake_hold: true, heavy_brakes: true, barrier_soft_push: true, impact_reverse: true }
     }
 }
 
@@ -151,7 +160,7 @@ pub struct Trip { pub commuter: usize, pub from: i32, pub to: i32, pub depart: f
 #[derive(Default, Clone, Debug)]
 pub struct Counters {
     pub spawned: u64, pub arrived: u64, pub arrived_outbound: u64, pub on_time: u64, pub crashes: u64, pub crashed_vehicles: u64, pub crashes_while_speeding: u64,
-    pub stuck: u64, pub no_route: u64, pub cleared: u64, pub secondary_crashes: u64, pub minor_contacts: u64, pub touches: u64, pub disabling_crashes: u64,
+    pub stuck: u64, pub spawn_moved: u64, pub no_route: u64, pub cleared: u64, pub secondary_crashes: u64, pub minor_contacts: u64, pub touches: u64, pub disabling_crashes: u64,
     pub repeat_contacts: u64, pub pull_overs: u64, pub towed_to_shoulder: u64, pub stranded: u64, pub towed: u64, pub refuel_planned: u64, pub refuelled: u64,
     pub refuel_plan_failed: u64, pub forced_spawns: u64, pub signal_violations: u64, pub stop_violations: u64, pub missed_exits: u64, pub reroutes: u64,
     pub reroute_failed: u64, pub wreck_passes: u64, pub deadlock_breaks: u64, pub hauled_away: u64,
@@ -321,6 +330,8 @@ impl Sim {
         assert!(opts.smooth_geometry == g.geometry_smoothed, "SimOpts.smooth_geometry ({}) must match the world (smoothed: {}): load it with LoadOptions::smooth_geometry / Env::load_world_smoothed",
             opts.smooth_geometry, g.geometry_smoothed);
         assert!(!opts.smooth_geometry || opts.curvature_dynamics, "SimOpts.smooth_geometry is the frame geometry of curvature_dynamics: turn curvature_dynamics on too");
+        assert!(opts.junction_radii == g.junction_radii, "SimOpts.junction_radii ({}) must match the world (re-fitted: {}): load it with LoadOptions::junction_radii", opts.junction_radii, g.junction_radii);
+        assert!(!opts.junction_radii || opts.smooth_geometry, "SimOpts.junction_radii needs smooth_geometry");
         let mut vs = VehicleStore::new(cap);
         vs.model = opts.model_flags();
         vs.position_mode = opts.position_mode;
@@ -563,13 +574,16 @@ impl Sim {
         let route = &pop.route_flat[o0..o1];
         let vt = pop.vehicle_type[c] as usize;
         let vlen = VEHICLE_PARAMS[if vt < 4 { vt } else { 0 }].length;
-        let e0 = route[0];
-        let mut lane = if pre != i32::MIN && !self.spawn_dirty.contains(&e0) { pre } else { self.entry_lane(e0 as usize, 0, vlen, if route.len() > 1 { route[1] } else { -1 }) };
+        // spawn_clearance: start on the first route edge that leaves spawn_clearance_m before its junction entry
+        let k0 = if self.opts.spawn_clearance { self.spawn_edge_index(route) } else { 0 };
+        let e0 = route[k0];
+        let pre = if k0 > 0 { i32::MIN } else { pre };
+        let mut lane = if pre != i32::MIN && !self.spawn_dirty.contains(&e0) { pre } else { self.entry_lane(e0 as usize, 0, vlen, if route.len() > k0 + 1 { route[k0 + 1] } else { -1 }) };
         if lane < 0 {
             if self.time - trip.depart < self.opts.spawn_blocked_timeout { return false; }
             lane = 0; self.counters.forced_spawns += 1;
         }
-        self.spawned_keys.insert(route[0] as i64 * 8 + lane as i64);
+        self.spawned_keys.insert(e0 as i64 * 8 + lane as i64);
         let learner = self.learners[c] == 1;
         let traits = self.traits_of(c);
         let g = self.gw();
@@ -591,10 +605,43 @@ impl Sim {
         let tf = std::time::Instant::now();
         if self.stations.is_some() { self.check_fuel(slot, true); }
         if self.profile { self.sub_ns[6] += tf.elapsed().as_nanos() as u64; }
+        // spawn_clearance: move the car to route[k0] at its s_exit, as if it had driven the skipped edges (after the
+        // refuel check, which may re-plan the route from its start: then only when the plan still has e0 at k0 and its
+        // station stop lies at or after it)
+        if k0 > 0 && self.vs.routes[slot].get(k0) == Some(&e0) && (self.vs.refuel_state[slot] == 0 || self.vs.stop_pos[slot] >= k0 as i32) {
+            let g = self.gw();
+            let e = e0 as usize; let sx = if g.e_s_exit[e] > 0.0 { g.e_s_exit[e] } else { 0.0 };
+            let vs = &mut self.vs;
+            vs.route_pos[slot] = k0 as i32; vs.edge[slot] = e0; vs.s[slot] = sx as f32;
+            vs.lat[slot] = ((lane as f64 + 0.5) * g.lane_w(e, sx)) as f32;
+            vs.route_dist[slot] = route[..k0].iter().map(|&q| g.e_length[q as usize]).sum::<f64>() as f32;
+            vs.update_lanes(slot, &g, e);
+            vs.update_pose(slot, &g); vs.save_pose(slot);
+            self.counters.spawn_moved += 1;
+        }
         self.ensure_slot(slot);
         self.drivers[slot] = Driver::External;
         self.vs.flags[slot] |= FLAG_BRAIN;
         true
+    }
+
+    /// spawn_clearance: the first route index whose edge leaves at least spawn_clearance_m between its spawn point
+    /// (s_exit) and the junction entry the route takes next (the earliest s_in over the lanes); the last edge when
+    /// none does.
+    pub fn spawn_edge_index(&self, route: &[i32]) -> usize {
+        let g = &*self.g;
+        let Some(j) = &g.j else { return 0 };
+        let mut k = 0;
+        while k + 1 < route.len() {
+            let e = route[k] as usize;
+            if !(g.e_s_stop[e] < g.e_length[e]) { return k; }
+            let s0 = if g.e_s_exit[e] > 0.0 { g.e_s_exit[e] } else { 0.0 };
+            let mut s_in = f64::INFINITY;
+            for l in 0..g.e_lanes[e] { let m = j.movement(e, l, route[k + 1]); if m >= 0 { s_in = s_in.min(j.s_in(m as usize)); } }
+            if !s_in.is_finite() || s_in - s0 >= self.opts.spawn_clearance_m { return k; }
+            k += 1;
+        }
+        k
     }
 
     pub(crate) fn ensure_slot(&mut self, slot: usize) {

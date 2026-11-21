@@ -104,6 +104,10 @@ pub struct GpuOptions {
     /// lane vertices and connector points (bayenv_world::LoadOptions::smooth_geometry). Must match the world; needs
     /// curvature_dynamics. SimOpts::smooth_geometry
     pub smooth_geometry: bool,
+    /// The world's turning junction connectors are re-fitted to vehicle-feasible radii (default OFF; DECISIONS.md 34;
+    /// LoadOptions::junction_radii): the blob carries the moved s_in / s_out, lengths, points and conflict positions.
+    /// Must match the world; needs smooth_geometry. SimOpts::junction_radii
+    pub junction_radii: bool,
     /// MODEL fix (default ON; kernels/model_integrate.wgsl): a sliding wreck clamped at the end of its edge / connector
     /// gets speed 0. SimOpts::wreck_end_stop
     pub wreck_end_stop: bool,
@@ -160,7 +164,7 @@ impl GpuOptions {
     /// Set a host optimisation flag by name (indirect_resolve, fused_resolve, sorted_order, profile).
     pub fn set_flag(&mut self, name: &str, on: bool) -> Result<(), String> {
         match name { "indirect_resolve" => self.indirect_resolve = on, "fused_resolve" => self.fused_resolve = on, "sorted_order" => self.sorted_order = on, "fast_scan" => self.fast_scan = on, "fast_search" => self.fast_search = on, "zero_init_workgroup" => self.zero_init_workgroup = on, "cpu_connector_join" => self.cpu_connector_join = on, "contact_tangent" => self.contact_tangent = on, "deterministic_contacts" => self.deterministic_contacts = on, "deterministic_spawn" => self.deterministic_spawn = on, "deterministic_events" => self.deterministic_events = on, "deterministic_leaders" => self.deterministic_leaders = on,
-            "wreck_real_mass" => self.wreck_real_mass = on, "curvature_dynamics" => self.curvature_dynamics = on, "smooth_geometry" => self.smooth_geometry = on, "wreck_end_stop" => self.wreck_end_stop = on,
+            "wreck_real_mass" => self.wreck_real_mass = on, "curvature_dynamics" => self.curvature_dynamics = on, "smooth_geometry" => self.smooth_geometry = on, "junction_radii" => self.junction_radii = on, "wreck_end_stop" => self.wreck_end_stop = on,
             "contact_episodes" => self.contact_episodes = on, "connector_barrier" => self.connector_barrier = on, "brake_hold" => self.brake_hold = on,
             "heavy_brakes" => self.heavy_brakes = on, "barrier_soft_push" => self.barrier_soft_push = on, "impact_reverse" => self.impact_reverse = on,
             "profile" => self.profile = on, _ => return Err(format!("unknown GpuOptions flag {name}")) }
@@ -180,7 +184,7 @@ impl GpuOptions {
     }
     /// Every model fix off: the JS kernels (oracle checks, legacy checkpoints).
     pub fn js_model(mut self) -> GpuOptions {
-        self.cpu_connector_join = false; self.contact_tangent = false; self.wreck_real_mass = false; self.curvature_dynamics = false; self.smooth_geometry = false; self.wreck_end_stop = false;
+        self.cpu_connector_join = false; self.contact_tangent = false; self.wreck_real_mass = false; self.curvature_dynamics = false; self.smooth_geometry = false; self.junction_radii = false; self.wreck_end_stop = false;
         self.contact_episodes = false; self.connector_barrier = false; self.brake_hold = false; self.heavy_brakes = false; self.barrier_soft_push = false; self.impact_reverse = false;
         self
     }
@@ -193,7 +197,7 @@ impl Default for GpuOptions {
     fn default() -> Self {
         GpuOptions { capacity: 131072, dt: 0.05, start_time: 5.0 * 3600.0, seed: 1, obs: ObsMode::V2, steer_rate: false, decide_every: 1, features: Features::default(),
             controls: true, junctions: true, table_bits: 18, contact_cap: 131072, ev_cap: 16384, spawn_queue: 16384, op_cap: 16384, max_blocks: 4096, route_slack: 1 << 22,
-            resolve_rounds: 12, progress_weight: 1.0, jerk_weight: 0.5, jerk_reward: false, grade_obs: true, squeeze_delay: 15.0 * 60.0, deadlock_break: 0, reroute: true, keep_events: false, record_events: true, record_share: false, missed_at_out_edge: false, indirect_resolve: true, fused_resolve: true, sorted_order: true, fast_scan: true, fast_search: true, cpu_connector_join: true, contact_tangent: true, deterministic_contacts: true, deterministic_spawn: true, deterministic_events: true, deterministic_leaders: true, wreck_real_mass: true, curvature_dynamics: false, smooth_geometry: false, wreck_end_stop: true, contact_episodes: true, connector_barrier: true, brake_hold: true, heavy_brakes: true, barrier_soft_push: true, impact_reverse: true, zero_init_workgroup: false, profile: false, return_trips: true, refuel_budget_ms: f64::INFINITY,
+            resolve_rounds: 12, progress_weight: 1.0, jerk_weight: 0.5, jerk_reward: false, grade_obs: true, squeeze_delay: 15.0 * 60.0, deadlock_break: 0, reroute: true, keep_events: false, record_events: true, record_share: false, missed_at_out_edge: false, indirect_resolve: true, fused_resolve: true, sorted_order: true, fast_scan: true, fast_search: true, cpu_connector_join: true, contact_tangent: true, deterministic_contacts: true, deterministic_spawn: true, deterministic_events: true, deterministic_leaders: true, wreck_real_mass: true, curvature_dynamics: false, smooth_geometry: false, junction_radii: false, wreck_end_stop: true, contact_episodes: true, connector_barrier: true, brake_hold: true, heavy_brakes: true, barrier_soft_push: true, impact_reverse: true, zero_init_workgroup: false, profile: false, return_trips: true, refuel_budget_ms: f64::INFINITY,
             route_threads: std::thread::available_parallelism().map_or(1, |n| n.get()), route_ahead: 300.0, route_cache: 0 }
     }
 }
@@ -361,6 +365,8 @@ impl GpuSim {
     pub fn with_blob_on(gpu: Gpu, world: Arc<World>, blob: WorldBlob, opts: GpuOptions) -> Result<GpuSim, String> {
         if !(opts.dt.is_finite() && opts.dt > 0.0) { return Err(format!("GpuSim: dt must be finite and > 0 (got {})", opts.dt)); }
         if opts.smooth_geometry != world.smoothing.is_some() { return Err(format!("GpuSim: smooth_geometry ({}) must match the world (smoothed: {}): load it with LoadOptions::smooth_geometry", opts.smooth_geometry, world.smoothing.is_some())); }
+        if opts.junction_radii != world.junction_radii.is_some() { return Err(format!("GpuSim: junction_radii ({}) must match the world (re-fitted: {}): load it with LoadOptions::junction_radii", opts.junction_radii, world.junction_radii.is_some())); }
+        if opts.junction_radii && !opts.smooth_geometry { return Err("GpuSim: junction_radii needs smooth_geometry".into()); }
         if opts.smooth_geometry && !opts.curvature_dynamics { return Err("GpuSim: smooth_geometry is the frame geometry of curvature_dynamics: turn curvature_dynamics on too".into()); }
         let mut gpu = gpu;
         let cap = opts.capacity;

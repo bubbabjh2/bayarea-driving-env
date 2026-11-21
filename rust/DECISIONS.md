@@ -561,3 +561,90 @@ Each entry: date, decision, why, alternatives, numbers, and one line to say it o
 - **On camera:** "The roads had 3-metre hairpins hiding in them. We rounded every corner to the radius a real road of
   that class would have, and the cars still crashed, at the junctions. Turns that tight are real, and the drivers
   just weren't looking ahead."
+
+## 34. Junction turns a vehicle can make (`junction_radii`), and spawn clearance (`spawn_clearance`), default off
+
+- **Date:** 2026-11-21
+- **Decision:** Two companion flags for `curvature_dynamics`, both default off. `SimOpts::js()` leaves them off, so
+  every JS-oracle check is unaffected.
+  - **`junction_radii`:** `LoadOptions` / `SimOpts` / `GpuOptions` / `Env(junction_radii=True)`; needs
+    `smooth_geometry`, must match the world. At load, after the smoothing (`bayenv_world::junction_radii`), every
+    turning connector (0.3–2.6 rad) whose arc is below the target is rebuilt as one circular arc with tangent entry
+    and exit. Its s_in moves back on the in-edge and its s_out forward on the out-edge until the arc fits.
+  - **`spawn_clearance`:** `SimOpts` (CPU) / `Env(spawn_clearance=True)` (CPU backend). A car whose first route edge
+    leaves less than 18 m (`spawn_clearance_m`) between its spawn point (s_exit) and the junction entry its route
+    takes next starts on the next route edge instead, as if it had driven the skipped ones (route position and
+    distance set to match). It is its own flag because it changes where cars start on the raw world too.
+- **Targets:** by the lower class of the two edges, never below 6 m where it fits.
+  - Local streets (residential, unclassified, living_street): 8 m, real corner kerb-return paths of 6–9 m.
+  - Arterials (primary to tertiary and their links): 12 m. That is also above a truck's or bus's 11.5 m full-lock
+    radius (`examples/turn_feasibility.rs`: sedan 4.3 m, SUV 4.7 m, truck 11.3 m, bus 11.5 m).
+  - Freeway system: 15 m.
+  - Heavy vehicles get 12 m where they mostly drive. 12 m on every residential corner would move the entries
+    another 4–10 m on short blocks and cut far past the kerbs, so local corners keep 8 m (trucks there take them with
+    a wider swing, as in reality).
+- **Limits on the move:**
+  - At most 30 m.
+  - Never past another movement's s_in on the same in-lane, or s_out on the same out-lane.
+  - Never past the edge's other mouth (s_exit + 1 m / s_stop − 1 m) or its ends.
+  - When a limit stops the move, the connector gets the largest radius that fits.
+- **Kept consistent:**
+  - Rebuilt from the arrays: the movement's s_in / s_out / length (`mF`), its points (s = true metres), and the
+    conflict positions. These are recomputed on the new paths with the builder's own `pair_conflict` (754,474), or
+    scaled by the length ratio where the paths no longer meet (12,499).
+  - Everything that reads those arrays follows: lane index, leaders, yield, controls lookahead, CPU conflict paths,
+    the GPU blob.
+  - Unchanged: mouths and gores (so edge s_exit / s_stop, stop lines and controls), turn angles, the conflict list,
+    hop maps.
+  - s_in before the stop line is a state the JS builder already produces: 225,877 movements raw, 324,790 after. The
+    sim uses min(s_stop, s_in) in its junction logic, and the controls keep measuring the in-edge s on the connector.
+- **Why:** entry 33 showed the junction box bounds a connector's radius at min(tangent leg) / tan(turn / 2), so only
+  moving its ends widens the turn. Doing it at load time keeps the data files, the JS and the oracle untouched.
+- **Alternatives:**
+  - Move the mouths (s_stop / s_exit) instead: shifts stop lines, the controls and every movement of the edge.
+  - Compound curves or clothoids within the old ends: they cannot beat the shorter-leg bound.
+- **Numbers** (real world, `examples/geom_radius -- ../data --junction-radii`):
+  - **Movements:** 394,804 turning connectors.
+    - 46,693 already at target.
+    - 260,843 rebuilt at target.
+    - 69,244 fit-limited: 47,152 by another movement on the same lane, 20,914 by the edge, 1,178 by the 30 m cap.
+    - 18,024 not improvable.
+    - Largest moves: 30 m back and 30 m forward.
+  - **Arc radius (leg fit) per turning connector:** below 6 m 57,960 → 21,852. Below 11.5 m (heavy vehicles)
+    365,124 → 280,653, mostly residential corners at their 8 m target.
+  - **Tightest point per turning connector** (2 m heading window; < 6 m and < 11.5 m, before → after):
+
+    | class | < 6 m | < 11.5 m |
+    |---|---|---|
+    | residential | 18.1 % → 3.6 % | 94.2 % → 84.4 % |
+    | tertiary | 21.2 % → 8.0 % | 89.8 % → 36.4 % |
+    | secondary | 24.6 % → 13.4 % | 87.0 % → 42.9 % |
+    | primary | 29.4 % → 16.7 % | 88.0 % → 49.7 % |
+    | motorway_link | 24.9 % → 14.9 % | 85.0 % → 38.1 % |
+
+  - **Continuity** (`tests/smooth_world.rs`): 330,087 movements moved, with entry / exit on the lanes within 2.7 mm,
+    tangent within 0.017 / 0.015 rad, s 0 .. length. Mouths, gores, turns and the conflict list are unchanged.
+  - **Spawn clearance:** 73 of 504 spawns in the rollout start one or more edges further along.
+  - **Rollouts** (`physics_audit sim ../data 3000 1200`, curvature on; crashed vehicles of 504):
+
+    | | smoothed | + junction_radii | + spawn_clearance |
+    |---|---|---|---|
+    | keep policy | 419 | 420 | 415 |
+    | pursuit | 311 | 295 | 287 |
+
+    - Pursuit on raw geometry with curvature on: 317. Keep policy, smoothed + spawn_clearance only: 413.
+    - Heading jumps: 0. Teleports: 1 (keep) and 6 (pursuit, edge hops after connector exits).
+    - Crash sites (pursuit) are now mostly later and faster, on edges after a curve. The car overshoots the end of
+      the curve after its 0.5–1.2 s reaction delay and crosses into the far kerb. That is a driver limitation, not
+      geometry.
+  - **cpu_vs_gpu** (curvature + smooth + junction_radii): crashed 734 / 734, contacts 2,023 / 2,015, barrier
+    2,019 / 2,011, missed exits 13 / 15, violations 337 / 337.
+- **GPU spawn clearance (not done):** the GPU spawns on the trip's first route edge at s_exit (host `scatter` /
+  `set_population`, then the spawn kernels). The plan:
+  - Pick the start index the same way on the host when the trip's route words are packed.
+  - Write ROUTE_POS / EDGE / S / ROUTE_DIST for it in the spawn record, and have `spawn_order.wgsl` / `spawn.wgsl`
+    read them instead of assuming route position 0 at s_exit.
+  - Then add the flag to `GpuOptions`.
+  - Until then `Env(backend="gpu", spawn_clearance=True)` is an error.
+- **On camera:** "Our junction corners were tighter than a car can turn. So we moved where each turn starts, until a
+  car could follow the curve and a truck could take the big roads."

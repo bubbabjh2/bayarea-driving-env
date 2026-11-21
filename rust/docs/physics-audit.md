@@ -13,6 +13,7 @@ cargo run --release -p bayenv-sim --example physics_audit -- world ../data  # W:
 cargo run --release -p bayenv-sim --example physics_audit -- scen ../data   # S: targeted scenarios
 cargo run --release -p bayenv-sim --example physics_audit -- sim ../data 5000 2400 keep|const|wobble|fast|pursuit  # R: rollout scan
 # AUDIT_JS=1: the JS model; AUDIT_CURV=1: curvature_dynamics on; AUDIT_SMOOTH=1: also smooth_geometry (DECISIONS.md 33);
+# AUDIT_JR=1: also junction_radii; AUDIT_SPAWN=1: spawn_clearance (DECISIONS.md 34);
 # AUDIT_CRASHES=1: crash sites by kind; AUDIT_TRACE=<slot>: per-step trace of one car
 ```
 

@@ -10,7 +10,8 @@
 //!       (reference radius minus the lane-centre offset on the inside of the turn);
 //!    "join": the vertex between consecutive edges at a pass-through node (no junction box, no other edge);
 //!    "connector": the junction connector polylines (JunctionSet.pts).
-//!    With --smooth the world is loaded with LoadOptions::smooth_geometry (bayenv_world::smooth).
+//!    With --smooth the world is loaded with LoadOptions::smooth_geometry (bayenv_world::smooth), with
+//!    --junction-radii also with LoadOptions::junction_radii (bayenv_world::junction_radii).
 //! 3. Continuity: lane-point jumps at edge -> edge hops (strict lane map, nodes without a junction box) and at
 //!    connector entry / exit, frame heading jumps there, and s consistency.
 use bayenv_world::{LoadOptions, World};
@@ -19,7 +20,7 @@ use std::path::Path;
 
 fn fillet(l1: f64, l2: f64, turn: f64) -> f64 { if turn.abs() < 1e-9 { f64::INFINITY } else { 0.5 * l1.min(l2) / (turn.abs() / 2.0).tan() } }
 fn wrap(a: f64) -> f64 { a.sin().atan2(a.cos()) }
-const BINS: [f64; 9] = [3.0, 5.0, 10.0, 15.0, 30.0, 60.0, 120.0, 250.0, 500.0];
+const BINS: [f64; 12] = [3.0, 5.0, 6.0, 8.0, 10.0, 11.5, 15.0, 30.0, 60.0, 120.0, 250.0, 500.0];
 
 #[derive(Default)]
 struct Hist(BTreeMap<String, (u64, Vec<u64>)>);
@@ -52,12 +53,14 @@ fn conn_heading(j: &bayenv_world::JunctionSet, m: usize, t: f64) -> f64 {
 fn main() {
     let a: Vec<String> = std::env::args().collect();
     let dir = a.get(1).filter(|s| !s.starts_with("--")).map(|s| s.as_str()).unwrap_or("../data");
-    let smooth = a.iter().any(|s| s == "--smooth");
-    let o = LoadOptions { verify: false, smooth_geometry: smooth, ..Default::default() };
+    let jr = a.iter().any(|s| s == "--junction-radii");
+    let smooth = jr || a.iter().any(|s| s == "--smooth");
+    let o = LoadOptions { verify: false, smooth_geometry: smooth, junction_radii: jr, ..Default::default() };
     let t0 = std::time::Instant::now();
     let w = World::load_with(Path::new(dir), &o).expect("world");
     println!("world {dir}: {} edges, smoothed: {smooth} (load {:.1} s)", w.graph.edge_count, t0.elapsed().as_secs_f64());
     if let Some(st) = &w.smoothing { println!("smoothing: {st:#?}"); }
+    if let Some(st) = &w.junction_radii { println!("junction radii: {st:#?}"); }
     let g = &w.graph; let lg = &w.lanes; let lgr = &w.lane_graph;
     let cname = |e: usize| bayenv_world::roadpack::CLASSES_ALL.get(g.class[e] as usize).copied().unwrap_or("?").to_string();
 
@@ -105,7 +108,7 @@ fn main() {
             }
         }
     }
-    h.print(&format!("2. frame geometry{} (> 0.01 rad)", if smooth { ", smoothed" } else { ", raw" }), 50);
+    h.print(&format!("2. frame geometry{} (> 0.01 rad)", if jr { ", smoothed + junction radii" } else if smooth { ", smoothed" } else { ", raw" }), 50);
     println!("lane vertices turning > 0.01 rad: {n_lane}; joins: {}", joins.len());
 
     // ---- 2b. heading rate along the path (sampling-independent): r = W / |heading change over W|, W = 2 m, sampled
@@ -128,19 +131,33 @@ fn main() {
             let d = wrap(head(eb, 1.0) - head(ea, la - 1.0)); let r = if d.abs() < 1e-9 { f64::INFINITY } else { (2.0 / d.abs() - inner(ea, d).max(inner(eb, d))).max(0.0) };
             lh.add(format!("join {}", cname(ea)), r, 1.0);
         }
-        let mut cmin = Hist::default();
+        let mut cmin = Hist::default(); let mut legfit = Hist::default();
         if let Some(j) = &w.junctions {
             for m in 0..j.move_count() {
                 let len = j.m_f[4 * m + 2] as f64; if len < 2.0 { continue; }
                 let hc = |t: f64| conn_heading(j, m, t);
                 let (mut t, mut rmin) = (1.0, f64::INFINITY);
                 while t <= len - 1.0 { let d = wrap(hc(t + 1.0) - hc(t - 1.0)); let r = if d.abs() < 1e-9 { f64::INFINITY } else { 2.0 / d.abs() }; rmin = rmin.min(r); lh.add(format!("connector {}", cname(j.m_info[7 * m] as usize)), r, 0.5); t += 0.5; }
-                if (j.m_f[4 * m + 3] as f64).abs() > 0.3 { cmin.add(format!("connector-min {}", cname(j.m_info[7 * m] as usize)), rmin); }
+                let tn = (j.m_f[4 * m + 3] as f64).abs();
+                if tn > 0.3 && tn <= 2.6 { cmin.add(format!("connector-min {}", cname(j.m_info[7 * m] as usize)), rmin); }
+                // the arc a connector can have between its lane points: min tangent leg / tan(turn / 2)
+                if tn > 0.3 && tn <= 2.6 {
+                    let d = j.describe(m);
+                    let pa = lg.lat_point(d.in_edge as usize, d.s_in as f64, (d.in_lane as f64 + 0.5) * lg.lane_width(d.in_edge as usize, d.s_in as f64));
+                    let pb = lg.lat_point(d.out_edge as usize, d.s_out as f64, (d.out_lane as f64 + 0.5) * lg.lane_width(d.out_edge as usize, d.s_out as f64));
+                    let cr = pa.hx * pb.hz - pa.hz * pb.hx;
+                    if cr.abs() > 1e-6 {
+                        let t0 = ((pb.x - pa.x) * pb.hz - (pb.z - pa.z) * pb.hx) / cr; let t1 = -((pb.x - pa.x) * pa.hz - (pb.z - pa.z) * pa.hx) / cr;
+                        let th = cr.atan2(pa.hx * pb.hx + pa.hz * pb.hz).abs();
+                        if t0 > 0.0 && t1 > 0.0 { legfit.add(format!("connector-legfit {}", cname(d.in_edge as usize)), t0.min(t1) / (0.5 * th).tan()); }
+                    }
+                }
             }
         }
-        println!("{:40} {:>9} {}", format!("2b. heading rate{} (km of path)", if smooth { ", smoothed" } else { ", raw" }), "km", BINS.iter().map(|b| format!("{:>8}", format!("<{b}m"))).collect::<String>());
+        println!("{:40} {:>9} {}", format!("2b. heading rate{} (km of path)", if jr { ", smoothed + junction radii" } else if smooth { ", smoothed" } else { ", raw" }), "km", BINS.iter().map(|b| format!("{:>8}", format!("<{b}m"))).collect::<String>());
         for (k, (n, h)) in &lh.0 { if *n < 50.0 { continue; } println!("{k:40} {:>9.1} {}", n / 1e3, h.iter().map(|&c| format!("{:>7.2}%", 100.0 * c / *n)).collect::<String>()); }
-        cmin.print("2c. tightest point per connector (> 0.3 rad)", 50);
+        cmin.print("2c. tightest point per connector (0.3 .. 2.6 rad)", 50);
+        legfit.print("2d. leg-fit radius per connector (0.3 .. 2.6 rad)", 50);
     }
 
     // ---- 3. continuity and s consistency

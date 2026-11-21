@@ -434,3 +434,37 @@ fn heading_preview_sees_the_corner_ahead() {
     assert!((p[3] - j.turn(m)).abs() < 0.25, "the 40 m preview sees the whole turn");
     assert!(p[3].signum() == j.turn(m).signum());
 }
+
+/// spawn_clearance (DECISIONS.md 34): the spawn edge chosen for a route leaves at least spawn_clearance_m between its
+/// spawn point (s_exit) and the junction entry the route takes next, unless it is the route's last edge; without the
+/// flag (the JS) cars spawn on the first edge however close the junction. Checked for every two-edge route through a
+/// junction of the real-map scenario cuts.
+#[test]
+fn spawn_clearance_keeps_spawns_off_junction_entries() {
+    let (mut close, mut moved, mut kept) = (0usize, 0usize, 0usize);
+    for name in ["urban-s1", "grid-s1", "junction-s1", "roundabout-s1", "interchange-s1", "pack-mixed-s3", "weave-s1", "merge-s1", "diverge-s1"] {
+    let Some(w) = scenario_world(name) else { return bayenv_world::oracle::skip("physics_fixes", "scenario data") };
+    // the scenario cuts have long blocks: a 50 m clearance makes the rule bite (the default is 18 m)
+    let sim = sim_with(&w, SimOpts { spawn_clearance: true, spawn_clearance_m: 50.0, ..SimOpts::default() });
+    let j = w.j.as_ref().unwrap();
+    let entry = |e: usize, nx: i32| (0..w.e_lanes[e]).filter_map(|l| { let m = j.movement(e, l, nx); (m >= 0).then(|| j.s_in(m as usize)) }).fold(f64::INFINITY, f64::min);
+    for m in 0..j.move_count {
+        let (a, b) = (j.info(m, 0) as usize, j.info(m, 2) as i32);
+        let s0 = w.e_s_exit[a].max(0.0);
+        let gap = entry(a, b) - s0;
+        if gap < sim.opts.spawn_clearance_m { close += 1; }
+        // route [a, b, b's continuation if any]
+        let to = w.e_to[b as usize] as usize;
+        let mut route = vec![a as i32, b];
+        if let Some(q) = (w.out_start[to]..w.out_start[to + 1]).map(|q| w.out_edges[q as usize]).find(|&o| o != w.e_rev[b as usize]) { route.push(q); }
+        let k = sim.spawn_edge_index(&route);
+        if gap < sim.opts.spawn_clearance_m { assert!(k >= 1, "movement {m}: moved on"); moved += 1; } else { assert_eq!(k, 0); kept += 1; }
+        if k + 1 < route.len() {
+            let e = route[k] as usize;
+            if w.e_s_stop[e] < w.e_length[e] { let g2 = entry(e, route[k + 1]) - w.e_s_exit[e].max(0.0); assert!(!g2.is_finite() || g2 >= sim.opts.spawn_clearance_m, "route {route:?}: spawn edge {k} gap {g2}"); }
+        }
+    }
+    }
+    eprintln!("scenario cuts, movements: {close} have their in-edge's spawn point within 50 m of the entry ({moved} spawn further along with spawn_clearance), {kept} keep the first edge");
+    assert!(close > 0 && moved == close);
+}

@@ -367,6 +367,9 @@ pub struct World {
     /// the lane geometry and connectors are the smoothed frame geometry (bayenv_world::smooth, DECISIONS.md 33);
     /// a Sim on this world needs SimOpts::smooth_geometry (and curvature_dynamics)
     pub geometry_smoothed: bool,
+    /// the junction connectors are re-fitted to vehicle-feasible radii (bayenv_world::junction_radii, DECISIONS.md
+    /// 34); a Sim on this world needs SimOpts::junction_radii
+    pub junction_radii: bool,
 }
 
 impl World {
@@ -439,7 +442,7 @@ impl World {
             out_start: p.i32s("outStart"), out_edges: p.i32s("outEdges"), in_start: p.i32s("inStart"), in_edges: p.i32s("inEdges"),
             highway_names: names, max_speed: meta["maxSpeed"].as_f64().unwrap_or(0.0), banned_hops, contact_pairs, lg, j, controls, stations,
             surfaces: meta["surfaces"].as_bool().unwrap_or(false), hop_base: Vec::new(), hop_tab: Vec::new(), conf_ext: Vec::new(), nav_base: std::sync::OnceLock::new(), mv_into: std::sync::OnceLock::new(),
-            bounds: (b["minX"].as_f64().unwrap_or(0.0), b["maxX"].as_f64().unwrap_or(0.0), b["minZ"].as_f64().unwrap_or(0.0), b["maxZ"].as_f64().unwrap_or(0.0)), geometry_smoothed: false,
+            bounds: (b["minX"].as_f64().unwrap_or(0.0), b["maxX"].as_f64().unwrap_or(0.0), b["minZ"].as_f64().unwrap_or(0.0), b["maxZ"].as_f64().unwrap_or(0.0)), geometry_smoothed: false, junction_radii: false,
         };
         w.build_hops();
         w
@@ -501,7 +504,7 @@ impl World {
             lg: Some(lg), j, controls,
             stations: w.stations.iter().map(|s| Station { node: s.node as i32, pumps: s.pumps as i32, x: s.x, z: s.z }).collect(),
             surfaces: w.surfaces, hop_base: Vec::new(), hop_tab: Vec::new(), conf_ext: Vec::new(), nav_base: std::sync::OnceLock::new(), mv_into: std::sync::OnceLock::new(),
-            bounds: (g.bounds.min_x, g.bounds.max_x, g.bounds.min_z, g.bounds.max_z), geometry_smoothed: w.smoothing.is_some(),
+            bounds: (g.bounds.min_x, g.bounds.max_x, g.bounds.min_z, g.bounds.max_z), geometry_smoothed: w.smoothing.is_some(), junction_radii: w.junction_radii.is_some(),
         };
         world.build_hops();
         world
@@ -527,7 +530,7 @@ impl World {
             contact_pairs: None, lg: None, j: None, controls: None,
             stations: w.stations.iter().map(|s| Station { node: s.node as i32, pumps: s.pumps as i32, x: s.x, z: s.z }).collect(),
             surfaces: false, conf_ext: Vec::new(), hop_base: Vec::new(), hop_tab: Vec::new(), nav_base: std::sync::OnceLock::new(), mv_into: std::sync::OnceLock::new(),
-            bounds: (g.bounds.min_x, g.bounds.max_x, g.bounds.min_z, g.bounds.max_z), geometry_smoothed: w.smoothing.is_some(),
+            bounds: (g.bounds.min_x, g.bounds.max_x, g.bounds.min_z, g.bounds.max_z), geometry_smoothed: w.smoothing.is_some(), junction_radii: w.junction_radii.is_some(),
         }
     }
 
