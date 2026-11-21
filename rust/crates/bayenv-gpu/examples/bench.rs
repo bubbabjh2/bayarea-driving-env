@@ -17,7 +17,7 @@ fn main() {
     for n in sizes {
         let t = Instant::now();
         let cap = match std::env::var("BAYENV_CAP").as_deref() { Ok("auto") => (n + 1023) / 1024 * 1024, Ok(v) => v.parse().unwrap(), Err(_) => 131072usize.max(n) };
-        let mut o = GpuOptions { capacity: cap, obs, profile, ..Default::default() }; o.features.accidents = true;
+        let mut o = GpuOptions { capacity: cap, obs, profile, ..Default::default() }; o.features.accidents = true; o.apply_env();
         let mut sim = bayenv_gpu::env::create(world.clone(), o).unwrap();
         let acts: Vec<f32> = (0..sim.cap * 3).map(|i| if i % 3 == 1 { 0.3 } else { 0.0 }).collect(); sim.set_actions(&acts, 0);
         let info = bayenv_gpu::env::scatter(&mut sim, n, 11);

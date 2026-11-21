@@ -47,6 +47,9 @@ pub struct GpuOptions {
     /// contact resolve in one dispatch (kernels/resolve_fused.wgsl: one workgroup runs the rounds with barriers
     /// instead of 37 dispatches; same contacts resolved per round, bit-identical state). JS: off
     pub fused_resolve: bool,
+    /// run the per-car kernels of `SORTED_KERNELS` in lane-list order (kernels/sorted.wgsl, indirect over the
+    /// lane-list entries + cap): memory locality; bit-identical. JS: off
+    pub sorted_order: bool,
     /// GPU timestamp profile of the first step of every batch (`crate::profile`; needs TIMESTAMP_QUERY). JS: opts.profile
     pub profile: bool,
 }
@@ -61,6 +64,18 @@ impl Features {
     }
 }
 impl GpuOptions {
+    /// Set a host optimisation flag by name (indirect_resolve, fused_resolve, sorted_order, profile).
+    pub fn set_flag(&mut self, name: &str, on: bool) -> Result<(), String> {
+        match name { "indirect_resolve" => self.indirect_resolve = on, "fused_resolve" => self.fused_resolve = on, "sorted_order" => self.sorted_order = on,
+            "profile" => self.profile = on, _ => return Err(format!("unknown GpuOptions flag {name}")) }
+        Ok(())
+    }
+    /// Flags from `BAYENV_GPU_OPTS` ("sorted_order=1,fused_resolve=0"; examples / benchmarks).
+    pub fn apply_env(&mut self) {
+        if let Ok(v) = std::env::var("BAYENV_GPU_OPTS") { for kv in v.split(',').filter(|x| !x.is_empty()) {
+            let (k, b) = kv.split_once('=').unwrap_or((kv, "1")); self.set_flag(k.trim(), b.trim() != "0").unwrap();
+        } }
+    }
     /// Optional device features these options use (timestamp queries when profiling).
     pub fn gpu_features(&self) -> wgpu::Features {
         if self.profile { wgpu::Features::TIMESTAMP_QUERY | wgpu::Features::TIMESTAMP_QUERY_INSIDE_PASSES } else { wgpu::Features::empty() }
@@ -70,7 +85,7 @@ impl Default for GpuOptions {
     fn default() -> Self {
         GpuOptions { capacity: 131072, dt: 0.05, start_time: 5.0 * 3600.0, seed: 1, obs: ObsMode::V2, steer_rate: false, decide_every: 1, features: Features::default(),
             controls: true, junctions: true, table_bits: 18, contact_cap: 131072, ev_cap: 16384, spawn_queue: 16384, op_cap: 16384, max_blocks: 4096, route_slack: 1 << 22,
-            resolve_rounds: 12, progress_weight: 1.0, jerk_weight: 0.5, jerk_reward: false, grade_obs: true, squeeze_delay: 15.0 * 60.0, deadlock_break: 0, reroute: true, keep_events: false, indirect_resolve: true, fused_resolve: true, profile: false }
+            resolve_rounds: 12, progress_weight: 1.0, jerk_weight: 0.5, jerk_reward: false, grade_obs: true, squeeze_delay: 15.0 * 60.0, deadlock_break: 0, reroute: true, keep_events: false, indirect_resolve: true, fused_resolve: true, sorted_order: true, profile: false }
     }
 }
 
@@ -112,6 +127,23 @@ pub struct Counters { pub minor_contacts: u64, pub crash_events: u64, pub crashe
 
 
 struct ScanLevel { n: usize, blocks: usize }
+
+/// Kernels that can run in lane-list order with `GpuOptions.sorted_order` (all bit-identical in `opt_check`):
+/// (label, sorted label, file, entry, workgroup size, used by default). Off by default where the extra threads
+/// (cap + lane entries) cost more than the locality gains (M4 Max, 10k / 100k cars); `BAYENV_SORTED=a,b` overrides.
+pub const SORTED_KERNELS: &[(&str, &str, &str, &str, u32, bool)] = &[
+    ("leaders", "leaders.sorted", "leaders", "main", 128, true),
+    ("sense", "sense.sorted", "sense", "main", 128, true),
+    ("junction.yield", "junction.yield.sorted", "jyield", "jyield", 128, true),
+    ("junction.perceive", "junction.perceive.sorted", "junction", "jperceive", 128, false),
+    ("courtesy.propose", "courtesy.propose.sorted", "courtesy", "propose", 128, false),
+    ("courtesy.apply", "courtesy.apply.sorted", "courtesy", "apply", 128, false),
+    ("integrate", "integrate.sorted", "integrate", "main", 256, false),
+    ("act", "act.sorted", "act", "main", 128, false),
+    ("contacts.barrier", "contacts.barrier.sorted", "contacts", "barrier", 128, false),
+];
+/// `Dispatch.x` values for the indirect sizes of the lane-list-order kernels (largs at 0 / 16).
+pub const X_LARGS128: u32 = u32::MAX; pub const X_LARGS256: u32 = u32::MAX - 1;
 
 /// One dispatch of a step: JS `_stages` stage label, pipeline, bind-group set, workgroups (0 = indirect from `cargs`).
 #[derive(Clone, Debug)]
@@ -247,6 +279,8 @@ impl GpuSim {
         let jm = if use_j { blob.j_m.unwrap() } else { 0 };
         gpu.storage("ctl", ((cap * L::CTL_WORDS + if use_j { jm + blob.e + (blob.e + 31) / 32 + blob.e } else { 0 } + 1) * 4) as u64, None, wgpu::BufferUsages::empty());
         gpu.buffer("cargs", 16, wgpu::BufferUsages::STORAGE | wgpu::BufferUsages::INDIRECT | wgpu::BufferUsages::COPY_DST, Some(bytemuck::cast_slice(&[1024u32, 1, 1, 0])));
+        gpu.buffer("largs", 32, wgpu::BufferUsages::STORAGE | wgpu::BufferUsages::INDIRECT | wgpu::BufferUsages::COPY_DST, Some(bytemuck::cast_slice(&[1u32, 1, 1, 0, 1, 1, 1, 0])));
+        gpu.uniform("listArgsP", 16); gpu.write("listArgsP", bytemuck::cast_slice(&[blob.k as u32, cap as u32, 0, 0]), 0);
         gpu.uniform("contactArgsP", 16); gpu.write("contactArgsP", bytemuck::cast_slice(&[opts.contact_cap as u32, 0, 0, 0]), 0);
         let staging = gpu.device.create_buffer(&wgpu::BufferDescriptor { label: Some("staging"), size: (io_words * 4) as u64, usage: wgpu::BufferUsages::MAP_READ | wgpu::BufferUsages::COPY_DST, mapped_at_creation: false });
         let mut sim = GpuSim {
@@ -287,6 +321,17 @@ impl GpuSim {
         });
         for (sp, k) in specs.iter().zip(out) { self.k.insert(sp.label, k?); }
         self.k.insert("contactArgs", self.gpu.kernel("contactArgs", kernels::host_raw("contact_args"), "main")?);
+        if self.opts.sorted_order {
+            self.k.insert("listArgs", self.gpu.kernel("listArgs", kernels::host_raw("list_args"), "main")?);
+            let only = std::env::var("BAYENV_SORTED").ok();   // diagnostics: comma list of kernels to sort
+            for &(l, sl, file, entry, wg, on) in SORTED_KERNELS {
+                if !only.as_ref().map_or(on, |o| o.split(',').any(|x| x == l)) { continue; }
+                if !self.k.contains_key(l) { continue; }
+                let spec = kernels::KernelSpec { label: sl, file, entry, defines: true };
+                let src = kernels::sorted_source(&kernels::source(&spec, self.opts.obs, self.cap), entry, wg);
+                self.k.insert(sl, self.gpu.kernel(sl, &src, &format!("{entry}_sorted"))?);
+            }
+        }
         if self.opts.fused_resolve {
             let src = defines::prefix(self.opts.obs, self.cap) + &format!("const RF_ROUNDS: u32 = {}u;\n", self.opts.resolve_rounds) + &kernels::resolve_includes(kernels::host_raw("resolve_fused"));
             self.k.insert("contacts.resolveFused", self.gpu.kernel("contacts.resolveFused", &src, "resolveFused")?);
@@ -300,7 +345,7 @@ impl GpuSim {
         for (k, n) in [("P", "params"), ("io", "io"), ("world", "world"), ("routes", "routes"), ("veh", "veh"), ("par", "par"), ("ring", "ring"), ("pose", "pose"),
             ("counts", "counts"), ("starts", "counts"), ("items", "items"), ("order", "order"), ("vidx", "vidx"), ("claim", "claim"), ("laneClaim", "laneClaim"),
             ("queue", "queue"), ("ops", "ops"), ("inputs", "inputs"), ("actions", "actions"), ("agents", "agents"), ("edgeCount", "edgeCount"), ("edgeSpeed", "edgeSpeed"),
-            ("telemetry", "telemetry"), ("ctl", "ctl"), ("CA", "contactArgsP"), ("cargs", "cargs"), ("hcounts", "hcounts"), ("hstarts", "hcounts"), ("hitems", "hitems"), ("hidx", "hidx"), ("contacts", "contacts")] { r.insert(k, b(n)); }
+            ("telemetry", "telemetry"), ("ctl", "ctl"), ("CA", "contactArgsP"), ("LA", "listArgsP"), ("largs", "largs"), ("cargs", "cargs"), ("hcounts", "hcounts"), ("hstarts", "hcounts"), ("hitems", "hitems"), ("hidx", "hidx"), ("contacts", "contacts")] { r.insert(k, b(n)); }
         r
     }
 
@@ -417,7 +462,12 @@ impl GpuSim {
         let cap = self.cap as u32; let f = self.opts.features; let mut d: Vec<Dispatch> = Vec::new();
         let mut stage: &'static str = "tick";
         let g = |n: usize, wg: usize| ((n + wg - 1) / wg).max(1) as u32;
-        macro_rules! push { ($k:expr, $bg:expr, $x:expr) => { d.push(Dispatch { stage, kernel: $k, bg: $bg.to_string(), x: $x }) } }
+        let js = self.js_stages; let so = self.opts.sorted_order;
+        macro_rules! push { ($k:expr, $bg:expr, $x:expr) => { {
+            let (mut k, mut x): (&'static str, u32) = ($k, $x);
+            if so && !js { if let Some(e) = SORTED_KERNELS.iter().find(|e| e.0 == k && self.k.contains_key(e.1)) { k = e.1; x = if e.4 == 256 { X_LARGS256 } else { X_LARGS128 }; } }
+            d.push(Dispatch { stage, kernel: k, bg: if k == $k { $bg.to_string() } else { k.to_string() }, x })
+        } } }
         push!("build.tick", "build.tick", 1);
         if first && op_count > 0 { stage = "ops"; push!("ops", "ops", g(op_count, 64)); }
         let fresh = first && self.new_pose;
@@ -428,7 +478,8 @@ impl GpuSim {
             push!("integrate.newPose", "integrate.newPose", g(cap as usize, 256));
         }
         if f.collisions {
-            stage = "contacts"; push!("hash.hclear", "hash.hclear", g(self.t_size + 1, 256)); push!("hash.hcount", "hash.hcount", g(cap as usize, 256));
+            stage = "contacts"; if so && !js && self.k.contains_key("contacts.barrier.sorted") { push!("listArgs", "listArgs", 1); }
+            push!("hash.hclear", "hash.hclear", g(self.t_size + 1, 256)); push!("hash.hcount", "hash.hcount", g(cap as usize, 256));
             for l in 0..self.hscan.len() { push!("scanBlocks", &format!("hscanB{l}"), self.hscan[l].blocks as u32); }
             for l in (0..self.hscan.len().saturating_sub(1)).rev() { push!("addSums", &format!("hscanA{l}"), self.hscan[l].blocks as u32); }
             push!("hash.hscatter", "hash.hscatter", g(cap as usize, 256));
@@ -445,6 +496,8 @@ impl GpuSim {
         for l in 0..self.scan.len() { push!("scanBlocks", &format!("scan{l}"), self.scan[l].blocks as u32); }
         for l in (0..self.scan.len().saturating_sub(1)).rev() { push!("addSums", &format!("add{l}"), self.scan[l].blocks as u32); }
         push!("build.scatter", "build.scatter", g(cap as usize, 256)); push!("build.sortLanes", "build.sortLanes", g(cap as usize, 256));
+        let sorted = self.opts.sorted_order && !self.js_stages;
+        if sorted { push!("listArgs", "listArgs", 1); }
         let hj = self.blob.j_m.is_some() && !f.empty;
         if hj { stage = "jlists"; push!("junction.clear", "junction.clear", g(self.j_m() + self.blob.e, 256)); push!("junction.clearOff", "junction.clearOff", g(self.blob.e, 256)); push!("junction.link", "junction.link", g(cap as usize, 256)); }
         stage = "leaders"; push!("leaders", "leaders", g(cap as usize, 128));
@@ -468,7 +521,7 @@ impl GpuSim {
 
     fn encode(&mut self, enc: &mut wgpu::CommandEncoder, n: usize, op_count: usize) {
         use crate::profile::Profiler as P;
-        let cargs = self.gpu.get("cargs");
+        let cargs = self.gpu.get("cargs"); let largs = self.gpu.get("largs");
         for k in 0..n {
             let si = self.step + k as u64 + 1;
             let st = self.stages(si, k == 0, op_count);
@@ -476,7 +529,8 @@ impl GpuSim {
             let rec = |pass: &mut wgpu::ComputePass, d: &Dispatch| {
                 pass.set_pipeline(&kt[d.kernel].pipeline);
                 for (gi, b) in bgt[d.bg.as_str()].iter().enumerate() { pass.set_bind_group(gi as u32, b, &[]); }
-                if d.x == 0 { pass.dispatch_workgroups_indirect(&cargs, 0); } else { pass.dispatch_workgroups(d.x, 1, 1); }
+                match d.x { 0 => pass.dispatch_workgroups_indirect(&cargs, 0), X_LARGS128 => pass.dispatch_workgroups_indirect(&largs, 0),
+                    X_LARGS256 => pass.dispatch_workgroups_indirect(&largs, 16), x => pass.dispatch_workgroups(x, 1, 1) }
             };
             match self.profiler.as_mut() {
                 Some(p) if k == 0 && st.len() <= p.max_dispatches() => {

@@ -14,7 +14,7 @@ fn main() {
     println!("world {:.0} ms", t.elapsed().as_secs_f64() * 1e3);
     let cap = std::env::var("BAYENV_CAP").ok().map(|v| v.parse().unwrap()).unwrap_or(o.meta["cap"].as_u64().unwrap() as usize);
     let mut opts = GpuOptions { capacity: cap, ..Default::default() };
-    opts.features.accidents = true; opts.start_time = o.meta["time"].as_f64().unwrap() - o.meta["k"].as_f64().unwrap() * opts.dt;
+    opts.features.accidents = true; opts.apply_env(); opts.start_time = o.meta["time"].as_f64().unwrap() - o.meta["k"].as_f64().unwrap() * opts.dt;
     let t = Instant::now();
     let full = a.get(6).map_or(false, |s| s == "full");
     let native = native || full;
