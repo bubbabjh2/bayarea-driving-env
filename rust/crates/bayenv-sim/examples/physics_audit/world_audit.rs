@@ -110,7 +110,9 @@ fn snap(env: &Env) -> Vec<Snap> {
 fn make_env(data: &str, n: usize, seed: f64, start_h: f64, mode: TrafficMode, dt: f64) -> Env {
     let world = Env::load_world(Path::new(data)).expect("world");
     let pop = Arc::new(Population::generate_like_env(&world, "real", n, seed, Some(Path::new(data))).expect("pop"));
-    let opts = SimOpts { dt, seed, traffic_mode: mode, ..SimOpts::default() };
+    // AUDIT_JS=1: the JS model (all model fixes off)
+    let base = if std::env::var("AUDIT_JS").is_ok() { SimOpts::js() } else { SimOpts::default() };
+    let opts = SimOpts { dt, seed, traffic_mode: mode, ..base };
     let cfg = EnvConfig { opts, start_time: Some(start_h * 3600.0), static_obstacles: Vec::new(), scenario_obstacles: Vec::new(), obstacles: None };
     Env::new(world.clone(), pop, cfg, Box::new(|w| bayenv_sim::harness::router_for(&w)))
 }

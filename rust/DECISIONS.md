@@ -297,3 +297,157 @@ Each entry: date, decision, why, alternatives, numbers, and one line to say it o
   regenerates all of them from the JS with node.
 - **Why:** On a fresh clone the equivalence tests used to pass silently without checking anything.
 - **On camera:** "A test that can't run now says so out loud, instead of quietly passing."
+
+## 21. Physics model fixes from the audit (one flag each, default on)
+
+- **Date:** 2026-11-21
+- **Decision:** The findings of `docs/physics-audit.md` that change outcomes are fixed in both backends. Each fix has
+  its own flag: a `SimOpts` field on the CPU, a `GpuOptions` field (a kernel text patch) on the GPU, and a keyword of
+  `bayenv.Env`. All are on by default, except `curvature_dynamics` (entry 23). `SimOpts::js()` and the legacy GPU flags turn them off, which gives the JS
+  models bit for bit, and every JS-oracle check runs that way. Entries 22–30 cover the fixes one by one;
+  `tests/physics_fixes.rs` checks each fix against the JS model and against the physics it restores.
+- **Why:** The audit compared the sim with real vehicles and found loopholes an RL agent can exploit (free cornering,
+  immovable wrecks, contacts that never count twice). Flags keep the JS model reproducible and let a training run
+  switch over in one step.
+- **Alternatives:** change the JS too (then the oracle has to be regenerated, and the old runs could no longer be
+  reproduced); one master flag (it hides which fix caused a change in a training curve).
+- **On camera:** "We audited our physics against real cars, then fixed every bug we found, each behind its own
+  switch."
+- **Teacher check:** with every car on the training repository's heuristic teacher (2,000 commuters, 3,000 steps
+  of 0.1 s), crashed vehicles were 4 with the JS model and 7 with these defaults, and 52 cars arrived in both runs.
+
+## 22. Wrecks have mass (`wreck_real_mass`)
+
+- **Date:** 2026-11-21
+- **Decision:** In pair contacts a stopped wreck or parked obstacle uses its real mass and moment of inertia. Before,
+  the JS gave it infinite mass. Barriers stay immovable.
+- **Numbers:** sedan at 50 km/h into a parked sedan: the striker's Δv goes from 49 km/h to 30 km/h (the
+  equal-mass value with restitution 0.2 is 30), the wreck moves off at 29 km/h, and momentum along the road is
+  conserved within 2 %. A bus at 49 km/h into a parked sedan: the JS stopped it dead; now it carries on at 43 km/h
+  and the sedan is thrown at 53 km/h.
+- **On camera:** "Every parked car in our city was secretly an immovable wall. Now a bus hitting a sedan pushes it
+  out of the way, like it would in real life."
+
+## 23. The road no longer turns the car (`curvature_dynamics`, default off for now)
+
+- **Date:** 2026-11-21
+- **Decision:** (Implemented on both backends, **default off** until the lane geometry is smoothed; see
+  Consequence.) The car state stays in road coordinates (s, lat, heading relative to the lane), but over a step its
+  world heading changes by its own yaw only. After the step, the relative heading is recomputed from the frame at the
+  new position: `heading_rel = wrap(frame − (heading_before − yaw))`. This covers curved edges, edge-to-edge hops and
+  junction connectors, so the heading jumps at the 2,973 kinked joins (audit finding 8) go away too.
+- **Why:** In the JS, the Frenet frame absorbed road curvature: a car with the wheel straight followed every curve.
+- **Numbers:** 948 cars held at 108 km/h with steer 0 on empty roads: median peak world lateral acceleration 14.6 g
+  → 0. On the 90-degree corner of the `road3` test road at 108 km/h with steer 0, the JS took the turn at a peak of
+  95 g; now the car goes straight on. A heading-and-offset tracker takes a 1.7 rad junction turn at 30 km/h with a
+  peak of 0.96 g. Rollout scan: 78 heading jumps → 0.
+- **Consequence:** drivers must now steer through curves before they reach them. The road polylines have short
+  kinks (for example 0.7 rad within 2.5 m), so a driver that only reacts to heading error hits the kerb. The
+  training repository's heuristic teacher is one such driver. With every car on the teacher (2,000 commuters, 3,000
+  steps), crashed vehicles went from 4 (JS model) and 7 (all other fixes) to 706 of 720, and arrivals from 52 to 1.
+  The typical crash: a car at 5 m/s meets a lane polyline that turns 0.7 rad within 2.5 m (a radius of about 3.5 m,
+  not a real road). It reacts after its reaction time, by which point it has already hit the kerb. Adding a yaw-rate
+  feed-forward from the lane-heading change to the teacher did not help (698 crashed). So the flag ships off.
+  Next: smooth the lane and connector centrelines to realistic minimum radii by road class, add a lane-heading
+  preview to the observation, then turn the flag on once a look-ahead teacher drives at JS-level crash and arrival
+  rates.
+- **Alternatives:** smooth the polylines first (changes the world build and every position); bound the absorbed
+  curvature by tyre grip (still free steering below the bound).
+- **On camera:** "Our cars were taking freeway-speed right turns at 14 g. The road was secretly turning them. When
+  we made the tyres do the work, we found the roads had 3-metre hairpins hiding in them."
+
+## 24. A sliding wreck stops at the end of its road (`wreck_end_stop`)
+
+- **Date:** 2026-11-21
+- **Decision:** A crashed car that slides into the end of its edge or connector (where it cannot hop on) now stops
+  there with speed 0. Before, it froze in place but kept its speed, which decayed only by tyre friction.
+- **Numbers:** a wreck sliding at 25 m/s, 15 m before an edge end: 46 steps pinned at the end with speed in the JS
+  (19.5 → 9 m/s at a fixed position), 0 with the fix.
+- **On camera:** "A wreck could hit the end of a road and keep 'moving' at 70 km/h without going anywhere."
+
+## 25. Every impact counts, not just the first touch (`contact_episodes`)
+
+- **Date:** 2026-11-21
+- **Decision:** A contact episode lasts while a pair (or a car and a barrier) keeps touching. A step is an impact
+  if it is the first touch, or if its own Δv is at least `touch_kmh` (1 km/h). Each impact adds its Δv to the
+  episode total and reports an event carrying that total. So the disable threshold (10 km/h), the severity and the
+  reward all see the true accumulated Δv. Steps with smaller impulses (a resting push) neither add nor report.
+- **Why:** The JS reported only the first step of a contact. A car leaning on the kerb could take a 12 km/h strike
+  with no event and keep driving.
+- **Numbers:** a car leaning on the barrier, then struck at 6 m/s lateral: no event in the JS on the strike step;
+  with the fix the strike reports, and the episode total (10.5 km/h) disables the car.
+- **Alternatives:** an event on every contact step (floods the log during resting contact); per-step Δv only (a
+  long hard scrape never reaches the disable threshold).
+- **On camera:** "We found a loophole: if you were already touching the wall, hitting it harder didn't count."
+
+## 26. Junction boxes have walls (`connector_barrier`)
+
+- **Date:** 2026-11-21
+- **Decision:** A car on a junction connector meets a wall at its in-edge's kerb lines. The limits are carried in
+  the in-edge lateral coordinate that the connector keeps, and the wall normal comes from the connector's tangent at
+  the car. The wall uses the same impulse, events and position correction as the edge barrier. It is on by default
+  already. It matters most with `curvature_dynamics`: once the frame stops turning the car, a car that misses a turn
+  would otherwise wander through the junction box.
+- **Numbers:** rollout scan (3,000 commuters, 1,200 steps): teleports of more than 1.5 × speed × dt + 0.5 m go from
+  39 (worst 16 m, a car 15 m off its connector snapped back at the exit) to 0.
+- **On camera:** "Inside an intersection a car could wander anywhere, then teleport back onto the road."
+
+## 27. Brakes hold a stopped car (`brake_hold`)
+
+- **Date:** 2026-11-21
+- **Decision:** Below 0.05 m/s, when the brake force plus the rolling resistance is at least the drive force minus
+  the grade force, the car is held at exactly 0 (static friction).
+- **Why:** In the JS, below 0.02 m/s the brakes only cancelled the drive, and rolling resistance switched off below
+  0.05 m/s. A car could creep under a held brake for ever.
+- **Numbers:** on the brake from 0.015 m/s for 60 s: 0.9 m crept in the JS, 0 with the fix. The audit found creep
+  in 169–261 of 400 stops per vehicle type, worst 1.2 m per minute.
+- **On camera:** "Our parked cars were slowly creeping forward with the brakes on, about a metre a minute."
+
+## 28. Truck and bus brakes calibrated (`heavy_brakes`)
+
+- **Date:** 2026-11-21
+- **Decision:** Trucks and buses (mass over 5 t) brake at 4.7 m/s² instead of 6.5 m/s².
+- **Numbers:** 100–0 km/h: 59 m → 80 m. Loaded heavy vehicles need about 80 m (FMVSS 121). Sedans and SUVs are
+  unchanged (100–0 in 41 m).
+- **On camera:** "Our trucks stopped like sports cars. Now a loaded truck needs eighty metres from 100 km/h."
+
+## 29. Barrier contact pushes, it doesn't teleport (`barrier_soft_push`)
+
+- **Date:** 2026-11-21
+- **Decision:** The barrier's position correction is at most 0.25 m per step. The JS removed the full penetration
+  depth in one step. The wall impulse is unchanged.
+- **Numbers:** a car 1.2 m into the barrier: lateral jump in one step 2.2 m in the JS, 0.25 m with the fix.
+- **On camera:** "Touching a wall used to teleport you up to two metres sideways."
+
+## 30. Knocked backwards stays backwards (`impact_reverse`)
+
+- **Date:** 2026-11-21
+- **Decision:** A crashed car may move backwards after an impact: its speed can go negative, and it slides on locked
+  wheels until friction stops it. A driving car still has no reverse gear, so it keeps a backward speed only when the
+  same impact disables it. Every "is this wreck still moving" test uses |speed|. A sliding wreck's body-frame
+  rotation terms (v·r, −u·r) are applied as an exact rotation. Explicit Euler grew |velocity| by √(1 + (r·h)²) per
+  sub-step, so a wreck spinning at 15 rad/s gained speed up to 85 m/s. The JS's clamp of u at ≥ 0 had hidden this.
+- **Numbers:** a bus at 50 km/h into a stationary sedan facing it: the sedan slides back at up to 14 m/s with the
+  fix; the JS clamped its speed to 0, so it stopped dead on impact.
+- **On camera:** "A sedan hit head-on by a bus used to stop dead on the spot. Now it gets shoved backwards."
+
+## 31. Input checks: NaN actions and dt
+
+- **Date:** 2026-11-21
+- **Decision:** On the GPU host, NaN action components become 0 before upload, as on the CPU. WGSL `clamp(NaN)` is
+  undefined, and Metal returns the lower bound, so a NaN steer became full left lock. `Sim::new`, `GpuSim::new` and
+  `bayenv.Env` reject a dt that is not positive and finite.
+- **On camera:** "One bad number from the AI used to yank the wheel full left on the GPU."
+
+## 32. Known simplifications we keep
+
+- **Date:** 2026-11-21
+- **Decision:** These audit findings are documented but not changed:
+  - Trucks do not roll over. Lateral acceleration is limited only by tyre grip, while real trucks tip at about
+    0.3–0.4 g.
+  - Junction boxes are flat on hills.
+  - Kerbs are rigid walls. Real 15 cm kerbs are mountable.
+  - Cars have no reverse control: the action space has no reverse gear, so a boxed-in car stays boxed in.
+- **Why:** Each one needs either new world data or a change to the action space. None of them let an agent exploit
+  the sim the way the fixed findings did.
+- **On camera:** "There are still things our sim gets wrong, and we're telling you which ones."
