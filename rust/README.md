@@ -42,6 +42,11 @@ env.stats(), env.time, env.raw("veh")
 * Constructor options: `backend="gpu"`, `capacity` (default `n_cars` rounded up to 1024; results are identical for any
   capacity ≥ `n_cars`), `obs="v2" | "v3" | "none"`, `dt`, `start_time`, `accidents`, `collisions`, `fuel`, `controls`,
   `junctions`, `steer="position" | "rate"`, `decide_every`, `keep_events`.
+* `step_observe(actions, k=1, out=arr)`: actions upload, k steps and the observation copy in one submit and one wait
+  (the fused RL step). `step(k)` returns right after the submit; the readback and events are processed by the next
+  call (same results, the Python side overlaps with the GPU). `sync()` waits explicitly.
+* `bayenv.VecEnv(data_dir, n_envs, n_cars, seed)`: several independent envs on one device sharing one world (env i
+  uses seed + i); `act((E, N, 3))`, `step(k)`, `step_observe(actions, k, out=(E, N, obs))`, `crash_flags() -> (E, N)`.
 * `observe(out=arr)` fills a preallocated array (no allocation). Readbacks go through persistent staging buffers and copy
   only the rows in use.
 * `backend="cpu"` raises `NotImplementedError` until `bayenv-sim` is merged.

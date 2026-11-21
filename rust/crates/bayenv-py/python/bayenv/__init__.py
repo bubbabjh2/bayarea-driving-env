@@ -6,6 +6,6 @@
     env.step(20)           # 20 steps, one GPU submit
     obs = env.observe()    # float32 (n_slots, 70)
 """
-from ._bayenv import Env, world_info, OBS_V2_SIZE
+from ._bayenv import Env, VecEnv, world_info, OBS_V2_SIZE
 
-__all__ = ["Env", "world_info", "OBS_V2_SIZE"]
+__all__ = ["Env", "VecEnv", "world_info", "OBS_V2_SIZE"]
