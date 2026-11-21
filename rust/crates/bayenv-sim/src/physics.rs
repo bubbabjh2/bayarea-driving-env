@@ -83,6 +83,9 @@ pub fn step_dynamics(st: &mut DynState, steer_rate: f64, gas: f64, brake: f64, p
     let mut sl = st.sl;
     let mut fuel = 0.0;
     let mut power = 0.0;
+    // memo of cos/sin(steer): the same input gives the same bits, so reuse while the wheel angle is unchanged
+    let (mut m_steer, mut m_cd, mut m_sd) = (f64::NAN, 0.0, 0.0);
+    let (mut m_hr, mut m_ch, mut m_sh) = (f64::NAN, 0.0, 0.0);
     for _ in 0..n {
         if !locked {
             if position { sl += (tgt - sl) * k_lag; let d = sl - steer; steer += if d > slew { slew } else if d < -slew { -slew } else { d }; }
@@ -136,12 +139,21 @@ pub fn step_dynamics(st: &mut DynState, steer_rate: f64, gas: f64, brake: f64, p
             let af = steer - jm::atan((v + a * r) / uf);
             let ar = -jm::atan((v - b * r) / uf);
             let lam_f = if u >= KIN_BLEND_HI { 1.0 } else if u <= KIN_BLEND_LO { 0.0 } else { (u - KIN_BLEND_LO) / (KIN_BLEND_HI - KIN_BLEND_LO) };
-            fyf = lam_f * yf_max * jm::tanh(cf * af / yf_max);
-            fyr = lam_f * yr_max * jm::tanh(cr * ar / yr_max);
+            // lam_f == 0 (crawling): 0 * yMax * tanh(x) is a signed zero with the sign of x (tanh is finite, odd and
+            // keeps the sign of zero), so the tanh can be skipped without changing a bit
+            if lam_f == 0.0 && yf_max > 0.0 && yr_max > 0.0 {
+                let zf = cf * af / yf_max; let zr = cr * ar / yr_max;
+                fyf = if zf.is_sign_negative() { -0.0 } else { 0.0 };
+                fyr = if zr.is_sign_negative() { -0.0 } else { 0.0 };
+                if zf.is_nan() || zr.is_nan() { fyf = lam_f * yf_max * jm::tanh(zf); fyr = lam_f * yr_max * jm::tanh(zr); }
+            } else {
+                fyf = lam_f * yf_max * jm::tanh(cf * af / yf_max);
+                fyr = lam_f * yr_max * jm::tanh(cr * ar / yr_max);
+            }
         }
         let res = resistance(p, u, grade, crr_mul);
-        let cd = jm::cos(steer);
-        let sd = jm::sin(steer);
+        if steer.to_bits() != m_steer.to_bits() { m_steer = steer; m_cd = jm::cos(steer); m_sd = jm::sin(steer); }
+        let (cd, sd) = (m_cd, m_sd);
         let fx_body = fxf * cd - fyf * sd + fxr - res;
         let fy_body = fxf * sd + fyf * cd + fyr;
         let du = (fx_body / m + v * r) * h;
@@ -161,8 +173,8 @@ pub fn step_dynamics(st: &mut DynState, steer_rate: f64, gas: f64, brake: f64, p
         u = un; v = vn; r = rn;
         hr += r * h;
         if hr > jm::PI { hr -= 2.0 * jm::PI; } else if hr < -jm::PI { hr += 2.0 * jm::PI; }
-        let ch = jm::cos(hr);
-        let sh = jm::sin(hr);
+        if hr.to_bits() != m_hr.to_bits() { m_hr = hr; m_ch = jm::cos(hr); m_sh = jm::sin(hr); }
+        let (ch, sh) = (m_ch, m_sh);
         lat += (u * sh + v * ch) * h;
         s += (u * ch - v * sh) * h * cos_g;
         let tract = jm::max(0.0, match p.drive { Drive::Front => jm::max(0.0, fxf), Drive::Rear => jm::max(0.0, fxr), Drive::All => jm::max(0.0, fxf) + jm::max(0.0, fxr) }) * u;
