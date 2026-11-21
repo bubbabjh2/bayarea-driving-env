@@ -14,8 +14,10 @@ const EBD_MARGIN: f32 = 0.05;
 // wheel position in [-1,1]: sl += (target x maxSteer - sl) min(1, h / steerLag), the wheel moves <= steerSlew rad/s)
 struct DynState { u: f32, v: f32, r: f32, steer: f32, ax: f32, hr: f32, lat: f32, s: f32, fuelL: f32, power: f32, sl: f32 };
 
-fn resistanceF(t: u32, u: f32, grade: f32) -> f32 {
-  var roll = 0.0; if (u > 0.05) { roll = PT_CRR[t] * PT_M[t] * G_ACC; }
+fn resistanceF(t: u32, u: f32, grade: f32) -> f32 { return resistanceS(t, u, grade, 1.0); }
+// crrMul: road-surface rolling-resistance factor (src/sim/surface.js; dynamics.js resistance crrMul)
+fn resistanceS(t: u32, u: f32, grade: f32, crrMul: f32) -> f32 {
+  var roll = 0.0; if (u > 0.05) { roll = PT_CRR[t] * crrMul * PT_M[t] * G_ACC; }
   return 0.5 * RHO_AIR * PT_CDA[t] * u * abs(u) + roll + PT_M[t] * G_ACC * grade / sqrt(1.0 + grade * grade);
 }
 fn bsfcF(t: u32, load: f32) -> f32 { let q = 1.0 - clamp(load, 0.0, 1.0); return PT_BSFC[t] * (1.0 + 0.9 * q * q * q); }
@@ -36,15 +38,19 @@ fn pedalsForP(t: u32, accel: f32, u: f32, grade: f32) -> vec2f {
 }
 
 fn stepDynamics(st0: DynState, steerRate: f32, gas: f32, brake: f32, t: u32, dt: f32, grade: f32, locked: bool) -> DynState {
-  return stepDynamicsH(st0, steerRate, gas, brake, t, dt, grade, locked, P.physDt);
+  return stepDynamicsH(st0, steerRate, gas, brake, t, dt, grade, locked, P.physDt, vec3f(1.0, 0.8, 1.0));
+}
+// sf: road-surface factors under the wheels (pk, sk, crr) = src/sim/surface.js carSurface (dynamics.js `surf`)
+fn stepDynamicsS(st0: DynState, steerRate: f32, gas: f32, brake: f32, t: u32, dt: f32, grade: f32, locked: bool, sf: vec3f) -> DynState {
+  return stepDynamicsH(st0, steerRate, gas, brake, t, dt, grade, locked, P.physDt, sf);
 }
 // h0: max sub-step (dynamics.js stepDynamics h0; the drivers' predictor uses 50 ms)
-fn stepDynamicsH(st0: DynState, steerRate: f32, gas: f32, brake: f32, t: u32, dt: f32, grade: f32, locked: bool, h0: f32) -> DynState {
+fn stepDynamicsH(st0: DynState, steerRate: f32, gas: f32, brake: f32, t: u32, dt: f32, grade: f32, locked: bool, h0: f32, sf: vec3f) -> DynState {
   var st = st0;
   let n = max(1u, u32(ceil(dt / h0 - 1e-6)));
   let h = dt / f32(n);
   let m = PT_M[t]; let Iz = PT_IZ[t]; let a = PT_A[t]; let b = PT_B[t]; let L = PT_L[t]; let hcg = PT_HCG[t];
-  let mu = PT_MU[t]; let Cf = PT_CF[t]; let Cr = PT_CR[t]; let drive = PT_DRIVE[t];
+  let mu = PT_MU[t] * sf.x; let kSlide = sf.y / sf.x; let Cf = PT_CF[t]; let Cr = PT_CR[t]; let drive = PT_DRIVE[t];
   let sr = clamp(steerRate, -1.0, 1.0);
   let g_ = clamp(gas, 0.0, 1.0); let b_ = clamp(brake, 0.0, 1.0);
   let cosG = 1.0 / sqrt(1.0 + grade * grade);
@@ -93,10 +99,10 @@ fn stepDynamicsH(st0: DynState, steerRate: f32, gas: f32, brake: f32, t: u32, dt
     let yfMax = sqrt(max(Ff * Ff - Fxf * Fxf, 0.0)) + eps; let yrMax = sqrt(max(Fr * Fr - Fxr * Fxr, 0.0)) + eps;
     if (locked) {
       let vfy = v + a * r; let vry = v - b * r;
-      let sf = sqrt(u * u + vfy * vfy); let s2 = sqrt(u * u + vry * vry);
+      let sfr = sqrt(u * u + vfy * vfy); let s2 = sqrt(u * u + vry * vry);
       let pushF = max(0.0, -Wg) * Fzf / (Fzf + Fzr); let pushR = max(0.0, -Wg) - pushF;
-      if (sf > 0.01) { Fxf = -0.8 * Ff * u / sf; Fyf = -0.8 * Ff * vfy / sf; } else { Fxf = -min(Ff, pushF); Fyf = 0.0; }
-      if (s2 > 0.01) { Fxr = -0.8 * Fr * u / s2; Fyr = -0.8 * Fr * vry / s2; } else { Fxr = -min(Fr, pushR); Fyr = 0.0; }
+      if (sfr > 0.01) { Fxf = -kSlide * Ff * u / sfr; Fyf = -kSlide * Ff * vfy / sfr; } else { Fxf = -min(Ff, pushF); Fyf = 0.0; }
+      if (s2 > 0.01) { Fxr = -kSlide * Fr * u / s2; Fyr = -kSlide * Fr * vry / s2; } else { Fxr = -min(Fr, pushR); Fyr = 0.0; }
     } else {
       let af = steer - atan((v + a * r) / uf); let ar = -atan((v - b * r) / uf);
       // below the blend speed the tyre side forces fade out (dynamics.js lamF)
@@ -104,7 +110,7 @@ fn stepDynamicsH(st0: DynState, steerRate: f32, gas: f32, brake: f32, t: u32, dt
       Fyf = lamF * yfMax * tanh(clamp(Cf * af / yfMax, -15.0, 15.0));
       Fyr = lamF * yrMax * tanh(clamp(Cr * ar / yrMax, -15.0, 15.0));
     }
-    let res = resistanceF(t, u, grade);
+    let res = resistanceS(t, u, grade, sf.z);
     let cd = cos(steer); let sd = sin(steer);
     let FxBody = Fxf * cd - Fyf * sd + Fxr - res;
     let FyBody = Fxf * sd + Fyf * cd + Fyr;

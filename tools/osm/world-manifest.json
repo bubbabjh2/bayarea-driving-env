@@ -88,6 +88,10 @@
   "flat/controls.json": {
    "sha256": "35d0d84c2bd6d7b31343b669525b17e8804986e53775323e86165b84b1059920",
    "bytes": 16479059
+  },
+  "surfaces.bin": {
+   "sha256": "c5344fa633eca95c340ede55c33a6ec7b4ae569817b379e24d229501557bf6bb",
+   "bytes": 582310
   }
  },
  "baselines": {

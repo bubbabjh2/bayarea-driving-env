@@ -43,7 +43,8 @@ export function packWorld(graph, telFlags = null) {
     edgesU[o] = p; edgesU[o + 1] = n; edgesU[o + 2] = e.lanes; edgesU[o + 3] = k;
     edgesF[o + 4] = e.length; edgesF[o + 5] = e.speedLimit; edgesU[o + 6] = e.from; edgesU[o + 7] = e.to;
     edgesI[o + 8] = e.reverse; edgesU[o + 9] = e.rank;
-    edgesU[o + 10] = (e.isLink ? 1 : 0) | (e.bridge ? 2 : 0) | (e.tunnel ? 4 : 0) | (FREEWAY.has(e.highway) ? 16 : 0) | (SIM_FREEWAY.has(e.highway) ? 32 : 0) | (SHOULDER_ROADS.has(e.highway) ? 64 : 0) | (telFlags ? (telFlags[i] & 63) << 8 : 0);
+    edgesU[o + 10] = (e.isLink ? 1 : 0) | (e.bridge ? 2 : 0) | (e.tunnel ? 4 : 0) | (FREEWAY.has(e.highway) ? 16 : 0) | (SIM_FREEWAY.has(e.highway) ? 32 : 0) | (SHOULDER_ROADS.has(e.highway) ? 64 : 0) | (telFlags ? (telFlags[i] & 63) << 8 : 0)
+      | ((e.surf | 0) & 15) << 16 | ((e.gndR | 0) & 15) << 20 | ((e.gndL | 0) & 15) << 24;   // road surface codes (src/sim/surface.js)
     edgesF[o + 11] = stopBack[i];
     edgesF[o + 12] = e.headingStart; edgesF[o + 13] = e.headingEnd; edgesF[o + 14] = e.y; edgesU[o + 15] = e.navRank ?? 0;
     for (let j = 0; j < n; j++) {

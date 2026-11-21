@@ -11,6 +11,7 @@ import { buildGraph } from '../../src/sim/roadGraph.js';
 import { makeSynthGraph } from '../../src/sim/synthGraph.js';
 import { synthAxis } from '../../src/sim/population.js';
 import { exportState } from '../../src/sim/state.js';
+import { attachSurfaces } from '../../src/sim/surface.js';
 import { GPUSim } from '../../src/gpu/gpuSim.js';
 import { initGPU } from '../../src/gpu/device.js';
 import * as L from '../../src/gpu/layout.js';
@@ -40,6 +41,12 @@ function compare(cpu, st) {
 const result = { ok: false, n: N, steps: STEPS, warm: WARM };
 try {
   const graph = buildGraph(makeSynthGraph({ blocks: 30, cross: 6, bridges: 3 }));
+  // ?surf=mixed: a deterministic per-edge surface map (src/sim/surface.js) so the CPU / GPU surface friction is compared
+  if (q.get('surf') === 'mixed') {
+    const codes = [0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10], b = new Uint8Array(2 * graph.edges.length);
+    for (let i = 0; i < graph.edges.length; i++) { b[2 * i] = codes[(i * 7) % codes.length]; b[2 * i + 1] = 7 | (4 << 4); }
+    attachSurfaces(graph, b); result.surf = 'mixed';
+  }
   const gpu = await initGPU(); result.adapter = gpu.adapterName;
   const cpu = new Simulation(graph, {
     seed: SEED, startTime: 7.5 * 3600, population: { n: N, seed: SEED, axis: synthAxis(graph), long: { minM: 5000, maxM: 20000 } },

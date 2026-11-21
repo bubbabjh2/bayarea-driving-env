@@ -17,6 +17,7 @@ import { edgePoint, LANE_WIDTH, laneW, mapLat, mapLane, hopMap } from './roadGra
 const FREEWAY_CLS = new Set(['motorway', 'trunk', 'motorway_link', 'trunk_link']);
 import { VEHICLE_TYPES } from './vehicleTypes.js';
 import { VEHICLE_PARAMS, stepDynamics, createState, boxInertia } from './physics/index.js';
+import { carSurface } from './surface.js';
 import { DEFAULT_TRAITS } from './genome.js';
 
 export const STATE_FREE = 0, STATE_DRIVING = 1, STATE_CRASHED = 2, STATE_ARRIVED = 3, STATE_REMOVED = 4, STATE_REFUELING = 5;
@@ -30,6 +31,7 @@ export const CTRL_STRIDE = 3; // ring record: [steer (position mode: target in [
 export const TAPER = 40;      // m an ended lane continues (narrowing) past the node where it ends
 
 const _st = createState();
+const _sf = { pk: 1, sk: 0.8, crr: 1, codeR: 0, codeL: 0 };
 const _pp = {}, _cp = {};
 
 /**
@@ -108,6 +110,7 @@ export class VehicleStore {
     this.hl = new Float32Array(C); this.hw = new Float32Array(C); // hitbox half length / half width (m)
     this.px = new Float32Array(C); this.pz = new Float32Array(C); this.pyaw = new Float32Array(C); // pose at the start of the step (swept collisions)
     this.power = new Float32Array(C);          // engine output (W)
+    this.surfR = new Uint8Array(C); this.surfL = new Uint8Array(C); // surface code under the right / left wheels (src/sim/surface.js; 0 asphalt)
     // world pose (derived each step, for rendering / spatial hash / brain eyes)
     this.x = new Float32Array(C); this.y = new Float32Array(C); this.z = new Float32Array(C);
     this.heading = new Float32Array(C);      // world heading atan2(dz, dx) = road heading - headingRel
@@ -295,7 +298,10 @@ export class VehicleStore {
     st.u = this.speed[i]; st.v = this.vLat[i]; st.r = this.yawRate[i]; st.steer = this.steerAngle[i]; st.sl = this.steerSl[i]; st.ax = this.axPrev[i];
     st.hr = this.headingRel[i]; st.lat = this.lat[i]; st.s = this.s[i]; st.fuelL = 0;
     const u0 = st.u, s0 = st.s;
-    stepDynamics(st, sr, gas, brake, P, dt, this.conn[i] >= 0 ? 0 : edgeGrade(e, this.s[i], this.seg[i]), locked, undefined, this.actionMode);
+    // road surface under the wheels (src/sim/surface.js; graphs without data/surfaces.bin are all dry asphalt)
+    const sf = graph.surfaces ? carSurface(graph, e, this.s[i], this.lat[i], this.hw[i], this.conn[i], this.taper[i], _sf) : null;
+    if (sf) { this.surfR[i] = sf.codeR; this.surfL[i] = sf.codeL; }
+    stepDynamics(st, sr, gas, brake, P, dt, this.conn[i] >= 0 ? 0 : edgeGrade(e, this.s[i], this.seg[i]), locked, undefined, this.actionMode, sf);
     this.steerTarget[i] = sr; this.steerSl[i] = st.sl;
     this.speed[i] = st.u; this.vLat[i] = st.v; this.yawRate[i] = st.r; this.steerAngle[i] = st.steer; this.axPrev[i] = st.ax;
     this.headingRel[i] = st.hr; this.lat[i] = st.lat; this.power[i] = st.power;
