@@ -486,7 +486,7 @@ impl Env {
         }
         if let Some(r) = sim.route_stats() {
             let ss = sim.x.stream_stats;
-            for (k, v) in [("route_threads", sim.opts.route_threads as u64), ("route_lookups", r.lookups), ("route_cache_hits", r.hits), ("route_sync", r.misses), ("route_prefetched", r.prefetched),
+            for (k, v) in [("route_threads", sim.opts.route_threads as u64), ("route_lookups", r.lookups), ("route_hits", r.hits), ("route_cache_hits", r.cache_hits), ("route_sync", r.misses), ("route_prefetched", r.prefetched),
                 ("route_waited", r.waited), ("stream_routed", ss.routed), ("stream_pool_full", ss.pool_full)] { d.set_item(k, v)?; }
             d.set_item("route_wait_s", r.wait_ns as f64 * 1e-9)?; d.set_item("route_sync_s", r.route_ns as f64 * 1e-9)?; d.set_item("spawn_hash", format!("{:016x}", ss.spawn_hash))?;
         }

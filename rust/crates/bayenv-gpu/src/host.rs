@@ -202,6 +202,9 @@ pub struct RouteProvider {
 }
 impl RouteProvider {
     const BATCH: usize = 16;
+    /// ODs in flight or finished and not yet taken: prefetch pauses at this many (a full slot pool keeps departures
+    /// pending while the clock, and so the prefetch window, moves on). ~25 MB of routes at the limit
+    pub const MAX_OUTSTANDING: usize = 65536;
     /// threads = 0: serial (route at departure); n: n prefetch workers. cache_size 0: no OD cache.
     pub fn new(w: &Arc<World>, threads: usize, cache_size: usize) -> RouteProvider {
         let pool = (threads > 0).then(|| rayon::ThreadPoolBuilder::new().num_threads(threads).thread_name(|i| format!("bayenv-route-{i}")).build().expect("route pool"));
@@ -240,20 +243,27 @@ impl RouteProvider {
         r
     }
     /// Queue (from, to) for the workers (no-op when serial; joins a route in flight or finished for the same OD).
-    pub fn prefetch(&mut self, from: i32, to: i32) {
-        if self.pool.is_none() { return; }
+    /// false: MAX_OUTSTANDING reached, nothing queued (try again later).
+    pub fn prefetch(&mut self, from: i32, to: i32) -> bool {
+        if self.pool.is_none() { return true; }
         let key = od_key(from, to);
         let t_lock = std::time::Instant::now();
-        {
-            let mut st = self.shared.od.lock().unwrap();
-            let st = &mut *st;
-            if let Some(w) = st.inflight.get_mut(&key) { *w += 1; }
-            else if let Some(e) = st.done.get_mut(&key) { e.1 += 1; }
-            else if st.cache_on && st.cache.contains(key) {}
-            else { st.inflight.insert(key, 1); self.batch.push((key, from, to)); }
-        }
+        let full = {
+            let mut g = self.shared.od.lock().unwrap();
+            let st = &mut *g;
+            if st.inflight.len() + st.done.len() >= Self::MAX_OUTSTANDING { true }
+            else {
+                if let Some(w) = st.inflight.get_mut(&key) { *w += 1; }
+                else if let Some(e) = st.done.get_mut(&key) { e.1 += 1; }
+                else if st.cache_on && st.cache.contains(key) {}
+                else { st.inflight.insert(key, 1); self.batch.push((key, from, to)); }
+                false
+            }
+        };
         self.stats.lock_ns += t_lock.elapsed().as_nanos() as u64;
+        if full { self.flush(); return false; }
         if self.batch.len() >= Self::BATCH { self.flush(); }
+        true
     }
     pub fn flush(&mut self) {
         let Some(pool) = &self.pool else { return };
@@ -529,7 +539,9 @@ impl GpuSim {
             if self.x.prefetch_ptr < self.x.table_ptr { self.x.prefetch_ptr = self.x.table_ptr; }
             let ahead = t_end + self.opts.route_ahead.max(2.0);
             while self.x.prefetch_ptr < t.n && t.sorted_depart[self.x.prefetch_ptr] as f64 <= ahead {
-                let id = t.order[self.x.prefetch_ptr] as usize; self.x.prefetch_ptr += 1; p.prefetch(t.home[id], t.work[id]);
+                let id = t.order[self.x.prefetch_ptr] as usize;
+                if !p.prefetch(t.home[id], t.work[id]) { break; }
+                self.x.prefetch_ptr += 1;
             }
             p.flush();
         }

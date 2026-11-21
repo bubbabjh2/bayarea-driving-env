@@ -42,7 +42,7 @@ fn main() {
                     let (mut pf, mut k) = (0usize, 0usize);
                     let mut clock = table.sorted_depart[k0] as f64;
                     while k < ids.len() {
-                        while pf < ids.len() && table.sorted_depart[k0 + pf] as f64 <= clock + 300.0 { let i = ids[pf]; p.prefetch(table.home[i], table.work[i]); pf += 1; }
+                        while pf < ids.len() && table.sorted_depart[k0 + pf] as f64 <= clock + 300.0 { let i = ids[pf]; if !p.prefetch(table.home[i], table.work[i]) { break; } pf += 1; }
                         p.flush();
                         while k < ids.len() && table.sorted_depart[k0 + k] as f64 <= clock + 2.0 {
                             let i = ids[k]; match p.get(table.home[i], table.work[i]) { Some(r) => { fnv(&mut h, r.len() as u32); for &e in r.iter() { fnv(&mut h, e as u32); } } None => { none += 1; fnv(&mut h, u32::MAX); } }

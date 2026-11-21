@@ -60,12 +60,26 @@ pop.place_obstacles(count=40, seed=3); pop.place_wrecks(10); pop.reset_day()
 * Populations (gpu): `population=N, pop_seed=42` replaces the scatter with N commuters of `src/sim/population.js`
   (generated natively, bit-identical with the JS, 10x faster than popParallel.js) spawning on their trip schedule, outbound
   and return legs (`return_trips=True`), with refuel detours through the world's gas stations (`stations=True`) and
-  station pumps. `streaming=True` uses a CommuterTable whose routes are computed at departure (`GPUSim.setStreaming`).
+  station pumps. `streaming=True` uses a CommuterTable whose routes are computed at departure (`GPUSim.setStreaming`), prefetched by `route_threads` workers.
   `n_slots` = `capacity` (default min(N, 131072) rounded up to 1024): slots are recycled, `slot_trip()` maps them.
   `refuel_budget_ms` (default none = every plan in the frame it is requested, deterministic; JS default 4 ms).
   Also `reset_day(start_time=None)`, `place_obstacles(count, kinds, seed, slow_kmh, brake_every)` or
   `place_obstacles(obstacles=[{edge, at, lane | lat, type}])`, `place_wrecks(n)`, `outcomes()`, `agents()`,
   `import_snapshot(path)` (a CPU-sim `exportState` snapshot).
+* Streaming route prefetch (`route_threads`, `GpuOptions.route_threads` / `route_ahead`): the `RouteWorkers` design of
+  `src/gpu/streamPack.js`. Every frame, departures up to 300 sim s ahead are queued (batches of 16) on a rayon pool of
+  `route_threads` workers (default: the machine's cores), one `nav::Router` each. A finished route waits in a per-OD map
+  until its departures take it (the `RouteWorkers` done map; departures with the same OD inside the window share one
+  A*). The JS `RouteProvider` OD LRU cache is `GpuOptions.route_cache` (entries) and is off by default: on the full
+  morning only 0.2 % of departures repeat an OD, so a 200k-entry cache saves 0.15 % of A* runs for ~80 MB and more lock
+  traffic. Reroutes don't use it (missed exits go through the host router's own cache; congestion reroutes depend on
+  the penalty set; in a full-population peak window 0.2 % / 0.02 % of reroute ODs repeat). Prefetch pauses at 65,536
+  outstanding ODs: a full slot pool keeps departures pending while the window moves on. A departure whose route is still being computed blocks the sim thread
+  until it is ready instead of being delayed (the JS `waitingRoute` retry, which makes spawn steps depend on wall-clock
+  time), and a departure that was not prefetched is routed on the sim thread. So every `route_threads` value, 0 (serial A*
+  at departure, the previous behaviour) included, gives the same route and the same spawn step for every commuter
+  (`stats()["spawn_hash"]` hashes the placed departures; `examples/stream_prefetch.rs` checks it). Timings:
+  `BENCHMARKS.md`.
 * Constructor options: `backend="gpu"`, `capacity` (default `n_cars` rounded up to 1024; results are identical for any
   capacity ≥ `n_cars`), `obs="v2" | "v3" | "none"`, `dt`, `start_time`, `accidents`, `collisions`, `fuel`, `controls`,
   `junctions`, `steer="position" | "rate"`, `decide_every`, `keep_events`, `cpu_connector_join` (default `True`), `contact_tangent` (default `True`), `replan_at_missed_event` (CPU, default `True`).
@@ -237,9 +251,8 @@ step (`GpuSim.profiler`, `crate::profile`). Diagnostics: `BAYENV_SORTED=a,b` (so
 
 ## Not ported yet (GPU host)
 
-* Web-Worker paths of `gpuSim.js` (refuel plans / reroutes / streaming routes in workers): the Rust host runs them on the
-  main thread like the JS without workers (`fuelWorkers: 0`), which gives the same results; streaming routes are
-  computed serially at departure (0.7 ms per route; no prefetch pool yet).
+* Web-Worker paths of `gpuSim.js` for refuel plans / reroutes: the Rust host runs them on the main thread like the JS
+  without workers (`fuelWorkers: 0`), which gives the same results. Streaming routes do use workers (below).
 * Crash-detail records (type, maneuver, contact point) in the event log, the `crashPenLog`, `getStats()` as one object
   (the Python `stats()` exposes the counters).
 * Scatter routes carry no `slotRoute`, as in the JS, so missed-exit / closure reroutes are no-ops for scatter cars. The

@@ -219,3 +219,65 @@ one-hot and values on the f16 grid): 6, 7, 21-32, 38, 40, 45-55, 58-64, 67, 68.
 
 The relative error is ≤ 4.9e-4 for |x| ≥ 6.1e-5 (normal f16); smaller magnitudes lose relative precision (subnormals) and
 values below 6e-8 flush to 0 (max relative error 1 on fields 0, 4, 5, 9, 11, ...).
+
+## Streaming route prefetch (RouteProvider workers, `route_threads`)
+
+Full real-world morning: CommuterTable of 1,380,000 commuters (seed 42, the `packTable.mjs` default). All of them
+depart between 04:00 and 10:00, the window a 05:00 `setStreaming` start routes by 10:00.
+`cargo run --release -p bayenv-gpu --example stream_prefetch -- ../data route 1380000 14` (serial loop, then the sim's
+pattern without the GPU: 1 s frames, prefetch 300 s ahead, each departure takes its route when the clock reaches it).
+Apple M4 Max, 14 cores. The machine was shared, and all numbers were taken under the shared bench lock (`lockf`, `nice -n 10`)
+at load averages of 60-90, so the per-route times are 1.3-2.8x the 0.75 ms of a lightly loaded machine.
+
+| full morning, 1,376,825 A* | wall | routes/s | notes |
+|---|---|---|---|
+| serial at departure (`route_threads=0`) | 1,469 s | 937 | 1.06 ms per A* at load 60 |
+| 14 prefetch workers | 220 s (6.7x) | 6,251 | 2.1 ms per A* per worker at load 90; the sim thread only waits for routes |
+
+Memory (full-morning process, `/usr/bin/time -l`): 0.78 GB peak footprint with world, table, 15 routers and a 200k-OD cache (the default is now no cache). A `nav::Router` holds per-node search state (495k nodes) plus its CSR copy of the graph. The cost is linear in `route_threads`.
+| route hash over all 1.38M commuters | identical | | |
+
+OD cache: 0.2 % of departures share an OD with an earlier one inside the cache's reach (1,376,825 of 1,380,000
+departures need their own A*). The prefetch hand-over (`done` map per OD) already shares one A* between departures
+with the same OD inside the 300 s window, so the LRU only adds ODs further apart:
+
+| 07:00-08:00 departures (432,169), 14 workers | wall | A* | cache hits | sim-thread locks + bookkeeping | memory |
+|---|---|---|---|---|---|
+| no cache (`route_cache=0`, default) | 40.6 s | 432,009 | - | 0.30 s | - |
+| LRU 200,000 ODs (the JS `RouteProvider` size) | 31.3 s | 431,376 (-0.15 %) | 634 | 0.52 s | 61 MB of route edges + ~20 MB map |
+
+The wall-time difference is load noise: the per-worker A* time was 1.24 ms vs 0.96 ms, and the cache saves 0.15 %
+of the A* runs. Reroutes do not go through this provider: missed-exit reroutes use the GPU host's own router, which has
+its own OD cache. Congestion / closure reroutes depend on the current penalty and avoid sets, so an OD cache cannot serve
+them. Their OD repeat rates are in the sim table below.
+
+GPU sim at the morning peak, full population streaming
+(`stream_prefetch -- ../data sim 1380000 14 7.25 0.75 20 131072 0 0.25`: 07:15 start, capacity 131072, batches of 20
+steps, stations on, measured 07:15-08:00 in 15-min chunks, under the bench lock with `nice -n 10`, load 12-52):
+
+| 14 route threads | wall | cars on road | departures placed | sim-thread A* / wait | worker A* |
+|---|---|---|---|---|---|
+| 07:15-07:30 (first frame places the 06:15-07:15 backlog up to the pool size) | 530 s | 111,682 | 114,783 | 0 / 4.0 s | 417,739 |
+| 07:30-07:45 | 557 s | 102,567 | 4,320 | 0 / 0 s | 105,668 |
+| 07:45-08:00 | 471 s | 100,820 | 483 | 0 / 0 s | 121,011 |
+
+That is ~2,080 s of wall time per simulated hour at ~100k cars, and none of it is routing: the slot pool is full the
+whole time (the departures queue as `poolFull`), so the step is GPU-bound. Serial (`route_threads=0`) was not measured in
+this window (skipped to free the bench lock). Its routing cost is the A* of the placed departures on the sim thread:
+119,586 x ~1.06 ms ~ 127 s over the 45 min (+8 %), most of it in the first frame.
+This run found a memory problem: with the pool full the prefetch window kept moving, and 644k routes for pending
+departures were held (2.43 GB peak footprint). Prefetch now pauses at `RouteProvider::MAX_OUTSTANDING` = 65,536 ODs in
+flight or finished, and departures beyond that are routed when they are placed. The spawn hashes are unchanged, and the
+capped version was not re-timed.
+Reroutes in the same window: 623,360 queued (255,210 applied). 858 are plain (missed exit or no penalties), with 856
+distinct ODs (0.2 % repeats). 622,502 use traffic penalties, with 622,378 distinct (OD, 60 s penalty epoch) keys (0.02 %
+repeats). An OD cache would not help reroutes either.
+
+Determinism (`stream_prefetch spawn`, host-only: frames of 20 steps, SPAWN at once, ARRIVE after length / 12 m/s; hash
+of commuter, step, slot, queue entry, arena offset and route words of every placed departure): bit-identical for
+`route_threads` 0 / 2 / 3 / 14, for 200k commuters over 05:00-10:00 (pool 16384), and for a pool of 1024 that is always
+full (73,618 placed, the pending queue retried every frame). The GPU runs (50k commuters, 06:00-07:00, two runs each
+at 0 and 14 threads) give the same (commuter, step, route) hash. Slot numbers in GPU runs follow the order of the
+arrival events, which is not repeatable over an hour even serially, so slots are not part of that hash.
+`parity_check` vs the JS mock (`--scenario=stream`) is identical with the workers on: the first frame (3,217 departures)
+takes 438 ms vs 2,239 ms serial.
