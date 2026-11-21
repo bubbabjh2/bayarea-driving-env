@@ -91,6 +91,10 @@ if (scenario === 'pop') {
   out.queueHigh5 = sim.queueHigh; out.tripPtr5 = sim.tripPtr; out.freeLen5 = sim.free.length;
   add('queue5', buf('queue').slice(0, sim.queueHigh * L.SPAWN_WORDS)); add('fuelLeft5', sim.fuelLeft.slice()); add('outcome5', sim.outcome.slice()); add('slotTrip5', sim.slotTrip.slice());
   add('arriveEv', Uint32Array.from(arr.flat()));
+  // resetDay: a new day with the same population, then the first frame again
+  sim.resetDay(); out.timeR = sim.time; sim._enqueueSpawns(sim.time + 0.5); sim._writeParams(0);
+  out.queueHighR = sim.queueHigh; out.routeWordsR = sim.routeWords; out.freeR = sim.free.length; out.tripPtrR = sim.tripPtr;
+  add('queueR', buf('queue').slice(0, sim.queueHigh * L.SPAWN_WORDS)); add('slotTripR', sim.slotTrip.slice()); add('paramsR', buf('params').slice()); add('worldEbR', buf('world').slice(sim.layoutOff.ebOff, sim.layoutOff.ebOff + 64));
   writeOut('mock', out);
   console.log(JSON.stringify(out));
 } else if (scenario === 'stream') {

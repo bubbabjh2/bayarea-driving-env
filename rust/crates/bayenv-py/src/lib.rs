@@ -40,15 +40,25 @@ fn py_sync(sim: &mut GpuSim) { sim.sync(); }
 impl Env {
     /// Env(data_dir, n_cars=10000, seed=1, backend="gpu" | "cpu", capacity=None, obs="v2", dt=0.05, start_time=None (gpu 05:00, cpu first departure - 60 s),
     ///     accidents=True, collisions=True, fuel=True, controls=True, junctions=True, steer="position", decide_every=1,
-    ///     keep_events=False)
+    ///     keep_events=False, population=None, pop_seed=42, streaming=False, return_trips=True, stations=True,
+    ///     refuel_budget_ms=None)
     /// Loads the world (~0.1 s warm), builds the GPU buffers and scatters `n_cars` cars at rest on random routes
     /// (seeded; the JS GPUSim.scatter placement). Actions start at [0, 0, 0] for every slot.
+    /// population=N (gpu): instead of the scatter, N commuters (src/sim/population.js, seed pop_seed, generated natively,
+    /// bit-identical with the JS) spawn on their trip schedule (outbound + return legs; GPUSim.setPopulation), with refuel
+    /// detours through the world's gas stations (stations=False: every low-fuel request fails). streaming=True: a
+    /// CommuterTable whose routes are computed at departure (GPUSim.setStreaming; for very large N). Slots are recycled:
+    /// n_slots = capacity (default min(N, 131072) rounded up to 1024); slot_trip() maps slots to trips.
+    /// refuel_budget_ms: wall-clock budget per step() call for refuel plans (default: none, every plan at once =
+    /// deterministic; the JS default is 4 ms).
     #[new]
     #[pyo3(signature = (data_dir, n_cars=10000, seed=1, backend="gpu", capacity=None, obs="v2", dt=0.05, start_time=None,
-        accidents=true, collisions=true, fuel=true, controls=true, junctions=true, steer="position", decide_every=1, keep_events=false))]
+        accidents=true, collisions=true, fuel=true, controls=true, junctions=true, steer="position", decide_every=1, keep_events=false,
+        population=None, pop_seed=42.0, streaming=false, return_trips=true, stations=true, refuel_budget_ms=None))]
     #[allow(clippy::too_many_arguments)]
     fn new(py: Python<'_>, data_dir: &str, n_cars: usize, seed: u32, backend: &str, capacity: Option<usize>, obs: &str, dt: f64, start_time: Option<f64>,
-           accidents: bool, collisions: bool, fuel: bool, controls: bool, junctions: bool, steer: &str, decide_every: u32, keep_events: bool) -> PyResult<Env> {
+           accidents: bool, collisions: bool, fuel: bool, controls: bool, junctions: bool, steer: &str, decide_every: u32, keep_events: bool,
+           population: Option<usize>, pop_seed: f64, streaming: bool, return_trips: bool, stations: bool, refuel_budget_ms: Option<f64>) -> PyResult<Env> {
         let obs_mode = match obs { "v2" => ObsMode::V2, "v3" => ObsMode::V3, "none" => ObsMode::None, _ => return Err(PyValueError::new_err("obs must be 'v2', 'v3' or 'none'")) };
         if backend == "cpu" {
             // CPU reference sim (crate bayenv-sim): commuter population (population.js, n_cars commuters, seed),
@@ -70,16 +80,23 @@ impl Env {
         if backend != "gpu" { return Err(PyValueError::new_err("backend must be 'gpu' or 'cpu'")); }
         // scatter fills slots 0..n_cars and nothing spawns later: size the slot pool to the cars (identical results,
         // every per-slot kernel dispatch shrinks); pass capacity= for headroom
-        let cap = capacity.unwrap_or(((n_cars + 1023) / 1024 * 1024).max(1024)).max(n_cars);
+        let cap = match population {
+            Some(np) => capacity.unwrap_or(((np.min(131072) + 1023) / 1024 * 1024).max(1024)),
+            None => capacity.unwrap_or(((n_cars + 1023) / 1024 * 1024).max(1024)).max(n_cars),
+        };
         let data = data_dir.to_string();
         let steer_rate = match steer { "position" => false, "rate" => true, _ => return Err(PyValueError::new_err("steer must be 'position' or 'rate'")) };
         let res: Result<(Arc<World>, GpuSim, usize), String> = py.detach(move || {
             let world = Arc::new(World::load_with(&data, &LoadOptions::default()).map_err(|e| format!("world: {e}"))?);
-            let mut o = GpuOptions { capacity: cap, dt, start_time: start_time.unwrap_or(18000.0), seed, obs: obs_mode, steer_rate, decide_every, controls, junctions, keep_events, ..Default::default() };
+            let mut o = GpuOptions { capacity: cap, dt, start_time: start_time.unwrap_or(18000.0), seed, obs: obs_mode, steer_rate, decide_every, controls, junctions, keep_events,
+                return_trips, refuel_budget_ms: refuel_budget_ms.unwrap_or(f64::INFINITY), ..Default::default() };
             o.features.accidents = accidents; o.features.collisions = collisions; o.features.fuel = fuel;
             let mut sim = bayenv_gpu::env::create(world.clone(), o)?;
-            let info = bayenv_gpu::env::scatter(&mut sim, n_cars, seed);
-            Ok((world, sim, info.placed))
+            match population {
+                Some(np) if streaming => { let t = bayenv_gpu::sim::CommuterTable::generate(&world, np, pop_seed)?; sim.set_streaming(Arc::new(t), stations, None); Ok((world, sim, cap)) }
+                Some(np) => { let p = bayenv_gpu::sim::GpuPopulation::generate(&world, np, pop_seed, return_trips)?; sim.set_population(Arc::new(p), stations); Ok((world, sim, cap)) }
+                None => { let info = bayenv_gpu::env::scatter(&mut sim, n_cars, seed); Ok((world, sim, info.placed)) }
+            }
         });
         let (world, sim, placed) = res.map_err(PyRuntimeError::new_err)?;
         let obs_size = sim.obs_size;
@@ -253,6 +270,14 @@ impl Env {
         let drv = s[S::LIVE_DRIVING];
         d.set_item("avg_speed", if drv > 0 { s[S::LIVE_SUMSPEED] as f64 / 100.0 / drv as f64 } else { 0.0 })?;
         d.set_item("active_scenes", sim.active.len())?; d.set_item("time", sim.time)?;
+        for (k, v) in [("refuel_planned", c.refuel_planned), ("refuel_plan_failed", c.refuel_plan_failed), ("refuelled", c.refuelled), ("reentered", c.reentered), ("no_route", c.no_route)] { d.set_item(k, v)?; }
+        d.set_item("refueling", s[S::LIVE_DWELL])?; d.set_item("in_station_lots", sim.lot())?;
+        let nc = sim.x.commuters();
+        if nc > 0 {
+            d.set_item("commuters", nc)?; d.set_item("trips_remaining", sim.trips_remaining())?;
+            let mut fb = [0usize; 6]; for &o in &sim.x.outcome { fb[(o as usize).min(5)] += 1; }
+            for (k, i) in [("outcome_arrived", 1), ("outcome_crash", 2), ("outcome_stranded", 3), ("outcome_stuck", 4), ("outcome_no_route", 5), ("outcome_unfinished", 0)] { d.set_item(k, fb[i])?; }
+        }
         Ok(d)
     }
 
@@ -261,6 +286,82 @@ impl Env {
         if cpu_only(self).is_some() { return Vec::new(); }
         if let Backend::Gpu(sim) = &mut self.backend { py_sync(sim); }
         gpu_mut(self).events.drain(..).map(|e| (e.time, e.kind, e.slot, e.a, e.b)).collect()
+    }
+
+    /// Start a new simulated day (GPUSim.resetDay): every slot freed, scenes / queues / counters / agent results cleared,
+    /// clock = start_time (default: the constructor's). Populations replay their trip schedule.
+    #[pyo3(signature = (start_time=None))]
+    fn reset_day(&mut self, py: Python<'_>, start_time: Option<f64>) -> PyResult<()> {
+        if cpu_only(self).is_some() { return Err(PyNotImplementedError::new_err("reset_day: gpu backend only")); }
+        let sim = gpu_mut(self); py.detach(|| sim.reset_day(start_time)); Ok(())
+    }
+
+    /// Training obstacles (GPUSim.placeObstacles): `count` obstacles cycling through `kinds` (default all of 'midblock',
+    /// 'afterCurve', 'afterMerge', 'junction', 'rampEnd', 'partial', 'slow', 'braking'), seeded; or an explicit list of
+    /// dicts {edge, at, lane | lat, type} (stopped, disabled cars). Returns [(slot, kind, edge, s)].
+    #[pyo3(signature = (count=40, kinds=None, seed=1.0, slow_kmh=(10.0, 20.0), brake_every=(15.0, 40.0), obstacles=None))]
+    #[allow(clippy::too_many_arguments)]
+    fn place_obstacles(&mut self, count: usize, kinds: Option<Vec<String>>, seed: f64, slow_kmh: (f64, f64), brake_every: (f64, f64),
+                       obstacles: Option<Vec<Bound<'_, PyDict>>>) -> PyResult<Vec<(u32, &'static str, u32, f64)>> {
+        if cpu_only(self).is_some() { return Err(PyNotImplementedError::new_err("place_obstacles: gpu backend only")); }
+        let list = match obstacles {
+            Some(list) => {
+                let mut v = Vec::new();
+                for d in list {
+                    let g = |k: &str| -> PyResult<Option<f64>> { match d.get_item(k)? { Some(x) if !x.is_none() => Ok(Some(x.extract::<f64>()?)), _ => Ok(None) } };
+                    v.push(bayenv_gpu::sim::StaticObstacle { edge: g("edge")?.ok_or_else(|| PyValueError::new_err("obstacle needs 'edge'"))? as i64, at: g("at")?.unwrap_or(0.0),
+                        lane: g("lane")?, lat: g("lat")?, ty: g("type")?.unwrap_or(0.0) as u32 });
+                }
+                Some(v)
+            }
+            None => None,
+        };
+        let kinds = match kinds { None => bayenv_gpu::sim::ObstacleKind::ALL.to_vec(),
+            Some(ks) => ks.iter().map(|k| bayenv_gpu::sim::ObstacleKind::parse(k).ok_or_else(|| PyValueError::new_err(format!("unknown obstacle kind '{k}'")))).collect::<PyResult<Vec<_>>>()? };
+        let sim = gpu_mut(self); sim.sync();
+        let placed = match list { Some(v) => sim.place_static_obstacles(&v),
+            None => sim.place_obstacles(&bayenv_gpu::sim::ObstacleSpec { count, kinds, seed, slow_kmh: [slow_kmh.0, slow_kmh.1], brake_every: [brake_every.0, brake_every.1] }) };
+        Ok(placed.iter().map(|p| (p.slot, p.kind.name(), p.edge, p.s)).collect())
+    }
+
+    /// n static wrecks on random main-tier edges for the whole day (GPUSim.placeWrecks). Returns the number placed.
+    fn place_wrecks(&mut self, n: usize) -> PyResult<usize> {
+        if cpu_only(self).is_some() { return Err(PyNotImplementedError::new_err("place_wrecks: gpu backend only")); }
+        let sim = gpu_mut(self); sim.sync(); Ok(sim.place_wrecks(n))
+    }
+
+    /// Per commuter outcome of the outbound leg (host record): 0 unfinished, 1 arrived, 2 crash, 3 stranded, 4 stuck, 5 no route.
+    fn outcomes<'py>(&mut self, py: Python<'py>) -> Bound<'py, PyArray1<u8>> {
+        if let Some(e) = cpu_only(self) { return PyArray1::from_slice(py, e.outcomes()); }
+        let sim = gpu_mut(self); sim.sync(); PyArray1::from_slice(py, &sim.x.outcome)
+    }
+
+    /// Per-agent day results from the GPU (GPUSim.readAgents): dict of reward_sum, outcome, outcome_back, progress,
+    /// trip_time, crashes (one row per agent), plus fuel_left (litres after the commuter's last finished leg, -1 none).
+    fn agents<'py>(&mut self, py: Python<'py>) -> PyResult<Bound<'py, PyDict>> {
+        if cpu_only(self).is_some() { return Err(PyNotImplementedError::new_err("agents: gpu backend only")); }
+        let sim = gpu_mut(self); let a = py.detach(|| sim.read_agents()); let d = PyDict::new(py);
+        d.set_item("reward_sum", PyArray1::from_vec(py, a.reward_sum))?; d.set_item("outcome", PyArray1::from_vec(py, a.outcome))?;
+        d.set_item("outcome_back", PyArray1::from_vec(py, a.outcome_back))?; d.set_item("progress", PyArray1::from_vec(py, a.progress))?;
+        d.set_item("trip_time", PyArray1::from_vec(py, a.trip_time))?; d.set_item("crashes", PyArray1::from_vec(py, a.crashes))?;
+        d.set_item("fuel_left", PyArray1::from_slice(py, &gpu_ref(self).x.fuel_left))?;
+        Ok(d)
+    }
+
+    /// Slot -> trip (int32, n_slots): 2 * commuter + leg for a car on a trip, -1 never used, -2 freed, -3 obstacle / wreck
+    /// (scatter cars: 2 * slot + 1).
+    fn slot_trip<'py>(&mut self, py: Python<'py>) -> PyResult<Bound<'py, PyArray1<i32>>> {
+        if cpu_only(self).is_some() { return Err(PyNotImplementedError::new_err("slot_trip: gpu backend only")); }
+        let rows = self.rows; let sim = gpu_mut(self); sim.sync(); let n = rows.min(sim.slot_trip.len()); Ok(PyArray1::from_slice(py, &sim.slot_trip[..n]))
+    }
+
+    /// Load a CPU-sim snapshot (src/sim/state.js exportState as <path>.json + <path>.bin, the format of
+    /// rust/tools/oracle/gpu_parity_mock.mjs --scenario=snapshot) slot for slot and take over its clock (GPUSim.importSnapshot).
+    fn import_snapshot(&mut self, path: &str) -> PyResult<()> {
+        if cpu_only(self).is_some() { return Err(PyNotImplementedError::new_err("import_snapshot: gpu backend only")); }
+        let snap = bayenv_gpu::sim::Snapshot::load(std::path::Path::new(path)).map_err(PyRuntimeError::new_err)?;
+        let cap = self.cap; let sim = gpu_mut(self); sim.sync(); sim.import_snapshot(&snap).map_err(PyRuntimeError::new_err)?;
+        self.rows = self.rows.max(snap.high.min(cap)); Ok(())
     }
 
     fn __repr__(&self) -> String { format!("bayenv.Env(backend='{}', n_slots={}, obs_size={}, time={:.2})", self.backend(), self.n_slots(), self.obs_size, self.time()) }
