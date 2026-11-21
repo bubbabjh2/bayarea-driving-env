@@ -86,7 +86,7 @@ pop.place_obstacles(count=40, seed=3); pop.place_wrecks(10); pop.reset_day()
   5.2 ms (GPU 3.8 ms; `BENCHMARKS.md`).
 * Constructor options: `backend="gpu"`, `capacity` (default `n_cars` rounded up to 1024; results are identical for any
   capacity ≥ `n_cars`), `obs="v2" | "v3" | "none"`, `dt`, `start_time`, `accidents`, `collisions`, `fuel`, `controls`,
-  `junctions`, `steer="position" | "rate"`, `decide_every`, `keep_events`, `cpu_connector_join` (default `True`), `contact_tangent` (default `True`), `replan_at_missed_event` (CPU, default `True`).
+  `junctions`, `steer="position" | "rate"`, `decide_every`, `keep_events`, `cpu_connector_join` (default `True`), `contact_tangent` (default `True`), `replan_at_missed_event` (CPU, default `True`), the physics-audit fixes `wreck_real_mass`, `wreck_end_stop`, `contact_episodes`, `connector_barrier`, `brake_hold`, `heavy_brakes`, `barrier_soft_push`, `impact_reverse` (both backends, default `True`) and `curvature_dynamics` (both backends, default `False`; `DECISIONS.md` 21–32). A dt that is not positive and finite raises `ValueError`.
 * **GPU model fix (default since the kerb investigation):** `cpu_connector_join=True` makes junction connector entry
   match the CPU sim. `False` is the legacy mode, the JS GPU kernels bit-for-bit, including their connector-entry bug.
   **Legacy GPU runs and all earlier GPU checkpoints were trained with the bug:** steer-0 cars drift into the kerb after
@@ -94,6 +94,11 @@ pop.place_obstacles(count=40, seed=3); pop.place_wrecks(10); pop.reset_day()
   investigation) gives the contact impulse an f32-robust friction tangent. With `False`, the JS kernels' tangent is
   rounding noise in an aligned rear-end, and the wrecks spin to the kerb (`docs/crash-divergence.md`). The JS-oracle checks (`host_oracle` test, `oracle_run`,
   `parity_run`, `parity_check`, `opt_check`, hence `compare_gpu.sh` / `compare_parity.sh`) run with both `false`.
+* **Physics-audit model fixes (`docs/physics-audit.md`, `DECISIONS.md` 21–32):** nine flags, each a `SimOpts` field,
+  a `GpuOptions` field (patches `kernels/model_contacts.wgsl` and `kernels/model_integrate.wgsl`) and an `Env` keyword.
+  All default on except `curvature_dynamics`, which stays off until the lane polylines are smoothed.
+  `SimOpts::js()` and `GpuOptions::js_model()` turn them all off. `tests/physics_fixes.rs` checks each fix against the
+  JS model, and `cpu_vs_gpu` checks the two backends against each other.
 * **CPU model fix (default since the crash-divergence investigation):** `replan_at_missed_event=True`
   (`SimOpts.replan_at_missed_event`, backend="cpu") re-plans a missed turn at the event, while the car is still on the
   in-edge, as the GPU does. `False` is the JS CPU sim's model: the re-plan comes one step late, the next junction box is

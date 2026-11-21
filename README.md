@@ -103,8 +103,8 @@ are ported to Rust and match the JS bit for bit. `npm run build:junctions` outpu
 (`bash rust/tools/make_oracle.sh`, then `BAYENV_REQUIRE_ORACLE=1 bash rust/tools/check.sh`; `rust/README.md`,
 "Verifying against the JS"). Per-car state of the wgpu host agrees with the JS GPU sim in Chrome to float tolerance.
 
-**Model fixes, on by default.** The Rust host fixes three model bugs of the JS sims. Each one has a flag, and turning
-it off restores the JS model:
+**Model fixes, on by default.** The Rust host fixes model bugs of the JS sims. Each one has a flag, and turning it
+off restores the JS model:
 
 * `cpu_connector_join` (GPU, `GpuOptions` / `bayenv.Env(...)`): junction connector entry as in the CPU sim. With
   `False`, the JS GPU kernels' connector entry makes steer-0 cars drift into the kerb after junction boxes
@@ -114,8 +114,29 @@ it off restores the JS model:
 * `replan_at_missed_event` (CPU, `SimOpts`): a missed turn is re-planned at the event, as on the GPU. With `False`,
   the re-plan comes one step late, as in the JS CPU sim.
 
-`SimOpts::js()` (CPU) and the legacy flags `cpu_connector_join=False, contact_tangent=False` (GPU) give the JS
-models bit for bit; every JS-oracle check runs that way. The GPU-step optimisations (`GpuOptions`) are bit-identical
+The physics audit (`rust/docs/physics-audit.md`) added nine more. Each is a flag on both backends (`SimOpts`,
+`GpuOptions` and `bayenv.Env(...)` keywords), and each is explained in `rust/DECISIONS.md`, entries 21–32:
+
+* `wreck_real_mass`: wrecks and parked cars have their real mass in collisions. Before, they had infinite mass, so a
+  sedan hitting a parked sedan at 50 km/h took Δv 49 km/h; now it takes 30.
+* `contact_episodes`: every impact of an ongoing contact counts. Its Δv adds to the episode total, which drives the
+  disable threshold, the severity and the reward. Before, only the first touch counted.
+* `connector_barrier`: junction boxes have walls (the in-edge kerbs). Before, a car could drift up to 15 m off its
+  connector and was teleported back at the exit.
+* `barrier_soft_push`: barrier penetration is corrected by at most 0.25 m per step. Before, it jumped up to 2.2 m in
+  one step.
+* `impact_reverse`: a wreck knocked backwards slides backwards. Before, its backward speed was clamped to 0.
+* `wreck_end_stop`: a wreck sliding into the end of its road stops there. Before, it froze in place but kept its speed.
+* `brake_hold`: a braked car below 0.05 m/s is held at 0. Before, it crept up to 1.2 m per minute.
+* `heavy_brakes`: trucks and buses brake at 4.7 m/s², so 100–0 km/h takes 80 m. Before, they braked at 6.5 m/s²
+  (58 m).
+* `curvature_dynamics` (available, **off by default**): the road frame no longer turns the car; its world heading
+  changes by its own yaw only. Before, a car with the wheel straight took freeway-speed right angles (median peak
+  14.6 g). It stays off until the lane polylines are smoothed: they contain kinks of a few metres' radius that a
+  reacting driver cannot follow.
+
+`SimOpts::js()` (CPU) and `GpuOptions::js_model()` (GPU: `cpu_connector_join`, `contact_tangent` and the nine
+flags above all off) give the JS models bit for bit; every JS-oracle check runs that way. The GPU-step optimisations (`GpuOptions`) are bit-identical
 with the JS. The `deterministic_*` options (on by default: same-seed GPU runs are bit-identical) fix the order of
 contacts, spawns, events and perception; the JS-oracle checks turn them off too (`rust/README.md`, `rust/docs/determinism.md`).
 
