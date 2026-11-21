@@ -261,8 +261,9 @@ steps, stations on, measured 07:15-08:00 in 15-min chunks, under the bench lock 
 | 07:30-07:45 | 557 s | 102,567 | 4,320 | 0 / 0 s | 105,668 |
 | 07:45-08:00 | 471 s | 100,820 | 483 | 0 / 0 s | 121,011 |
 
-That is ~2,080 s of wall time per simulated hour at ~100k cars, and none of it is routing: the slot pool is full the
-whole time (the departures queue as `poolFull`), so the step is GPU-bound. Serial (`route_threads=0`) was not measured in
+That is ~2,080 s of wall time per simulated hour at ~100k cars. Departure routing is none of it: the slot pool is full
+the whole time (departures queue as `poolFull`). The time is host-side reroute A*, not GPU; see "Streaming step
+profile" below, which takes this window from 17.5 to 5.2 ms/step. Serial (`route_threads=0`) was not measured in
 this window (skipped to free the bench lock). Its routing cost is the A* of the placed departures on the sim thread:
 119,586 x ~1.06 ms ~ 127 s over the 45 min (+8 %), most of it in the first frame.
 This run found a memory problem: with the pool full the prefetch window kept moving, and 644k routes for pending
@@ -281,3 +282,41 @@ at 0 and 14 threads) give the same (commuter, step, route) hash. Slot numbers in
 arrival events, which is not repeatable over an hour even serially, so slots are not part of that hash.
 `parity_check` vs the JS mock (`--scenario=stream`) is identical with the workers on: the first frame (3,217 departures)
 takes 438 ms vs 2,239 ms serial.
+
+## Streaming step profile (full population, morning peak)
+
+`stream_prefetch -- ../data prof 1380000 14 7.5 2 5 20` (CommuterTable cached with `BAYENV_TABLE_CACHE`, 07:30 start, 2 sim
+min warm-up, then 6,000 steps = 5 sim min timed, batches of 20, capacity 131072, ~87k -> 105k cars, stations on, record
+events on). Split per step: host submit (enqueue, scenes, pumps, refuels, reroutes, encode), GPU wait (poll), host
+finish. Under the bench lock, `nice -n 10`, load 4-16.
+
+| | ms/step | host submit | GPU wait | warm-up (2 sim min incl. the 115k-departure first frame) |
+|---|---|---|---|---|
+| before | 17.54 | 13.49 | 4.02 | 46.9 s |
+| after | 5.23 | 1.42 | 3.79 | 15.1 s |
+
+`sample` of the main thread showed the cause. The GPU part (3.8 ms at ~100k cars) matches the 100k scatter bench
+(3.5 ms). Event records cost ~1 ms/step (`record_events=0`: 22.15 -> 21.06 ms/step in a 2-min window). The rest was host
+work:
+
+* Congestion reroutes, ~60 % of the main thread: up to 200 per frame (the JS budget, ~160 per 20-step call here),
+  each a penalised A* run serially, plus the traffic-penalty list rebuilt from the map for every query (~25 %) and
+  a `HashSet` of the closed edges built for every applied reroute. Now the filter / budget pass stays in queue order,
+  the frame's queries run as one `nav::Router::route_batch` (parallel; result i = `route_with(query i)`), and the
+  penalty list and closed set are built once per frame (they change only outside `process_reroutes`). The results are
+  applied in queue order, and a slot queued twice flushes the batch first.
+* Departures routed on the sim thread: after a full first frame, the prefetch window skipped the departures waiting
+  for a slot (`pending_stream`). They are now prefetched first, with one request per commuter.
+* Refuel plans: with no wall-clock budget (`refuel_budget_ms=None`, the Rust default) the frame's plans run as one
+  `StationNetwork::plan_many` (parallel router batches). Results and failures are applied in queue order. A finite
+  budget keeps the one-at-a-time loop.
+
+Bit-identity:
+* `BAYENV_REROUTE_CHECK=1` recomputes every batched reroute one at a time (goal from the current route, per-query
+  penalty list, `route` / `route_with`) and asserts equality. 32,306 peak-window reroutes, all equal.
+* `parity_check` vs the JS mock: `stream` and `pop` (40 refuel plans, refuel route blocks) all identical.
+* Spawn-table hashes unchanged (30k: f17c5c94f01dba69; 200k, full pool of 1024: d19a400a4f8f4847).
+* Whole-run state can't be compared between builds: two runs of the same binary already differ after 1 sim min of the
+  peak (order of contacts / arrivals on the GPU, also with collisions off).
+
+Remaining host time (~1.4 ms/step) is mostly waiting for the reroute batch.

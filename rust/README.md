@@ -80,6 +80,10 @@ pop.place_obstacles(count=40, seed=3); pop.place_wrecks(10); pop.reset_day()
   at departure, the previous behaviour) included, gives the same route and the same spawn step for every commuter
   (`stats()["spawn_hash"]` hashes the placed departures; `examples/stream_prefetch.rs` checks it). Timings:
   `BENCHMARKS.md`.
+* Host work per frame: congestion / missed-exit reroutes (JS budget 200 per frame) and, without a refuel wall-clock
+  budget, refuel plans run as parallel router batches and are applied in queue order (same ops and routes as one at a
+  time; `BAYENV_REROUTE_CHECK=1` verifies reroutes). At the full-population morning peak the step went from 17.5 to
+  5.2 ms (GPU 3.8 ms; `BENCHMARKS.md`).
 * Constructor options: `backend="gpu"`, `capacity` (default `n_cars` rounded up to 1024; results are identical for any
   capacity ≥ `n_cars`), `obs="v2" | "v3" | "none"`, `dt`, `start_time`, `accidents`, `collisions`, `fuel`, `controls`,
   `junctions`, `steer="position" | "rate"`, `decide_every`, `keep_events`, `cpu_connector_join` (default `True`), `contact_tangent` (default `True`), `replan_at_missed_event` (CPU, default `True`).
