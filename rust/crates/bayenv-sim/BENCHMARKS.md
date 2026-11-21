@@ -24,6 +24,12 @@ the same simulation). steps/s = env steps per second, agent-steps/s = driving ca
 | real | 100,000 | 11,630 | 7.4 | 26.4 | 3.6x | 44.7 (6.0x) | 28.0 / 45.4 par (6.1x) |
 
 agent-steps/s at real 100k: JS 86k, Rust 307k (1 thread), 528k (parallel phases).
+
+Real 100k after the parallel-phase work (2026-11-20, under the bench lock at load ~6, 3 runs, BAYENV_PAR=1, 200 steps
+from 07:00, 15.5k driving): **117 +- 1 steps/s, 1.82 M agent-steps/s** (15.8x JS); with the lookahead refuel-plan
+prefetch 121-125 steps/s. Per step (ms): integrate 2.46 (parallel physics 2.0), leaders 1.97 (phase-1 base 1.13,
+P2 speculation ~0.7, ordered commit 0.12), spawn 1.23 (refuel plans ~1.1, routing), contacts 0.55 (parallel pre-scan
+0.36), lanes 0.55, controls 0.47, scenes 0.29, drive 0.19, hash 0.15, traffic + reroute 0.15.
 Ranges = repeated runs on a machine shared with other jobs (load average up to ~15 during some rows).
 
 ## Many envs per process (VecEnv, 14 threads, independent envs, each single-threaded)
@@ -49,6 +55,9 @@ were *slower* than 4 (atomic refcount on one cache line).
 | per-phase profile (BAYENV_PROFILE=1) at real 100k, 1 thread | leaders 29 %, integrate 34 %, traffic re-routing 13 %, spawn 9 %, contacts 6 %, controls 5 % |
 | integrate split into gather / pure physics / scatter, physics + pose in parallel (`SimOpts.parallel`) | integrate 14.1 -> 4.6 ms/step at 100k |
 | leaders phase 1 (lane / zipper leaders, lane ends, off-lane bodies, scenes) and control obs in parallel | real 100k 35 -> 45 steps/s |
+| leaders phase 2 speculative in parallel (reads of earlier cars recorded, re-run on mismatch), contact / spawn pre-scans with exact invalidation, batched reroutes / refuel plans on the shared router | real 100k 45 -> 117 steps/s (load ~6) |
+| refuel plans prefetched 60 s ahead in one router batch, station candidate scoring in parallel (plans are pure in (from, goal)) | spawn-time plans 1.5 -> 1.1 ms/step |
+| rejected: dropping the lane-key sort in LaneIndex::rebuild (range layout is observed: obs / v2 traces diverge) | - |
 | no `Arc<World>` clones in hot paths (`Sim::gw()`) | VecEnv 14 threads: 2.0 M -> 9.3 M agent-steps/s |
 | physics: reuse cos/sin(steer), cos/sin(headingRel) while bitwise unchanged; skip tanh when the tyre-force blend is 0 | ~5-8 % of the physics |
 | `--profile fast` (fat LTO, panic=abort) + `-C target-cpu=native` | +6-30 % single env |

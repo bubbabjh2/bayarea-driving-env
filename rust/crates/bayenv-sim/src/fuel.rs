@@ -95,7 +95,7 @@ impl StationNetwork {
         fuel / lpk < remaining_m / 1000.0 + self.cfg.reserve_km
     }
     /// StationNetwork.plan (routeViaStation)
-    pub fn plan<G: PlanGraph + ?Sized>(&mut self, g: &G, router: &mut dyn Router, from: i32, goal: i32) -> Option<Plan> {
+    pub fn plan<G: PlanGraph + Sync + ?Sized>(&mut self, g: &G, router: &mut dyn Router, from: i32, goal: i32) -> Option<Plan> {
         if self.node.is_empty() { return None; }
         let r = self.plan_many(g, router, &[(from, goal)]).pop().unwrap();
         self.count(&r);
@@ -106,13 +106,12 @@ impl StationNetwork {
 
     /// plan() for many (from, goal) pairs without bookkeeping: the direct routes as one router batch, then both legs
     /// of every candidate station as one batch. Each result equals plan(from, goal) (a pure function of the pair).
-    pub fn plan_many<G: PlanGraph + ?Sized>(&self, g: &G, router: &mut dyn Router, ods: &[(i32, i32)]) -> Vec<Option<Plan>> {
+    pub fn plan_many<G: PlanGraph + Sync + ?Sized>(&self, g: &G, router: &mut dyn Router, ods: &[(i32, i32)]) -> Vec<Option<Plan>> {
         if self.node.is_empty() { return ods.iter().map(|_| None).collect(); }
         let directs = router.route_batch(ods, None, None);
-        let mut cand: Vec<(usize, Vec<usize>, f64)> = Vec::new();   // (od index, candidate stations, direct time)
-        let mut qs: Vec<(i32, i32)> = Vec::new();
-        for (k, d) in directs.into_iter().enumerate() {
-            let Some(direct) = to_result(g, d) else { continue };
+        // candidate stations per OD (nearest to the direct route's nodes), in parallel for larger batches (pure per OD)
+        let pick = |k: usize, d: Option<Vec<i32>>| -> Option<(usize, Vec<usize>, f64)> {
+            let direct = to_result(g, d)?;
             let (from, goal) = ods[k];
             let stride = 1usize.max((direct.nodes.len() as f64 / 400.0).floor() as usize);
             let mut scored: Vec<(usize, f64)> = Vec::new();
@@ -124,10 +123,14 @@ impl StationNetwork {
                 scored.push((s, best));
             }
             scored.sort_by(|a, b| jm::cmp_of(a.1 - b.1));
-            let cs: Vec<usize> = scored.iter().take(self.cfg.max_candidates).map(|c| c.0).collect();
-            for &s in &cs { qs.push((from, self.node[s])); qs.push((self.node[s], goal)); }
-            cand.push((k, cs, direct.time));
-        }
+            Some((k, scored.iter().take(self.cfg.max_candidates).map(|c| c.0).collect(), direct.time))
+        };
+        let cand: Vec<(usize, Vec<usize>, f64)> = if ods.len() >= 4 {
+            use rayon::prelude::*;
+            directs.into_par_iter().enumerate().filter_map(|(k, d)| pick(k, d)).collect()
+        } else { directs.into_iter().enumerate().filter_map(|(k, d)| pick(k, d)).collect() };
+        let mut qs: Vec<(i32, i32)> = Vec::new();
+        for (k, cs, _) in &cand { let (from, goal) = ods[*k]; for &s in cs { qs.push((from, self.node[s])); qs.push((self.node[s], goal)); } }
         let legs = router.route_batch(&qs, None, None);
         let mut out: Vec<Option<Plan>> = ods.iter().map(|_| None).collect();
         let mut q = 0usize;

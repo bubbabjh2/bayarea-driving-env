@@ -94,6 +94,7 @@ impl LaneIndex {
             let mut l = vs.lane_lo[i] as i64;
             while l <= vs.lane_hi[i] as i64 { let k = (base + l) as usize; if self.count[k] == 0 { self.touched[nt] = k as i32; nt += 1; } self.count[k] += 1; l += 1; }
         }
+        // load-bearing: the lane ranges laid out in key order (dropping this sort breaks the obs / v2 traces)
         self.touched[..nt].sort_unstable();
         let mut acc = 0i32;
         for q in 0..nt { let k = self.touched[q] as usize; self.lstart[k] = acc; acc += self.count[k]; self.lend[k] = self.lstart[k]; }
