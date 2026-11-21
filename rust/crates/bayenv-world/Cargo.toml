@@ -1,0 +1,25 @@
+[package]
+name = "bayenv-world"
+description = "Bay Area driving env: world data (roads, lanes, junctions, controls, surfaces, DEM) loaders, junction builder, baked world format"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+
+[dependencies]
+memmap2.workspace = true
+bytemuck.workspace = true
+rayon.workspace = true
+flate2.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+xxhash-rust.workspace = true
+libm.workspace = true
+
+[[bin]]
+name = "build-junctions"
+path = "src/bin/build_junctions.rs"
+
+[[bin]]
+name = "bayenv-world"
+path = "src/bin/bayenv_world.rs"

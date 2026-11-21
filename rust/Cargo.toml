@@ -1,0 +1,44 @@
+[workspace]
+resolver = "2"
+members = [
+    "crates/bayenv-world",
+    "crates/bayenv-sim",
+    "crates/bayenv-gpu",
+    "crates/bayenv-py",
+]
+
+[workspace.package]
+version = "0.1.0"
+edition = "2021"
+license = "MIT"
+repository = "https://github.com/bubbabjh2/bayarea-driving-env"
+rust-version = "1.85"
+
+[workspace.dependencies]
+bayenv-world = { path = "crates/bayenv-world" }
+bayenv-sim = { path = "crates/bayenv-sim" }
+bayenv-gpu = { path = "crates/bayenv-gpu" }
+memmap2 = "=0.9.12"
+bytemuck = { version = "=1.25.2", features = ["derive", "extern_crate_alloc"] }
+rayon = "=1.12.0"
+flate2 = "=1.1.11"
+serde = { version = "1", features = ["derive"] }
+serde_json = "=1.0.154"
+xxhash-rust = { version = "=0.8.21", features = ["xxh3"] }
+libm = "=0.2.16"
+wgpu = "=30.0.2"
+pollster = "=1.0.3"
+pyo3 = "=0.30.1"
+numpy = "=0.30.0"
+
+[profile.release]
+opt-level = 3
+lto = "thin"
+codegen-units = 1
+debug = 1
+
+# the junction builder and loaders are slow in debug; tests run them on the real world
+[profile.dev.package."*"]
+opt-level = 2
+[profile.test]
+opt-level = 2
