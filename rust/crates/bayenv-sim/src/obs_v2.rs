@@ -161,7 +161,9 @@ pub struct Guidance {
 
 /// Guidance.at(d) result (the fields eyes.js reads)
 #[derive(Clone, Copy, Debug)]
-pub struct GuideAt { pub next: usize, pub distance_to_next: f64, pub lane_hint: u8 }
+pub struct GuideAt { pub next: usize, pub distance_to_next: f64, pub lane_hint: u8,
+    /// index of `following` (the maneuver after next, skipping completed ones), None = null
+    pub following: Option<usize> }
 
 impl Guidance {
     /// `new Guidance(graph, edges, {stops: stop_node.map(|n| [{node: n, type: 'refuel'}])})`
@@ -272,9 +274,11 @@ impl Guidance {
         let mut k = lo as isize - 1;
         while k >= 0 && d - ms[k as usize].at < 15.0 { if ms[k as usize].stop && !ms[k as usize].done { lo = k as usize; break; } k -= 1; }
         let nx = &ms[lo];
+        let mut fi = lo + 1; while fi < ms.len() - 1 && ms[fi].done { fi += 1; }
+        let following = if fi < ms.len() { Some(fi) } else { None };
         let distance_to_next = jm::max(0.0, nx.at - d);
         let lane_hint = if nx.side != SIDE_NONE && nx.ty != man::MERGE && distance_to_next <= LANE_HINT_HORIZON { nx.side } else { SIDE_NONE };
-        GuideAt { next: lo, distance_to_next, lane_hint }
+        GuideAt { next: lo, distance_to_next, lane_hint, following }
     }
 
     /// Guidance.laneEndAhead(d, lane, {maxDist}): distance to the end of `lane` (sim lane mapping), or None
@@ -340,6 +344,81 @@ impl Near {
          self.left_ahead, self.left_behind, self.left_ahead_speed, self.left_behind_speed, self.right_ahead, self.right_behind, self.right_ahead_speed, self.right_behind_speed,
          bf(self.left_exists), bf(self.right_exists), self.heading_error, self.lane_end_gap, self.left_end_gap, self.right_end_gap,
          self.end_dist, self.end_side, self.left_end_dist, self.right_end_dist]
+    }
+}
+
+/// The rest of what the heuristic teacher (heuristicDriver.js act) reads after Driver.sense, besides `eyes.near`:
+/// the Driver's private obs copy `o` AFTER Driver._adjust, `this.guide` (Guidance.at(routeDistance), after a refuel
+/// stop completion) and `this.late`. All f64, unclamped (the 70 inputs hold some of these clamped / f32-rounded).
+/// JS null / undefined = `None`. With the sim's obs `control`, `control.yieldRequired`, `grade` and `guide` are
+/// always present and `kink` is always null (KINKS_ENABLED = false); the Options mirror the JS types.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct TeacherObs {
+    /// o.speed = obs.speed
+    pub speed: f64,
+    /// o.heading = o.laneHeading + r.he (delay-compensated)
+    pub heading: f64,
+    /// o.laneHeading = obs.laneHeading
+    pub lane_heading: f64,
+    pub lane_width: f64, pub speed_limit: f64,
+    /// obs.laneIndex / obs.laneCount (raw, not clamped)
+    pub lane_index: f64, pub lane_count: f64,
+    /// o.laneOffset = r.off, o.steerAngle = r.steer (delay-compensated)
+    pub lane_offset: f64, pub steer_angle: f64,
+    pub control: Option<TeacherControl>,
+    pub kink: Option<TeacherKink>,
+    /// o.grade [g0, g1, g2] raw (gradeObs.js, + uphill)
+    pub grade: Option<[f64; 3]>,
+    pub guide: Option<TeacherGuide>,
+    /// this.late.lateFeature (eyes.js lateness: clamp((required - speedLimit) / speedLimit, -1, 1), 0 when undefined)
+    pub late_feature: f64,
+}
+/// obs.control (sim obs.js): type -1 none / 0 signal / 1 stop / 2 give_way / 3 ramp_meter / 4 crossing; state 0 green,
+/// 1 yellow, 2 red, 3 sign, 4 dark; distance (Infinity when type -1); movement 0 through / 1 left / 2 right
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct TeacherControl { pub ty: f64, pub state: f64, pub distance: f64, pub time_in_state: f64, pub time_to_change: f64, pub movement: f64, pub stopped: bool, pub yield_required: Option<bool> }
+/// Guidance.nextKink result {distance, angle} (never produced: KINKS_ENABLED = false)
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct TeacherKink { pub distance: f64, pub angle: f64 }
+/// a guidance maneuver: `ty` = guidance.js MANEUVER_TYPES index ([`man`]), at_distance = m.atDistance
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct TeacherManeuver { pub ty: u8, pub at_distance: f64 }
+/// Guidance.at(routeDistance): laneHint ([`SIDE_NONE`] / [`SIDE_LEFT`] / [`SIDE_RIGHT`] for 'none' / 'left' / 'right'),
+/// distanceToNext, nextManeuver, following (null = None)
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct TeacherGuide { pub lane_hint: u8, pub distance_to_next: f64, pub next: TeacherManeuver, pub following: Option<TeacherManeuver> }
+
+/// Column names of [`TeacherObs::to_array`] (= the oracle's v2.teacher rows). `*.present` / booleans are 0 / 1;
+/// absent values (None) are NaN; laneHint is 0 none / 1 left / 2 right (SIDE_*), maneuver types MANEUVER_TYPES indices.
+pub const TEACHER_FIELDS: [&str; 35] = ["speed", "heading", "laneHeading", "laneWidth", "speedLimit", "laneIndex", "laneCount", "laneOffset", "steerAngle",
+    "control.present", "control.type", "control.state", "control.distance", "control.timeInState", "control.timeToChange", "control.movement", "control.stopped",
+    "control.yieldRequired.present", "control.yieldRequired",
+    "kink.present", "kink.distance", "kink.angle", "grade.present", "grade.0", "grade.1", "grade.2",
+    "guide.present", "guide.laneHint", "guide.distanceToNext", "guide.next.type", "guide.next.atDistance",
+    "guide.following.present", "guide.following.type", "guide.following.atDistance", "lateFeature"];
+pub const TEACHER_N: usize = TEACHER_FIELDS.len();
+impl Default for TeacherObs {
+    fn default() -> Self {
+        TeacherObs { speed: 0.0, heading: 0.0, lane_heading: 0.0, lane_width: 0.0, speed_limit: 0.0, lane_index: 0.0, lane_count: 0.0, lane_offset: 0.0, steer_angle: 0.0,
+            control: None, kink: None, grade: None, guide: None, late_feature: 0.0 }
+    }
+}
+impl TeacherObs {
+    pub fn to_array(&self) -> [f64; TEACHER_N] {
+        let bf = |x: bool| if x { 1.0 } else { 0.0 };
+        let nan = f64::NAN;
+        let c = self.control;
+        let cf = |f: fn(&TeacherControl) -> f64| c.as_ref().map_or(nan, f);
+        let yr = c.and_then(|c| c.yield_required);
+        let g = self.guide;
+        let fo = g.and_then(|g| g.following);
+        [self.speed, self.heading, self.lane_heading, self.lane_width, self.speed_limit, self.lane_index, self.lane_count, self.lane_offset, self.steer_angle,
+         bf(c.is_some()), cf(|c| c.ty), cf(|c| c.state), cf(|c| c.distance), cf(|c| c.time_in_state), cf(|c| c.time_to_change), cf(|c| c.movement), cf(|c| if c.stopped { 1.0 } else { 0.0 }),
+         bf(yr.is_some()), yr.map_or(nan, bf),
+         bf(self.kink.is_some()), self.kink.map_or(nan, |k| k.distance), self.kink.map_or(nan, |k| k.angle),
+         bf(self.grade.is_some()), self.grade.map_or(nan, |x| x[0]), self.grade.map_or(nan, |x| x[1]), self.grade.map_or(nan, |x| x[2]),
+         bf(g.is_some()), g.map_or(nan, |g| g.lane_hint as f64), g.map_or(nan, |g| g.distance_to_next), g.map_or(nan, |g| g.next.ty as f64), g.map_or(nan, |g| g.next.at_distance),
+         bf(fo.is_some()), fo.map_or(nan, |m| m.ty as f64), fo.map_or(nan, |m| m.at_distance), self.late_feature]
     }
 }
 
@@ -429,30 +508,39 @@ impl V2Encoder {
     }
 
     /// Driver.sense for `slot` (a driving car): writes the 70 floats into out[..70]. Call once per step per driving slot.
-    pub fn encode_v2(&mut self, sim: &mut Sim, slot: usize, out: &mut [f32]) { self.encode_v2_impl(sim, slot, out, None) }
+    pub fn encode_v2(&mut self, sim: &mut Sim, slot: usize, out: &mut [f32]) { self.encode_v2_impl(sim, slot, out, None, None) }
     /// encode_v2 that also writes the driver's `eyes.near` after the sense into `near`.
-    pub fn encode_v2_near(&mut self, sim: &mut Sim, slot: usize, out: &mut [f32], near: &mut Near) { self.encode_v2_impl(sim, slot, out, Some(near)) }
-    fn encode_v2_impl(&mut self, sim: &mut Sim, slot: usize, out: &mut [f32], near: Option<&mut Near>) {
+    pub fn encode_v2_near(&mut self, sim: &mut Sim, slot: usize, out: &mut [f32], near: &mut Near) { self.encode_v2_impl(sim, slot, out, Some(near), None) }
+    /// encode_v2 that also writes `eyes.near` and the teacher's view ([`TeacherObs`]: adjusted obs, guide, lateness).
+    pub fn encode_v2_teacher(&mut self, sim: &mut Sim, slot: usize, out: &mut [f32], near: &mut Near, teacher: &mut TeacherObs) { self.encode_v2_impl(sim, slot, out, Some(near), Some(teacher)) }
+    fn encode_v2_impl(&mut self, sim: &mut Sim, slot: usize, out: &mut [f32], near: Option<&mut Near>, teacher: Option<&mut TeacherObs>) {
         let i = slot;
         let mut o = std::mem::take(&mut self.obs);
         observe_one(sim, i, &mut o, None);
         let sim: &Sim = sim;
         let st = self.sync(sim, i);
-        encode_core(st, sim, i, &o, out, near);
+        encode_core(st, sim, i, &o, out, near, teacher);
         self.obs = o;
     }
 
     /// encode_v2 for many driving slots (ascending, distinct) into rows of OBS2 floats: trip states synced in slot
     /// order, then observation + encoding per car in parallel (opts.parallel; each car reads only shared state and
     /// its own trip state), then the observations' state effects applied. Same result as encode_v2 slot by slot.
-    pub fn encode_batch(&mut self, sim: &mut Sim, slots: &[usize], out: &mut [f32]) { self.encode_batch_near(sim, slots, out, None) }
+    pub fn encode_batch(&mut self, sim: &mut Sim, slots: &[usize], out: &mut [f32]) { self.encode_batch_teacher(sim, slots, out, None, None) }
     /// encode_batch that also writes each slot's `eyes.near` into `near[k]` (k = index into `slots`) when given.
-    pub fn encode_batch_near(&mut self, sim: &mut Sim, slots: &[usize], out: &mut [f32], near: Option<&mut [Near]>) {
+    pub fn encode_batch_near(&mut self, sim: &mut Sim, slots: &[usize], out: &mut [f32], near: Option<&mut [Near]>) { self.encode_batch_teacher(sim, slots, out, near, None) }
+    /// encode_batch that also writes `near[k]` and / or `teacher[k]` ([`TeacherObs`]) per slot when given.
+    pub fn encode_batch_teacher(&mut self, sim: &mut Sim, slots: &[usize], out: &mut [f32], near: Option<&mut [Near]>, teacher: Option<&mut [TeacherObs]>) {
         assert!(out.len() >= slots.len() * OBS2);
         let mut scratch: Vec<Near> = Vec::new();
         let (near, want): (&mut [Near], bool) = match near {
             Some(n) => { assert!(n.len() >= slots.len(), "encode_batch_near: near too short"); (&mut n[..slots.len()], true) }
             None => { scratch.resize(slots.len(), Near::default()); (&mut scratch[..], false) }
+        };
+        let mut tscratch: Vec<TeacherObs> = Vec::new();
+        let (teacher, want_t): (&mut [TeacherObs], bool) = match teacher {
+            Some(n) => { assert!(n.len() >= slots.len(), "encode_batch_teacher: teacher too short"); (&mut n[..slots.len()], true) }
+            None => { tscratch.resize(slots.len(), TeacherObs::default()); (&mut tscratch[..], false) }
         };
         for &i in slots { self.sync(sim, i); }
         let me: &Sim = sim;
@@ -461,22 +549,26 @@ impl V2Encoder {
             let mut it = self.slots.iter_mut().enumerate();
             for &i in slots { loop { let (k, s) = it.next().expect("encode_batch: slots must be ascending"); if k == i { states.push(s.as_mut().unwrap()); break; } } }
         }
-        let job = |st: &mut TripState, i: usize, row: &mut [f32], nr: &mut Near| -> Option<i32> {
+        let job = |st: &mut TripState, i: usize, row: &mut [f32], nr: &mut Near, tr: &mut TeacherObs| -> Option<i32> {
             let mut o = Obs::default();
             observe_one_ro(me, i, &mut o, None);
-            encode_core(st, me, i, &o, row, if want { Some(nr) } else { None });
+            encode_core(st, me, i, &o, row, if want { Some(nr) } else { None }, if want_t { Some(tr) } else { None });
             o.yield_write
         };
         let writes: Vec<Option<i32>> = if me.opts.parallel && slots.len() >= 128 {
             use rayon::prelude::*;
-            states.into_par_iter().zip(slots.par_iter()).zip(out[..slots.len() * OBS2].par_chunks_mut(OBS2)).zip(near.par_iter_mut()).with_min_len(16).map(|(((st, &i), row), nr)| job(st, i, row, nr)).collect()
-        } else { states.into_iter().zip(slots.iter()).zip(out[..slots.len() * OBS2].chunks_mut(OBS2)).zip(near.iter_mut()).map(|(((st, &i), row), nr)| job(st, i, row, nr)).collect() };
+            states.into_par_iter().zip(slots.par_iter()).zip(out[..slots.len() * OBS2].par_chunks_mut(OBS2)).zip(near.par_iter_mut()).zip(teacher.par_iter_mut()).with_min_len(16)
+                .map(|((((st, &i), row), nr), tr)| job(st, i, row, nr, tr)).collect()
+        } else {
+            states.into_iter().zip(slots.iter()).zip(out[..slots.len() * OBS2].chunks_mut(OBS2)).zip(near.iter_mut()).zip(teacher.iter_mut())
+                .map(|((((st, &i), row), nr), tr)| job(st, i, row, nr, tr)).collect()
+        };
         for (k, w) in writes.into_iter().enumerate() { if let Some(v) = w { sim.set_yield_by(slots[k], v); } }
     }
 }
 
 /// Driver.sense on an observation already filled for slot i (the 70 floats into out[..70]).
-fn encode_core(st: &mut TripState, sim: &Sim, i: usize, o: &Obs, out: &mut [f32], near: Option<&mut Near>) {
+fn encode_core(st: &mut TripState, sim: &Sim, i: usize, o: &Obs, out: &mut [f32], near: Option<&mut Near>, teacher: Option<&mut TeacherObs>) {
         let g = sim.gw();
         let delta = &sim.pop.deltas[sim.vs.commuter[i] as usize * 64..sim.vs.commuter[i] as usize * 64 + 4];
         let (aggression, patience, reaction_time, headway) = (delta[0] as f64, delta[1] as f64, delta[2] as f64, delta[3] as f64);
@@ -634,6 +726,21 @@ fn encode_core(st: &mut TripState, sim: &Sim, i: usize, o: &Obs, out: &mut [f32]
             if own_end < f64::INFINITY { nr.end_dist = own_end; nr.end_side = own_side; }
             else if let Some((d, s)) = plan { nr.end_dist = d; nr.end_side = s as f64; }
         }
+        if let Some(t) = teacher {
+            // Driver.sense's private obs copy after _adjust (o.laneOffset = r.off, o.heading = laneHeading + r.he,
+            // o.steerAngle = r.steer), this.guide, this.late
+            let ms = &st.guide.maneuvers;
+            let mv = |k: usize| TeacherManeuver { ty: ms[k].ty, at_distance: ms[k].at };
+            *t = TeacherObs {
+                speed: v, heading: o.lane_heading + s_he, lane_heading: o.lane_heading, lane_width: o.lane_width, speed_limit: o.speed_limit,
+                lane_index: o.lane_index as f64, lane_count: o.lane_count as f64, lane_offset: s_lat, steer_angle: s_steer,
+                control: Some(TeacherControl { ty: ct.ty as f64, state: ct.state as f64, distance: ct.distance, time_in_state: ct.time_in_state,
+                    time_to_change: ct.time_to_change, movement: ct.movement as f64, stopped: ct.stopped, yield_required: Some(ct.yield_required) }),
+                kink: None, grade: Some(o.grade),
+                guide: Some(TeacherGuide { lane_hint: ga.lane_hint, distance_to_next: ga.distance_to_next, next: mv(ga.next), following: ga.following.map(mv) }),
+                late_feature: late,
+            };
+        }
         // position mode, input version 2: road grade in 41..43
         for k in 0..3 { let x = o.grade[k] / 0.35; inp[WHEEL_OFFSET + k] = (if x > 1.0 { 1.0 } else if x < -1.0 { -1.0 } else { x }) as f32; }
 }
@@ -649,7 +756,23 @@ pub struct V2Check { pub steps: usize, pub rows: usize, pub mismatches: Vec<V2Mi
     /// obs::observe_one alone (fill_obs + signals), timed on the recorded rows: the part of encode_ns that is the env obs
     pub observe_ns: f64, pub state_unchanged: Option<bool>,
     /// rows whose `eyes.near` was compared (v2.pack section v2.near present), and the near mismatches
-    pub near_rows: usize, pub near_mismatches: Vec<NearMismatch> }
+    pub near_rows: usize, pub near_mismatches: Vec<NearMismatch>,
+    /// rows whose TeacherObs was compared (section v2.teacher), its mismatches (field = TEACHER_FIELDS name), coverage
+    pub teacher_rows: usize, pub teacher_mismatches: Vec<NearMismatch>, pub teacher_coverage: TeacherCoverage }
+
+/// How many compared rows exercised each optional / variable TeacherObs part (counted on the Rust values).
+#[derive(Debug, Default, Clone, Copy)]
+pub struct TeacherCoverage {
+    /// control object present / with a real control (type >= 0)
+    pub control_present: usize, pub control_real: usize,
+    /// control.yieldRequired defined / true
+    pub yield_defined: usize, pub yield_true: usize,
+    pub kink_present: usize, pub guide_present: usize,
+    /// guide.following non-null; laneHint != none
+    pub following: usize, pub lane_hint: usize,
+    /// lateFeature != 0
+    pub late_nonzero: usize,
+}
 
 /// One `eyes.near` mismatch: recorded step, slot, field (NEAR_FIELDS name), JS / Rust value.
 #[derive(Debug)]
@@ -672,8 +795,16 @@ pub fn check_v2(dir: &str, max: usize, state_check: bool) -> V2Check {
         assert_eq!(names, NEAR_FIELDS.iter().map(|s| s.to_string()).collect::<Vec<_>>(), "v2.near field order");
         Some(pk.f64s("v2.near"))
     } else { None };
+    let vteach = if pk.has("v2.teacher") {
+        let names: Vec<String> = pk.meta["teacherFields"].as_array().expect("meta.teacherFields").iter().map(|x| x.as_str().unwrap().to_string()).collect();
+        assert_eq!(names, TEACHER_FIELDS.iter().map(|s| s.to_string()).collect::<Vec<_>>(), "v2.teacher field order");
+        Some(pk.f64s("v2.teacher"))
+    } else { None };
+    let aux = vnear.is_some() || vteach.is_some();
     let mut near_row = Near::default();
+    let mut teach_row = TeacherObs::default();
     let mut batch_near: Vec<Near> = Vec::new();
+    let mut batch_teach: Vec<TeacherObs> = Vec::new();
     let mut enc = V2Encoder::new(&env.world).with_names(pk.i32s("edge.ref"), pk.i32s("edge.name"));
     let mut pol = Policy::new(run["policy"].as_str().unwrap(), run["seed"].as_f64().unwrap());
     let mut res = V2Check::default();
@@ -688,7 +819,7 @@ pub fn check_v2(dir: &str, max: usize, state_check: bool) -> V2Check {
         enc.record_actions(&env.sim);
         env.step(1);
         let slots = crate::obs::driving_slots(&env.sim);
-        if batch { batch_rows.resize(slots.len() * OBS2, 0.0); batch_near.resize(slots.len(), Near::default()); }
+        if batch { batch_rows.resize(slots.len() * OBS2, 0.0); batch_near.resize(slots.len(), Near::default()); batch_teach.resize(slots.len(), TeacherObs::default()); }
         let recorded = k % every == 0;
         if recorded && vn[rec] as usize != slots.len() {
             res.mismatches.push(V2Mismatch { step: k, slot: usize::MAX, index: usize::MAX, js: vn[rec] as f32, rust: slots.len() as f32 });
@@ -696,13 +827,14 @@ pub fn check_v2(dir: &str, max: usize, state_check: bool) -> V2Check {
         }
         if batch {
             let t = std::time::Instant::now();
-            enc.encode_batch_near(&mut env.sim, &slots, &mut batch_rows[..], if vnear.is_some() { Some(&mut batch_near[..]) } else { None });
+            if aux { enc.encode_batch_teacher(&mut env.sim, &slots, &mut batch_rows[..], Some(&mut batch_near[..]), Some(&mut batch_teach[..])); }
+            else { enc.encode_batch(&mut env.sim, &slots, &mut batch_rows[..]); }
             ns += t.elapsed().as_nanos(); res.encodes += slots.len();
         }
         for (r, &i) in slots.iter().enumerate() {
-            if batch { row.copy_from_slice(&batch_rows[r * OBS2..(r + 1) * OBS2]); near_row = batch_near.get(r).copied().unwrap_or_default(); if !recorded { continue; } } else {
+            if batch { row.copy_from_slice(&batch_rows[r * OBS2..(r + 1) * OBS2]); near_row = batch_near.get(r).copied().unwrap_or_default(); teach_row = batch_teach.get(r).copied().unwrap_or_default(); if !recorded { continue; } } else {
             let t = std::time::Instant::now();
-            if vnear.is_some() { enc.encode_v2_near(&mut env.sim, i, &mut row, &mut near_row); } else { enc.encode_v2(&mut env.sim, i, &mut row); }
+            if aux { enc.encode_v2_teacher(&mut env.sim, i, &mut row, &mut near_row, &mut teach_row); } else { enc.encode_v2(&mut env.sim, i, &mut row); }
             ns += t.elapsed().as_nanos(); res.encodes += 1;
             if !recorded { continue; }
             let t = std::time::Instant::now();
@@ -728,6 +860,22 @@ pub fn check_v2(dir: &str, max: usize, state_check: bool) -> V2Check {
                     }
                 }
                 res.near_rows += 1;
+            }
+            if let Some(vt) = &vteach {
+                let a = teach_row.to_array();
+                for (f, &y) in a.iter().enumerate() {
+                    let x = vt[q * TEACHER_N + f];
+                    if x.to_bits() != y.to_bits() && !(x.is_nan() && y.is_nan()) {
+                        res.teacher_mismatches.push(NearMismatch { step: k, slot: i, field: TEACHER_FIELDS[f], js: x, rust: y });
+                        if res.teacher_mismatches.len() >= max { res.steps = k; break 'outer; }
+                    }
+                }
+                let (t, c) = (&teach_row, &mut res.teacher_coverage);
+                if let Some(ct) = t.control { c.control_present += 1; if ct.ty >= 0.0 { c.control_real += 1; } if let Some(y) = ct.yield_required { c.yield_defined += 1; if y { c.yield_true += 1; } } }
+                if t.kink.is_some() { c.kink_present += 1; }
+                if let Some(g) = t.guide { c.guide_present += 1; if g.following.is_some() { c.following += 1; } if g.lane_hint != SIDE_NONE { c.lane_hint += 1; } }
+                if t.late_feature != 0.0 { c.late_nonzero += 1; }
+                res.teacher_rows += 1;
             }
             res.rows += 1;
         }

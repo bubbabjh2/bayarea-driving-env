@@ -19,7 +19,10 @@
 //   v2.n (u32 per recorded step: driving cars), v2.slot (i32), v2.x (f32 rows of 70),
 //   edge.ref / edge.name (i32 per edge: interned road ref / name, 0 = '', for guidance 'continue' maneuvers),
 //   v2.near (f64 rows of NEAR_FIELDS.length: the driver's eyes.near after sense, booleans 0/1, Infinity kept),
-//   meta {kind: 'v2', every, steps, inputSize, nearFields, setRouteCalls, stopRoutes, stopsCompleted}
+//   v2.teacher (f64 rows of TEACHER_FIELDS.length: what the heuristic teacher reads besides eyes.near: the driver's obs
+//     copy after Driver._adjust, this.guide, this.late.lateFeature; null / undefined -> NaN with a `.present` 0/1 column,
+//     laneHint 0 none / 1 left / 2 right, maneuver types MANEUVER_TYPES indices),
+//   meta {kind: 'v2', every, steps, inputSize, nearFields, teacherFields, setRouteCalls, stopRoutes, stopsCompleted}
 // (v2.near / meta.nearFields are additions; readers of older packs without them skip the near check)
 import fs from 'node:fs';
 import { buildEnv, makePolicy } from './trace.mjs';
@@ -32,7 +35,7 @@ const argv = process.argv.slice(2);
 const arg = (k, d) => { const i = argv.indexOf('--' + k); return i >= 0 ? argv[i + 1] : d; };
 const BRAIN = arg('brain', '/Users/bradenhuffman/Documents/youtube/bayarea-driving-sim');
 const { Driver } = await import(`${BRAIN}/src/brain/driver.js`);
-const { Guidance } = await import(`${BRAIN}/src/nav/guidance.js`);
+const { Guidance, MANEUVER_TYPES } = await import(`${BRAIN}/src/nav/guidance.js`);
 const { INPUT_SIZE } = await import(`${BRAIN}/src/brain/eyes.js`);
 
 const world = arg('world', 'synthetic'), n = +arg('n', 300), seed = +arg('seed', 1), mode = arg('mode', 'full');
@@ -88,6 +91,28 @@ const NEAR_FIELDS = ['leaderGap', 'leaderSpeed', 'leaderRel', 'behindGap', 'behi
   'leftAhead', 'leftBehind', 'leftAheadSpeed', 'leftBehindSpeed', 'rightAhead', 'rightBehind', 'rightAheadSpeed', 'rightBehindSpeed',
   'leftExists', 'rightExists', 'headingError', 'laneEndGap', 'leftEndGap', 'rightEndGap', 'endDist', 'endSide', 'leftEndDist', 'rightEndDist'];
 const nearRows = [];
+// obs_v2.rs TEACHER_FIELDS
+const TEACHER_FIELDS = ['speed', 'heading', 'laneHeading', 'laneWidth', 'speedLimit', 'laneIndex', 'laneCount', 'laneOffset', 'steerAngle',
+  'control.present', 'control.type', 'control.state', 'control.distance', 'control.timeInState', 'control.timeToChange', 'control.movement', 'control.stopped',
+  'control.yieldRequired.present', 'control.yieldRequired',
+  'kink.present', 'kink.distance', 'kink.angle', 'grade.present', 'grade.0', 'grade.1', 'grade.2',
+  'guide.present', 'guide.laneHint', 'guide.distanceToNext', 'guide.next.type', 'guide.next.atDistance',
+  'guide.following.present', 'guide.following.type', 'guide.following.atDistance', 'lateFeature'];
+const HINT = { none: 0, left: 1, right: 2 };
+const num = (v) => { if (typeof v === 'boolean') return +v; if (typeof v !== 'number') throw new Error(`teacher: non-number ${v}`); return v; };
+const opt = (v) => (v === undefined || v === null ? NaN : num(v));
+const mtype = (m) => { const k = MANEUVER_TYPES.indexOf(m.type); if (k < 0) throw new Error(`maneuver type ${m.type}`); return k; };
+function teacherRow(drv) {
+  const o = drv._obs, c = o.control, k = o.kink, gr = o.grade, g = drv.guide, f = g ? g.following : null;
+  if (g && !(g.laneHint in HINT)) throw new Error(`laneHint ${g.laneHint}`);
+  return Float64Array.from([num(o.speed), num(o.heading), num(o.laneHeading), num(o.laneWidth), num(o.speedLimit), num(o.laneIndex), num(o.laneCount), num(o.laneOffset), num(o.steerAngle),
+    c ? 1 : 0, c ? num(c.type) : NaN, c ? num(c.state) : NaN, c ? num(c.distance) : NaN, c ? num(c.timeInState) : NaN, c ? num(c.timeToChange) : NaN, c ? num(c.movement) : NaN, c ? num(c.stopped) : NaN,
+    c && c.yieldRequired !== undefined && c.yieldRequired !== null ? 1 : 0, c ? opt(c.yieldRequired) : NaN,
+    k ? 1 : 0, k ? num(k.distance) : NaN, k ? num(k.angle) : NaN, gr ? 1 : 0, gr ? num(gr[0]) : NaN, gr ? num(gr[1]) : NaN, gr ? num(gr[2]) : NaN,
+    g ? 1 : 0, g ? HINT[g.laneHint] : NaN, g ? num(g.distanceToNext) : NaN, g ? mtype(g.nextManeuver) : NaN, g ? num(g.nextManeuver.atDistance) : NaN,
+    f ? 1 : 0, f ? mtype(f) : NaN, f ? num(f.atDistance) : NaN, num(drv.late.lateFeature)]);
+}
+const teacherRows = [];
 const vN = [], vSlot = [], rows = [];
 let senseNs = 0n, senses = 0, stops0 = 0;
 const t0 = Date.now();
@@ -113,6 +138,7 @@ for (let k = 1; k <= steps; k++) {
     senseNs += process.hrtime.bigint() - tq; senses++;
     if (rec) {
       vSlot.push(it.slot); rows.push(Float32Array.from(input.subarray(0, INPUT_SIZE)));
+      teacherRows.push(teacherRow(r.drv));
       const nr = r.drv.eyes.near;
       nearRows.push(Float64Array.from(NEAR_FIELDS, (k) => { const v = nr[k]; if (v === undefined) throw new Error(`eyes.near.${k} undefined`); return typeof v === 'boolean' ? +v : v; }));
     }
@@ -122,11 +148,12 @@ for (const { drv } of recs.values()) stops0 += drv.stopsCompleted || 0;
 // GC the drivers of finished trips is not needed for these run lengths
 const X = new Float32Array(rows.length * INPUT_SIZE); rows.forEach((a, q) => X.set(a, q * INPUT_SIZE));
 const NX = new Float64Array(nearRows.length * NEAR_FIELDS.length); nearRows.forEach((a, q) => NX.set(a, q * NEAR_FIELDS.length));
+const TX = new Float64Array(teacherRows.length * TEACHER_FIELDS.length); teacherRows.forEach((a, q) => TX.set(a, q * TEACHER_FIELDS.length));
 const E = sim.graph.edges, refs = [''], names = [''];
 const intern = (tab, s) => { s = s || ''; let q = tab.indexOf(s); if (q < 0) { tab.push(s); q = tab.length - 1; } return q; };
 const eRef = Int32Array.from(E, (e) => intern(refs, e.ref)), eName = Int32Array.from(E, (e) => intern(names, e.name));
 const w = new PackWriter();
-w.add('v2.n', Uint32Array.from(vN)).add('v2.slot', Int32Array.from(vSlot)).add('v2.x', X).add('edge.ref', eRef).add('edge.name', eName).add('v2.near', NX);
-w.meta = { kind: 'v2', every, steps, inputSize: INPUT_SIZE, nearFields: NEAR_FIELDS, setRouteCalls, stopRoutes, stopsCompleted: stops0, refs: refs.length, names: names.length };
+w.add('v2.n', Uint32Array.from(vN)).add('v2.slot', Int32Array.from(vSlot)).add('v2.x', X).add('edge.ref', eRef).add('edge.name', eName).add('v2.near', NX).add('v2.teacher', TX);
+w.meta = { kind: 'v2', every, steps, inputSize: INPUT_SIZE, nearFields: NEAR_FIELDS, teacherFields: TEACHER_FIELDS, setRouteCalls, stopRoutes, stopsCompleted: stops0, refs: refs.length, names: names.length };
 w.write(`${out}/v2.pack`);
 console.log(JSON.stringify({ world, policy, steps, rows: rows.length, trips: recs.size, setRouteCalls, stopRoutes, stopsCompleted: stops0, refuelPlanned: sim.counters.refuelPlanned, refuelled: sim.counters.refuelled, reroutes: sim.counters.reroutes || 0, missedExits: sim.counters.missedExits || 0, senseNsPerAgent: Number(senseNs / BigInt(Math.max(1, senses))), wallS: (Date.now() - t0) / 1000, out }));
