@@ -15,7 +15,7 @@ use std::sync::Arc;
 // host logic beyond scatter (populations, streaming, refuel plans / pumps, obstacles, snapshots, resetDay)
 #[path = "host.rs"]
 pub mod host;
-pub use host::{CommuterTable, GpuPopulation, ObstacleKind, ObstacleSpec, Placed, Snapshot, StaticObstacle};
+pub use host::{CommuterTable, RouteProvider, RouteStats, GpuPopulation, ObstacleKind, ObstacleSpec, Placed, Snapshot, StaticObstacle};
 
 /// `GPU_DEFAULTS` subset that changes behaviour (the rest are constants of the JS defaults).
 #[derive(Clone, Debug)]
@@ -88,6 +88,11 @@ pub struct GpuOptions {
     pub return_trips: bool,
     /// wall-clock budget per frame for refuel plans (JS refuelBudgetMs = 4; f64::INFINITY = every queued plan each frame, deterministic)
     pub refuel_budget_ms: f64,
+    /// streaming: route prefetch workers (0 = serial A* at departure; n = n worker threads routing departures up to
+    /// `route_ahead` sim s ahead). Same routes and spawn steps for any value. Default: available cores
+    pub route_threads: usize,
+    /// streaming: prefetch horizon in sim seconds (JS setStreaming routeAhead = 300)
+    pub route_ahead: f64,
 }
 #[derive(Clone, Copy, Debug)]
 pub struct Features { pub lane_changes: bool, pub accidents: bool, pub fuel: bool, pub collisions: bool, pub yield_: bool, pub policy: bool, pub zip_fix: bool, pub empty: bool }
@@ -121,7 +126,8 @@ impl Default for GpuOptions {
     fn default() -> Self {
         GpuOptions { capacity: 131072, dt: 0.05, start_time: 5.0 * 3600.0, seed: 1, obs: ObsMode::V2, steer_rate: false, decide_every: 1, features: Features::default(),
             controls: true, junctions: true, table_bits: 18, contact_cap: 131072, ev_cap: 16384, spawn_queue: 16384, op_cap: 16384, max_blocks: 4096, route_slack: 1 << 22,
-            resolve_rounds: 12, progress_weight: 1.0, jerk_weight: 0.5, jerk_reward: false, grade_obs: true, squeeze_delay: 15.0 * 60.0, deadlock_break: 0, reroute: true, keep_events: false, record_events: true, record_share: false, missed_at_out_edge: false, indirect_resolve: true, fused_resolve: true, sorted_order: true, fast_scan: true, fast_search: true, cpu_connector_join: true, contact_tangent: true, zero_init_workgroup: false, profile: false, return_trips: true, refuel_budget_ms: 4.0 }
+            resolve_rounds: 12, progress_weight: 1.0, jerk_weight: 0.5, jerk_reward: false, grade_obs: true, squeeze_delay: 15.0 * 60.0, deadlock_break: 0, reroute: true, keep_events: false, record_events: true, record_share: false, missed_at_out_edge: false, indirect_resolve: true, fused_resolve: true, sorted_order: true, fast_scan: true, fast_search: true, cpu_connector_join: true, contact_tangent: true, zero_init_workgroup: false, profile: false, return_trips: true, refuel_budget_ms: 4.0,
+            route_threads: std::thread::available_parallelism().map_or(1, |n| n.get()), route_ahead: 300.0 }
     }
 }
 
