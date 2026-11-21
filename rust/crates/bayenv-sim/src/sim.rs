@@ -662,34 +662,58 @@ impl Sim {
         }
         // single-threaded: phase A as well, two cars at a time with their vehicle dynamics interleaved
         // (VehicleStore::integrate_car2; each car's result is integrate_car's), written back serially
+        let mut par_ok = true;
         let batch = !par && self.opts.batch_dynamics && high >= 2 && self.vs.missed_t.len() + high <= 100000;
         if batch {
             let vs = &self.vs;
             let (time, step, pm) = (self.time, self.step_count, vs.position_mode);
             pre = (0..high).map(|_| None).collect();
-            let mut held: Option<(usize, Car, bool)> = None;
+            // groups of BATCH (4, or 2 with BAYENV_BATCH2) consecutive cars; the rest in pairs / alone
+            let width = if std::env::var("BAYENV_BATCH2").is_ok() { 2 } else { 4 };
+            let mut held: Vec<(usize, Car, bool)> = Vec::with_capacity(4);
+            let ring = |i: usize| &vs.ctrl_ring[i * 120..(i + 1) * 120];
+            let mut flush = |held: &mut Vec<(usize, Car, bool)>, pre: &mut Vec<Option<(Car, CarOut, i32, Car)>>| {
+                let mut outs: [CarOut; 4] = Default::default();
+                let rets: Vec<i32> = match held.len() {
+                    4 => {
+                        let [(i0, c0, l0), (i1, c1, l1), (i2, c2, l2), (i3, c3, l3)] = held.as_mut_slice() else { unreachable!() };
+                        let [o0, o1, o2, o3] = &mut outs;
+                        VehicleStore::integrate_car4([
+                            (c0, &vs.routes[*i0], ring(*i0), vs.missed_t.get(i0).copied(), o0, *l0), (c1, &vs.routes[*i1], ring(*i1), vs.missed_t.get(i1).copied(), o1, *l1),
+                            (c2, &vs.routes[*i2], ring(*i2), vs.missed_t.get(i2).copied(), o2, *l2), (c3, &vs.routes[*i3], ring(*i3), vs.missed_t.get(i3).copied(), o3, *l3)], pm, dt, time, &g, step).to_vec()
+                    }
+                    2 | 3 => {
+                        let (a, rest) = held.split_at_mut(1); let (b, rest) = rest.split_at_mut(1);
+                        let (oa, ob) = { let (x, y) = outs.split_at_mut(1); (&mut x[0], &mut y[0]) };
+                        let (ia, ib) = (a[0].0, b[0].0);
+                        let (x, y) = VehicleStore::integrate_car2((&mut a[0].1, &vs.routes[ia], ring(ia), vs.missed_t.get(&ia).copied(), oa, a[0].2), (&mut b[0].1, &vs.routes[ib], ring(ib), vs.missed_t.get(&ib).copied(), ob, b[0].2), pm, dt, time, &g, step);
+                        let mut v = vec![x, y];
+                        if let Some(c) = rest.first_mut() { let ic = c.0; v.push(VehicleStore::integrate_car(&mut c.1, &vs.routes[ic], ring(ic), vs.missed_t.get(&ic).copied(), pm, &mut outs[2], dt, time, &g, step, c.2)); }
+                        v
+                    }
+                    1 => { let c = &mut held[0]; let ic = c.0; vec![VehicleStore::integrate_car(&mut c.1, &vs.routes[ic], ring(ic), vs.missed_t.get(&ic).copied(), pm, &mut outs[0], dt, time, &g, step, c.2)] }
+                    _ => Vec::new(),
+                };
+                for (k, (i, c, _)) in held.drain(..).enumerate() { let mut pc = c; pc.update_pose(&g); pre[i] = Some((c, std::mem::take(&mut outs[k]), rets[k], pc)); }
+            };
             for i in 0..high {
                 let st = vs.state[i];
                 let locked = if st == STATE_DRIVING { false } else if st == STATE_CRASHED && (vs.speed[i] > 0.01 || jm::abs(f(vs.v_lat[i])) > 0.01 || jm::abs(f(vs.yaw_rate[i])) > 0.01) { true } else { continue };
                 let mut c = vs.gather(i);
                 if !locked && !fuel_on { c.fuel = vs.tank[i]; }
-                match held.take() {
-                    None => held = Some((i, c, locked)),
-                    Some((j, mut cj, lj)) => {
-                        let (mut oj, mut oi) = (CarOut::default(), CarOut::default());
-                        let (rj, ri) = VehicleStore::integrate_car2(
-                            (&mut cj, &vs.routes[j], &vs.ctrl_ring[j * 120..(j + 1) * 120], vs.missed_t.get(&j).copied(), &mut oj, lj),
-                            (&mut c, &vs.routes[i], &vs.ctrl_ring[i * 120..(i + 1) * 120], vs.missed_t.get(&i).copied(), &mut oi, locked), pm, dt, time, &g, step);
-                        let mut pj = cj; pj.update_pose(&g); pre[j] = Some((cj, oj, rj, pj));
-                        let mut pi = c; pi.update_pose(&g); pre[i] = Some((c, oi, ri, pi));
-                    }
-                }
+                held.push((i, c, locked));
+                if held.len() == width { flush(&mut held, &mut pre); }
             }
-            if let Some((j, mut cj, lj)) = held {
-                let mut oj = CarOut::default();
-                let rj = VehicleStore::integrate_car(&mut cj, &vs.routes[j], &vs.ctrl_ring[j * 120..(j + 1) * 120], vs.missed_t.get(&j).copied(), pm, &mut oj, dt, time, &g, step, lj);
-                let mut pj = cj; pj.update_pose(&g); pre[j] = Some((cj, oj, rj, pj));
-            }
+            flush(&mut held, &mut pre);
+        }
+        // stuck_cause (labels a car stuck past stuck_timeout) reads the cars ahead, which phase A has already
+        // integrated: in a step where a label may be computed, use the in-order path instead (exact; rare)
+        if (par || batch) && pre.iter().enumerate().any(|(i, p)| matches!(p, Some((c, _, 0, _)) if self.vs.state[i] == STATE_DRIVING && c.stopped_since >= 0.0
+                && self.time - f(c.stopped_since) > self.opts.stuck_timeout && self.stuck_labelled.get(&i) != Some(&c.stopped_since))) {
+            pre.clear(); par_ok = false;
+        }
+        let (par, batch) = (par && par_ok, batch && par_ok);
+        if batch {
             let ptrs = crate::vehicle::CarPtrs::new(&mut self.vs);
             for (i, p) in pre.iter().enumerate() { if let Some((c, _, _, _)) = p {
                 self.vs.px[i] = c.x; self.vs.pz[i] = c.z; self.vs.pyaw[i] = c.heading;
