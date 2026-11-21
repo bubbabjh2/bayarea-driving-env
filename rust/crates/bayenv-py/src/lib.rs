@@ -186,7 +186,9 @@ impl Env {
 
     /// Per-slot vehicle state as numpy arrays (one GPU readback): edge, s, speed, accel, lat, heading_rel, steer,
     /// state (0 free, 1 driving, 2 crashed / stranded, 5 refuelling), flags, crashed, disabled, collided, lane,
-    /// route_pos, odometer, fuel, gas, brake, yaw_rate, v_lat, x, y, z, heading.
+    /// route_pos, odometer, progress_m (route metres driven), speed_limit (m/s, current edge), fuel, gas, brake, yaw_rate, v_lat,
+    /// x, y, z, heading. `collided` = COLLIDED flag of the last step (any contact >= touchKmh in that step; act.wgsl
+    /// clears it at each decision). For k-step batches count the steps per slot from events() rows (kind 2/3, `step`).
     fn state<'py>(&mut self, py: Python<'py>) -> PyResult<Bound<'py, PyDict>> {
         if let Some(e) = cpu_only(self) {
             let v = &e.sim.vs; let n = v.high; let d = PyDict::new(py);
@@ -215,6 +217,9 @@ impl Env {
         d.set_item("disabled", PyArray1::from_vec(py, fl.iter().map(|&f| f & flag::DISABLED != 0).collect::<Vec<bool>>()))?;
         d.set_item("collided", PyArray1::from_vec(py, fl.iter().map(|&f| f & flag::COLLIDED != 0).collect::<Vec<bool>>()))?;
         d.set_item("lane", PyArray1::from_vec(py, col_u(veh::LANES).iter().map(|&w| (w & 255) as u8).collect::<Vec<u8>>()))?;
+        // speed limit (m/s) of each car's current edge (reward.js normalises route progress by it)
+        let g = &self.world.graph;
+        d.set_item("speed_limit", PyArray1::from_vec(py, col_u(veh::EDGE).iter().zip(&st).map(|(&e, &s)| if s != 0 && (e as usize) < g.edge_count { g.speed_limit[e as usize] as f32 } else { f32::NAN }).collect::<Vec<f32>>()))?;
         for (name, j) in [("x", 0), ("y", 1), ("z", 2), ("heading", 3)] { d.set_item(name, PyArray1::from_vec(py, (0..n).map(|i| pose[i * 4 + j]).collect::<Vec<f32>>()))?; }
         Ok(d)
     }
@@ -282,7 +287,8 @@ impl Env {
     }
 
     /// Per-slot events since the last call, as a dict of equal-length numpy arrays (one row per event and car):
-    /// time (s; arrivals: exact arrival time, others: end of the step batch), kind (1 arrived, 2 crashed = this car
+    /// step (global step index; rows sorted by (step, slot, kind)), time (s; arrivals: exact arrival time, others: end of
+    /// their step), kind (1 arrived, 2 crashed = this car
     /// disabled, 3 contact, 4 stranded, 5 cleared, 6 spawned, 7 missed exit, 8 signal / stop violation), slot,
     /// agent (trip id 2 * commuter + leg, -1 none), other (partner slot, -1 barrier / none), dv_kmh, other_dv_kmh,
     /// share (fault share, needs crash_share=True), late_by (arrived, populations: arrival - workStart s),
@@ -453,7 +459,7 @@ impl VecEnv {
         let mut all = bayenv_gpu::events::EventLog::default(); let mut envs = Vec::new();
         for (i, s) in self.sims.iter_mut().enumerate() {
             let r = s.take_records(); envs.extend(std::iter::repeat(i as i32).take(r.len()));
-            all.time.extend(r.time); all.kind.extend(r.kind); all.slot.extend(r.slot); all.agent.extend(r.agent); all.other.extend(r.other);
+            all.step.extend(r.step); all.time.extend(r.time); all.kind.extend(r.kind); all.slot.extend(r.slot); all.agent.extend(r.agent); all.other.extend(r.other);
             all.dv_kmh.extend(r.dv_kmh); all.other_dv_kmh.extend(r.other_dv_kmh); all.share.extend(r.share); all.late_by.extend(r.late_by);
             all.progress_m.extend(r.progress_m); all.trip_m.extend(r.trip_m); all.trip_s.extend(r.trip_s);
         }
@@ -464,7 +470,7 @@ impl VecEnv {
 
 fn events_dict<'py>(py: Python<'py>, r: &bayenv_gpu::events::EventLog, env: Option<Vec<i32>>) -> PyResult<Bound<'py, PyDict>> {
     let d = PyDict::new(py);
-    d.set_item("time", PyArray1::from_vec(py, r.time.clone()))?; d.set_item("kind", PyArray1::from_vec(py, r.kind.clone()))?;
+    d.set_item("step", PyArray1::from_vec(py, r.step.clone()))?; d.set_item("time", PyArray1::from_vec(py, r.time.clone()))?; d.set_item("kind", PyArray1::from_vec(py, r.kind.clone()))?;
     d.set_item("slot", PyArray1::from_vec(py, r.slot.clone()))?; d.set_item("agent", PyArray1::from_vec(py, r.agent.clone()))?;
     d.set_item("other", PyArray1::from_vec(py, r.other.clone()))?;
     for (k, v) in [("dv_kmh", &r.dv_kmh), ("other_dv_kmh", &r.other_dv_kmh), ("share", &r.share), ("late_by", &r.late_by), ("progress_m", &r.progress_m), ("trip_m", &r.trip_m), ("trip_s", &r.trip_s)] {
