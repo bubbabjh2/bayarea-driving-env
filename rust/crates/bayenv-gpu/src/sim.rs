@@ -6,6 +6,7 @@
 use crate::defines::{self, ObsMode, VEHICLE_PARAMS, VEHICLE_TYPE_WEIGHTS};
 use crate::gpu::{Gpu, Kernel};
 use crate::kernels;
+use crate::obs::{ObsDst, ObsFmt};
 use crate::layout::{self as L, ev, flag, io, op, state, veh, Params};
 use bayenv_world::{jsmath, World};
 use std::collections::{HashMap, HashSet};
@@ -234,6 +235,8 @@ pub struct GpuSim {
     /// per-slot event records (opts.record_events)
     pub rec: crate::events::EventLog,
     rec_mark: usize,
+    /// kernels/obs_f16.wgsl + its bind group (built on the first F16 readback)
+    half: Option<(Kernel, wgpu::BindGroup)>,
     /// a submitted batch whose readback / events are processed lazily (`run_steps_async`, `sync`)
     pending: Option<Pending>,
     io_host: Vec<u32>,
@@ -350,7 +353,7 @@ impl GpuSim {
             refuel_queue: Vec::new(), reroute_queue: Default::default(), last_reroute: HashMap::new(), lot: 0, new_pose: false, crashes: Vec::new(), active: Vec::new(),
             counters: Counters::default(), gpu_stats: [0; 64], events: Vec::new(), closed_key: None, closed_n: 0, closed_edges: Vec::new(),
             edge_speed_ema: HashMap::new(), edge_speed_order: Vec::new(), traffic_penalty: HashMap::new(), penalty_order: Vec::new(), pending_penalty: None, next_traffic: -1e9,
-            router: None, packer: None, out_staging: None, rec: Default::default(), rec_mark: 0, pending: None, staging, io_host: vec![0; io_words], profiler: None, js_stages: false, fast_search_ok: false, x: Default::default(), blob, gpu, opts,
+            router: None, packer: None, out_staging: None, half: None, rec: Default::default(), rec_mark: 0, pending: None, staging, io_host: vec![0; io_words], profiler: None, js_stages: false, fast_search_ok: false, x: Default::default(), blob, gpu, opts,
         };
         if !use_j { sim.blob.j_m = None; }
         if sim.opts.fast_search { sim.fast_search_ok = sim.polylines_monotone(); if !sim.fast_search_ok { eprintln!("bayenv-gpu: fast_search off (an edge / connector polyline has decreasing cumulative distance)"); } }
@@ -708,7 +711,11 @@ impl GpuSim {
 
     /// First half of `run_steps_into`: host work, encode, submit, map requests (no wait). Call `finish_steps`
     /// after the device was polled (several sims on one device: submit all, poll once, finish all).
-    pub fn submit_steps(&mut self, n: usize, obs_floats: usize, veh_words: usize) -> Pending {
+    pub fn submit_steps(&mut self, n: usize, obs_floats: usize, veh_words: usize) -> Pending { self.submit_steps_obs(n, obs_floats, None, veh_words) }
+
+    /// `submit_steps` that also writes the observation rows into `dst` (an `ObsRing` slot / any COPY_DST buffer) in
+    /// the same submit (F16: converted on the GPU first).
+    pub fn submit_steps_obs(&mut self, n: usize, obs_floats: usize, dst: Option<&ObsDst>, veh_words: usize) -> Pending {
         self.sync();
         let t_end = self.time + n as f64 * self.dt;
         self.enqueue_spawns(t_end);
@@ -729,6 +736,7 @@ impl GpuSim {
         let fast = (io::EVDATA + 4 * EV_FAST.min(self.opts.ev_cap)) * 4;
         enc.copy_buffer_to_buffer(&self.gpu.get("io"), 0, &self.staging, 0, fast as u64);
         enc.clear_buffer(&self.gpu.get("io"), (io::EVCOUNT * 4) as u64, Some(4));
+        if let Some(d) = dst { self.encode_obs(&mut enc, d); }
         let (ob4, vb4) = (obs_floats * 4, veh_words * 4);
         if ob4 + vb4 > 0 {
             if self.out_staging.as_ref().map_or(true, |b| b.size() < (ob4 + vb4) as u64) {
@@ -751,6 +759,47 @@ impl GpuSim {
     pub fn run_steps_async(&mut self, n: usize) {
         let p = self.submit_steps(n, 0, 0);
         self.pending = Some(p);
+    }
+    /// `run_steps_async` with the observation readback of `dst` in the same submit (lagged / async stepping).
+    pub fn run_steps_async_obs(&mut self, n: usize, dst: &ObsDst) {
+        let p = self.submit_steps_obs(n, 0, Some(dst), 0);
+        self.pending = Some(p);
+    }
+    /// Make `p` (from `submit_steps*`) the lazily finished pending batch (`sync`), as `run_steps_async` does.
+    pub fn defer(&mut self, p: Pending) { assert!(self.pending.is_none(), "defer: a batch is already pending"); self.pending = Some(p); }
+    /// Copy the current observation rows into `dst` (no steps; waits for a pending batch first). Submits only:
+    /// map / poll the destination afterwards.
+    pub fn submit_obs(&mut self, dst: &ObsDst) {
+        self.sync();
+        let mut enc = self.gpu.device.create_command_encoder(&Default::default());
+        self.encode_obs(&mut enc, dst);
+        self.gpu.queue.submit([enc.finish()]);
+    }
+    /// Record the observation readback of `dst.rows` slots into `dst` (F16: kernels/obs_f16.wgsl into `obsHalf`, then a copy).
+    pub fn encode_obs(&mut self, enc: &mut wgpu::CommandEncoder, dst: &ObsDst) {
+        assert!(self.opts.obs != ObsMode::None, "observation readback: created with obs none");
+        let floats = dst.rows.min(self.cap) * self.obs_size;
+        if floats == 0 { return; }
+        match dst.fmt {
+            ObsFmt::F32 => enc.copy_buffer_to_buffer(&self.gpu.get("inputs"), 0, &dst.buf, dst.offset, (floats * 4) as u64),
+            ObsFmt::F16 => {
+                if self.half.is_none() {
+                    let k = self.gpu.kernel("obsF16", kernels::host_raw("obs_f16"), "main").expect("obs_f16 kernel");
+                    self.gpu.storage("obsHalf", (self.cap * self.obs_size * 2) as u64, None, wgpu::BufferUsages::empty());
+                    self.gpu.uniform("obsHalfP", 16);
+                    let mut r = HashMap::new();
+                    r.insert("HP", self.gpu.get("obsHalfP")); r.insert("inputs", self.gpu.get("inputs")); r.insert("obsHalf", self.gpu.get("obsHalf"));
+                    let bg = self.gpu.bind_group(&k, &r, 0);
+                    self.half = Some((k, bg));
+                }
+                let words = (floats + 1) / 2;
+                let wgs = ((words + 255) / 256).min(65535) as u32;
+                self.gpu.write("obsHalfP", bytemuck::cast_slice(&[words as u32, wgs * 256, 0, 0]), 0);
+                let (k, bg) = self.half.as_ref().unwrap();
+                { let mut p = enc.begin_compute_pass(&Default::default()); p.set_pipeline(&k.pipeline); p.set_bind_group(0, bg, &[]); p.dispatch_workgroups(wgs, 1, 1); }
+                enc.copy_buffer_to_buffer(&self.gpu.get("obsHalf"), 0, &dst.buf, dst.offset, (words * 4) as u64);
+            }
+        }
     }
     /// Finish a `run_steps_async` batch (wait for it, ingest its events). No-op when nothing is pending.
     pub fn sync(&mut self) {
@@ -1317,6 +1366,9 @@ impl GpuSim {
         out[16] = f(t.l); out[17] = f(t.max_steer); out[18] = f(t.max_steer_rate); out[19] = f(t.vmax);
     }
 }
+
+/// A pending `run_steps_async` batch is finished before the buffers go (a map callback of a dropped buffer errors).
+impl Drop for GpuSim { fn drop(&mut self) { self.sync(); } }
 
 /// An in-flight `submit_steps` (byte sizes of the mapped ranges).
 #[derive(Clone, Copy, Debug)]

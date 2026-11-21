@@ -60,7 +60,9 @@ pop.place_obstacles(count=40, seed=3); pop.place_wrecks(10); pop.reset_day()
   (the fused RL step). `step(k)` returns right after the submit; the readback and events are processed by the next
   call (same results, the Python side overlaps with the GPU). `sync()` waits explicitly.
 * `bayenv.VecEnv(data_dir, n_envs, n_cars, seed)`: several independent envs on one device sharing one world (env i
-  uses seed + i); `act((E, N, 3))`, `step(k)`, `step_observe(actions, k, out=(E, N, obs))`, `crash_flags() -> (E, N)`.
+  uses seed + i); `act((E, N, 3))`, `step(k)`, `step_observe(actions, k, out=(E, N, obs))`, `observe()`,
+  `step_async`, `observe_wait`, `crash_flags() -> (E, N)`. Every observation call takes the options below; all envs
+  read back into one shared buffer, so `copy=False` is a single (E, N, obs) view.
 * `events()`: per-slot event records since the last call, as a dict of equal-length numpy arrays (one row per event
   and car). Columns: `time`, `kind` (1 arrived, 2 crashed = this car disabled, 3 contact, 4 stranded, 5 cleared,
   6 spawned, 7 missed exit, 8 signal / stop violation), `slot`, `agent` (trip id), `other` (partner slot, -1 barrier),
@@ -69,8 +71,33 @@ pop.place_obstacles(count=40, seed=3); pop.place_wrecks(10); pop.reset_day()
   Arrivals carry their exact arrival time; other events carry the end of the step batch. `VecEnv.events()` adds `env`.
   Shape type: `bayenv_world::events::EventLog`, shared with the CPU sim. `state()["progress_m"]` gives dense progress.
   The old scene / outcome log is `event_log()`.
-* `observe(out=arr)` fills a preallocated array (no allocation). Readbacks go through persistent staging buffers and copy
-  only the rows in use.
+* Observation readback (`observe`, `step_observe`, `step_async` / `observe_wait`; `crates/bayenv-gpu/src/obs.rs`):
+  the observation copy goes into one of two mapped readback buffers (a ring), so the host reads step t while the GPU
+  may already run step t+1 into the other one. Options:
+  * `out=arr`: fill a preallocated C-contiguous array (no allocation). Default (`copy=True`, float32): a copy,
+    bit-identical with the previous implementation (`crates/bayenv-py/examples/obs_check.py`).
+  * `copy=False`: a read-only zero-copy numpy view of the mapped buffer (no host memcpy; 28 MB at 100k cars). Valid
+    until your next `observe` / `step*` call on that env (the ring reuses its buffer after that), then its contents
+    change (the memory itself stays alive: the view's `base` holds the buffer). `np.array(v)` it to keep it. Zero-copy
+    needs unified memory (Metal, `env.zero_copy == True`); on other backends `copy=False` returns a copy.
+  * `dtype="float16"`: converted on the GPU (`crates/bayenv-gpu/kernels/obs_f16.wgsl`, round to nearest even,
+    saturating at ±65504; identical to numpy's `float32 -> float16`), returned as numpy float16: half the bytes. Every
+    v2 field is in [-1.8, 1.8], so the error is ≤ 2^-12 per unit (max abs error 4.9e-4, mean 1.5e-5 over all fields;
+    per field in rust/BENCHMARKS.md); values below 6e-8 flush to 0. Off by default.
+  * `lag=1` (`step_observe`): pipelined stepping. Returns the observation as of the *start* of the call (after the
+    previous call's steps, before this call's `actions` act) and leaves this call's k steps running on the GPU while
+    Python computes the next action; the next call (or any call that needs the sim) waits for them. The obs returned
+    by call t therefore does not yet reflect `actions_t`: the policy acts on a one-step-stale observation (the
+    trajectory for a given action sequence is identical to lag=0, only what the policy sees shifts by one call). The
+    first call returns the current observation.
+  * `step_async(actions, k)` + `observe_wait()`: the same split by hand: submit and return; `observe_wait()` blocks
+    and returns that batch's observations (no batch in flight: the current ones). The previous readback (and a
+    `copy=False` view of it) stays intact while the batch runs.
+  * `backend="cpu"` takes the same arguments: `copy=False` returns a copy, float16 is converted on the host, `lag=1`
+    has the same staleness semantics (no overlap: the CPU steps synchronously), `step_async` steps at once.
+  Python per-step cost at 100k cars (M4 Max, best of 3): `step_observe(out=)` 4.27 ms -> `copy=False` 3.89 ms,
+  `copy=False, lag=1` 3.41 ms; with a policy reading the full observation every step 4.99 ms -> 3.86 ms (lag=1); a bare
+  `step(1)` is 3.6-3.7 ms. Details in rust/BENCHMARKS.md.
 * `backend="cpu"`: the CPU reference sim (`bayenv-sim`) behind the same calls and shapes: `act`, `step`,
   `step_observe`, `observe` (`obs="v2"` 70 floats via the v2 encoder, sensed after every step like the JS driver loop;
   `"v3"` 358; `"flat"` 77, CPU only), `state()`, `events()`, `crash_flags`, `signals`, `stats`. It uses a commuter

@@ -18,3 +18,4 @@ pyo3 = { workspace = true, features = ["abi3-py39"] }
 numpy.workspace = true
 bytemuck.workspace = true
 rayon.workspace = true
+wgpu.workspace = true
