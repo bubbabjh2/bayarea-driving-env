@@ -58,6 +58,16 @@ impl PlanGraph for bayenv_world::graph::SimGraph {
     fn node_z(&self, n: usize) -> f64 { self.nz[n] }
 }
 
+/// `&Arc<World>` callers keep working with the generic planners / population generator.
+impl<G: PlanGraph + ?Sized> PlanGraph for std::sync::Arc<G> {
+    #[inline] fn edge_from(&self, e: usize) -> i32 { (**self).edge_from(e) }
+    #[inline] fn edge_to(&self, e: usize) -> i32 { (**self).edge_to(e) }
+    #[inline] fn edge_length(&self, e: usize) -> f64 { (**self).edge_length(e) }
+    #[inline] fn edge_speed(&self, e: usize) -> f64 { (**self).edge_speed(e) }
+    #[inline] fn node_x(&self, n: usize) -> f64 { (**self).node_x(n) }
+    #[inline] fn node_z(&self, n: usize) -> f64 { (**self).node_z(n) }
+}
+
 struct RouteRes { edges: Vec<i32>, nodes: Vec<i32>, length: f64, time: f64 }
 fn to_result<G: PlanGraph + ?Sized>(g: &G, edges: Option<Vec<i32>>) -> Option<RouteRes> {
     let edges = edges?;
