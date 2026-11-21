@@ -17,7 +17,7 @@ done
 O=rust/oracle/parity-pop
 node test/gpu/run.mjs rust/tools/oracle/gpu_parity_run.html --query="steps=$STEPS&batch=10&obstacles=40&name=js" --in=$O/pop.json,$O/pop.bin --out=$O >/dev/null
 rust/target/release/examples/parity_run "$DATA" $O $STEPS 10 rs 32768 25200 1 40 3 | tail -1 | cut -c1-120
-rust/target/release/examples/compare_state $O/js.bin $O/rs.bin | head -1
+rust/target/release/examples/compare_state $O/js.bin $O/rs.bin > $O/compare.txt; head -1 $O/compare.txt
 python3 - "$O" <<'PY'
 import json, sys, numpy as np
 O = sys.argv[1]; a = json.load(open(O + '/js.json')); b = json.load(open(O + '/rs.json')); cap = len(a['slotTrip'])
