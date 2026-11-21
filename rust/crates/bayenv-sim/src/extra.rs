@@ -597,7 +597,7 @@ impl Sim {
             if fr == goal { return false; }
             (fr, vec![route[rp]])
         };
-        let plan = match self.plan_prefetch.get(&(from, goal)).cloned() {
+        let plan = match self.plan_prefetch.get(&(from, goal)).map(|v| v.0.clone()) {
             Some(p) => { self.stations.as_mut().unwrap().count(&p); p }
             None => { let st = self.stations.as_mut().unwrap(); st.plan(&*g, &mut *self.router, from, goal) }
         };
