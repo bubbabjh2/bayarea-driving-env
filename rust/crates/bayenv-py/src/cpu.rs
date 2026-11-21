@@ -10,12 +10,14 @@ use bayenv_sim::obs_v2::V2Encoder;
 pub enum CpuObs { V2, V3, Flat, None }
 impl CpuObs { pub fn width(self) -> usize { match self { CpuObs::V2 => 70, CpuObs::V3 => bayenv_sim::obs::OBS3, CpuObs::Flat => OBS_N, CpuObs::None => 0 } } }
 
-pub struct CpuBackend { pub env: CEnv, pub obs: CpuObs, enc: Option<V2Encoder>, buf: Vec<f32>, rows: usize, fresh: bool, scratch: Vec<f32> }
+/// `buf`: n_slots x 70 v2 rows; every row not in `written` is zero (only the rows written by the last encode are
+/// cleared and rewritten, instead of zero-filling and copying all n_slots rows every step)
+pub struct CpuBackend { pub env: CEnv, pub obs: CpuObs, enc: Option<V2Encoder>, buf: Vec<f32>, rows: usize, fresh: bool, scratch: Vec<f32>, written: Vec<usize> }
 
 impl CpuBackend {
     pub fn new(env: CEnv, obs: CpuObs) -> CpuBackend {
         let enc = if obs == CpuObs::V2 { Some(V2Encoder::new(&env.world)) } else { None };
-        CpuBackend { env, obs, enc, buf: Vec::new(), rows: 0, fresh: false, scratch: Vec::new() }
+        CpuBackend { env, obs, enc, buf: Vec::new(), rows: 0, fresh: false, scratch: Vec::new(), written: Vec::new() }
     }
     pub fn n_slots(&self) -> usize { self.env.sim.vs.high }
     /// k steps; the v2 encoder records the commands before and senses every driving car after each step
@@ -24,24 +26,32 @@ impl CpuBackend {
             for _ in 0..k {
                 enc.record_actions(&self.env.sim);
                 self.env.sim.step();
-                let n = self.env.sim.vs.high; let w = 70;
-                self.buf.clear(); self.buf.resize(n * w, 0.0);
-                for i in driving_slots(&self.env.sim) { enc.encode_v2(&mut self.env.sim, i, &mut self.buf[i * w..(i + 1) * w]); }
-                self.rows = n;
+                Self::encode_all(enc, &mut self.env, &mut self.buf, &mut self.written);
+                self.rows = self.env.sim.vs.high;
             }
             for a in self.env.sim.actions.iter_mut() { *a = None; }
             self.fresh = true;
         } else { self.env.step(k); self.fresh = false; }
     }
-    /// Observations into `out` (n_slots x width).
+    /// v2 rows of every driving slot into buf (rows of the previous encode cleared first; all other rows stay zero)
+    fn encode_all(enc: &mut V2Encoder, env: &mut CEnv, buf: &mut Vec<f32>, written: &mut Vec<usize>) {
+        let (n, w) = (env.sim.vs.high, 70);
+        buf.resize(n * w, 0.0);
+        for &i in written.iter() { if i < n { buf[i * w..(i + 1) * w].fill(0.0); } }
+        written.clear();
+        for i in driving_slots(&env.sim) { enc.encode_v2(&mut env.sim, i, &mut buf[i * w..(i + 1) * w]); written.push(i); }
+    }
+    /// Observations into `out` (n_slots x width; every row written, non-driving rows zero).
     pub fn observe_into(&mut self, out: &mut [f32]) {
         let w = self.obs.width(); let n = self.n_slots();
         match self.obs {
             CpuObs::V2 => { if !self.fresh || self.rows != n {   // not stepped yet: sense now (as Driver.sense would)
-                    let enc = self.enc.as_mut().unwrap(); self.buf.clear(); self.buf.resize(n * w, 0.0);
-                    for i in driving_slots(&self.env.sim) { enc.encode_v2(&mut self.env.sim, i, &mut self.buf[i * w..(i + 1) * w]); }
+                    let enc = self.enc.as_mut().unwrap();
+                    Self::encode_all(enc, &mut self.env, &mut self.buf, &mut self.written);
                     self.rows = n; self.fresh = true; }
-                out[..n * w].copy_from_slice(&self.buf[..n * w]); }
+                // rows not written are zero in buf: write zeros + the written rows
+                out[..n * w].fill(0.0);
+                for &i in &self.written { out[i * w..(i + 1) * w].copy_from_slice(&self.buf[i * w..(i + 1) * w]); } }
             CpuObs::Flat | CpuObs::V3 => {
                 let v3 = self.obs == CpuObs::V3; let st = flat_stride(v3);
                 let slots = driving_slots(&self.env.sim);

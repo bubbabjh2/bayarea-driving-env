@@ -16,7 +16,11 @@ fn main() {
     for k in 1..n { let mut e = bayenv_sim::harness::env_from_parts(&run, envs[0].world.clone(), envs[0].pop.clone()); e.reset(Some((k + 1) as f64)); envs.push(e); }
     let mut pols: Vec<Policy> = (0..n).map(|k| Policy::new(&pname, (k + 1) as f64)).collect();
     let mut v = VecEnv::new(envs);
+    // BENCH_SYNC=1: one pool pass per step over all envs (the Python VecEnv's pattern: a barrier every step); else
+    // every env runs all its steps in one task
+    let sync = std::env::var("BENCH_SYNC").map(|v| v == "1").unwrap_or(false);
     let go = |v: &mut VecEnv, pols: &mut Vec<Policy>, steps: usize| -> usize {
+        if sync { return (0..steps).map(|_| v.envs.par_iter_mut().zip(pols.par_iter_mut()).map(|(e, p)| { let c = e.driving().count(); p.act(e); e.step(1); c }).sum::<usize>()).sum(); }
         v.envs.par_iter_mut().zip(pols.par_iter_mut()).map(|(e, p)| { let mut c = 0; for _ in 0..steps { c += e.driving().count(); p.act(e); e.step(1); } c }).sum()
     };
     go(&mut v, &mut pols, warm);

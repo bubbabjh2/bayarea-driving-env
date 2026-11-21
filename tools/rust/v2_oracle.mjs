@@ -10,11 +10,11 @@
 //   * driver.sense(dt, null, obs) every step for every driving car, obs = env.observe() (src/sim/obs.js fillObs + signals);
 //   * the pending-steer ring (Driver.act predictDelay bookkeeping) gets the steer command the env applied this step
 //     (env.act's steer, or the idle default), as Driver.act would push its own command.
-// The brain code is imported from the private repo by absolute path (read-only).
+// The brain code is imported from the private repo (read-only), by default ../bayarea-driving-sim next to this repo.
 //
 //   node tools/rust/v2_oracle.mjs --world scenario:junction-s1 --policy cruisenoise --steps 600 --seed 1 --out /tmp/v2
 //     --world / --n / --mode / --opts / --policy / --steps / --seed / --every : as trace.mjs
-//     --brain  path of the private repo (default /Users/USER/Documents/youtube/bayarea-driving-sim)
+//     --brain  path of the private repo (default ../bayarea-driving-sim, relative to this repo's root)
 // Writes <out>/world.pack, <out>/pop.pack, <out>/run.json (trace.mjs format) and <out>/v2.pack:
 //   v2.n (u32 per recorded step: driving cars), v2.slot (i32), v2.x (f32 rows of 70),
 //   edge.ref / edge.name (i32 per edge: interned road ref / name, 0 = '', for guidance 'continue' maneuvers),
@@ -25,6 +25,8 @@
 //   meta {kind: 'v2', every, steps, inputSize, nearFields, teacherFields, setRouteCalls, stopRoutes, stopsCompleted}
 // (v2.near / meta.nearFields are additions; readers of older packs without them skip the near check)
 import fs from 'node:fs';
+import path from 'node:path';
+import { fileURLToPath, pathToFileURL } from 'node:url';
 import { buildEnv, makePolicy } from './trace.mjs';
 import { STATE_DRIVING } from '../../src/sim/vehicle.js';
 import { VEHICLE_PARAMS } from '../../src/sim/physics/params.js';
@@ -33,10 +35,12 @@ import { exportWorld, exportPopulation } from './export.mjs';
 
 const argv = process.argv.slice(2);
 const arg = (k, d) => { const i = argv.indexOf('--' + k); return i >= 0 ? argv[i + 1] : d; };
-const BRAIN = arg('brain', '/Users/USER/Documents/youtube/bayarea-driving-sim');
-const { Driver } = await import(`${BRAIN}/src/brain/driver.js`);
-const { Guidance, MANEUVER_TYPES } = await import(`${BRAIN}/src/nav/guidance.js`);
-const { INPUT_SIZE } = await import(`${BRAIN}/src/brain/eyes.js`);
+const REPO = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '../..');
+const BRAIN = path.resolve(arg('brain', path.resolve(REPO, '../bayarea-driving-sim')));
+const brain = (f) => pathToFileURL(path.join(BRAIN, f)).href;
+const { Driver } = await import(brain('src/brain/driver.js'));
+const { Guidance, MANEUVER_TYPES } = await import(brain('src/nav/guidance.js'));
+const { INPUT_SIZE } = await import(brain('src/brain/eyes.js'));
 
 const world = arg('world', 'synthetic'), n = +arg('n', 300), seed = +arg('seed', 1), mode = arg('mode', 'full');
 const steps = +arg('steps', 600), every = +arg('every', 1), policy = arg('policy', 'cruisenoise'), out = arg('out', 'v2-out');
