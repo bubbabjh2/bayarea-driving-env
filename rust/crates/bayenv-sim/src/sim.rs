@@ -116,6 +116,16 @@ pub struct CrashedEv { pub slot: usize, pub agent: i32, pub dv_kmh: f64, pub sha
 #[derive(Clone, Debug, Default)]
 pub struct StepEvents { pub arrived: Vec<ArrivedEv>, pub crashed: Vec<CrashedEv>, pub stranded: Vec<(usize, i32)> }
 
+/// Per-slot event (shared shape with the GPU backend; Env::events drains them as columns).
+/// kind: 1 ARRIVED, 2 CRASHED (disabling: own delta-v >= 10 km/h), 3 CONTACT (crash event >= touchKmh, not disabling),
+/// 4 STRANDED, 5 CLEARED (wreck towed / hauled away: slot freed), 6 SPAWNED, 7 MISSED_EXIT, 8 SIGNAL_VIOLATION.
+/// Within a step events are sorted by (slot, kind), stable.
+#[derive(Clone, Copy, Debug)]
+pub struct Event { pub time: f64, pub kind: u8, pub slot: i32, pub agent: i64, pub other: i32, pub dv_kmh: f32, pub other_dv_kmh: f32, pub share: f32,
+    pub late_by: f32, pub progress_m: f32, pub trip_m: f32, pub trip_s: f32 }
+pub const EV_ARRIVED: u8 = 1; pub const EV_CRASHED: u8 = 2; pub const EV_CONTACT: u8 = 3; pub const EV_STRANDED: u8 = 4;
+pub const EV_CLEARED: u8 = 5; pub const EV_SPAWNED: u8 = 6; pub const EV_MISSED_EXIT: u8 = 7; pub const EV_SIGNAL_VIOLATION: u8 = 8;
+
 /// Batched external policy hook (JS batchDrive / opts.batchPolicy): called once per step in `drive`, before any car
 /// is commanded, with the slots of every driving car that has the external driver; it writes their commands into
 /// `actions[slot]` (None = the default action). Runs at the point where JS calls driver.step, so it sees exactly the
@@ -181,6 +191,7 @@ pub struct Sim {
     /// per-phase wall time (ns) when `profile` is set: spawn, hash, contacts, lanes, leaders, controls, drive, integrate, scenes, traffic+reroute+density
     pub profile: bool,
     pub events: StepEvents,
+    pub event_log: Vec<Event>,
     pub batch_policy: Option<BatchPolicy>,
     pub phase_ns: [u64; 10],
 }
@@ -226,17 +237,32 @@ impl Sim {
             passers: Default::default(), conflict_with: HashMap::default(), off_lane: Default::default(), touch: HashSet::default(), barrier_touch: HashSet::default(), barrier_now: HashSet::default(),
             conf_cache: HashMap::default(), mv_into: None, yield_by: None, creep_until: Vec::new(), creep_ignore: Vec::new(), edge_speed: HashMap::default(), traffic_penalty: None,
             last_reroute: HashMap::default(), next_traffic: 0.0, next_reroute: 0.0, next_density: start, edge_count_scratch: vec![0; ne], fwy, fwy_lane_km, seen_j: -1,
-            near_buf: Vec::new(), static_obstacles: Vec::new(), obstacles: Vec::new(), profile: std::env::var("BAYENV_PROFILE").is_ok(), phase_ns: [0; 10], events: StepEvents::default(), batch_policy: None,
+            near_buf: Vec::new(), static_obstacles: Vec::new(), obstacles: Vec::new(), profile: std::env::var("BAYENV_PROFILE").is_ok(), phase_ns: [0; 10], events: StepEvents::default(), event_log: Vec::new(), batch_policy: None,
             empty: opts.traffic_mode == TrafficMode::Empty, time: start, dt: opts.dt, step_count: 0, vs, rng, router, g, pop, opts,
         };
         if sim.opts.traffic_mode == TrafficMode::Sparse && sim.opts.wrecks > 0 { sim.place_wrecks(sim.opts.wrecks); }
         sim
     }
 
+    /// Append an event for slot i (agent = 2 * commuter + leg, -1 without a commuter; progress = routeDist).
+    pub(crate) fn emit(&mut self, kind: u8, i: usize, other: i32, dv: f32, odv: f32, share: f32, late: f32) {
+        let vs = &self.vs;
+        let c = vs.commuter[i];
+        let (trip_m, trip_s) = if kind == EV_ARRIVED { (vs.odometer[i], (self.time - f(vs.spawn_time[i])) as f32) } else { (f32::NAN, f32::NAN) };
+        self.event_log.push(Event { time: self.time, kind, slot: i as i32, agent: if c >= 0 { 2 * c as i64 + vs.leg[i] as i64 } else { -1 }, other,
+            dv_kmh: dv, other_dv_kmh: odv, share, late_by: late, progress_m: vs.route_dist[i], trip_m, trip_s });
+    }
+
     pub fn is_idle(&self) -> bool { self.vs.count == 0 && self.pending.is_empty() && self.trip_ptr >= self.trips.len() }
 
     // ---------------------------------------------------------------- step
     pub fn step(&mut self) {
+        let ev0 = self.event_log.len();
+        self.step_inner();
+        self.event_log[ev0..].sort_by_key(|e| (e.slot, e.kind));
+    }
+
+    fn step_inner(&mut self) {
         let dt = self.dt;
         self.time += dt;
         self.step_count += 1;
@@ -358,6 +384,7 @@ impl Sim {
         self.vs.fuel[slot] = jm::min(f(self.vs.tank[slot]), f(self.commuter_fuel[c])) as f32;
         self.vs.update_pose(slot, &g); self.vs.save_pose(slot);
         self.counters.spawned += 1;
+        self.emit(EV_SPAWNED, slot, -1, f32::NAN, f32::NAN, f32::NAN, f32::NAN);
         if self.stations.is_some() { self.check_fuel(slot, true); }
         self.ensure_slot(slot);
         self.drivers[slot] = Driver::External;
@@ -564,6 +591,7 @@ impl Sim {
         let leg = self.vs.leg[i];
         let late = if leg == 0 { self.time - self.pop.work_start[c] } else { 0.0 };
         self.events.arrived.push(ArrivedEv { slot: i, agent: c as i32, leg, late_by: late });
+        self.emit(EV_ARRIVED, i, -1, f32::NAN, f32::NAN, f32::NAN, late as f32);
         self.counters.arrived += 1;
         self.commuter_fuel[c] = self.vs.fuel[i];
         self.set_outcome(c, leg, FAIL_ARRIVED);

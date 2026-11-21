@@ -216,6 +216,8 @@ impl Sim {
                 _ => 0.5,
             };
             self.events.crashed.push(crate::sim::CrashedEv { slot: sl, agent: self.vs.commuter[sl], dv_kmh: kmh[k], share, disabled: kmh[k] >= DISABLE_KMH });
+            let (other, odv) = if slots.len() == 2 { (slots[1 - k] as i32, kmh[1 - k] as f32) } else { (-1, f32::NAN) };
+            self.emit(if kmh[k] >= DISABLE_KMH { crate::sim::EV_CRASHED } else { crate::sim::EV_CONTACT }, sl, other, kmh[k] as f32, odv, share as f32, f32::NAN);
         }
         // the involved drivers step once (collision signal); only the braking prop has state
         for &s in slots { if self.vs.state[s] == STATE_DRIVING && matches!(self.drivers[s], Driver::PropBraking { .. }) { let _ = self.driver_cmd(s); } }
@@ -309,6 +311,7 @@ impl Sim {
             if sh < 2.0 * f(self.vs.hw[s]) + 0.4 || g.e_length[ee] < 30.0 {
                 if self.vs.flags[s] & FLAG_STRANDED != 0 { self.counters.towed += 1; } else { self.counters.cleared += 1; }
                 self.counters.hauled_away += 1;
+                self.emit(crate::sim::EV_CLEARED, s, -1, f32::NAN, f32::NAN, f32::NAN, f32::NAN);
                 self.crashes[ri].gone.push(s); self.release(s); continue;
             }
             let vs = &mut self.vs;
@@ -354,6 +357,7 @@ impl Sim {
                 for s in vehicles {
                     if self.vs.state[s] == STATE_CRASHED && !self.crashes[ri].gone.contains(&s) {
                         if self.vs.flags[s] & FLAG_STRANDED != 0 { self.counters.towed += 1; } else { self.counters.cleared += 1; }
+                        self.emit(crate::sim::EV_CLEARED, s, -1, f32::NAN, f32::NAN, f32::NAN, f32::NAN);
                         self.release(s);
                     }
                 }

@@ -81,12 +81,13 @@ impl Sim {
             let me = &*self;
             (0..high).into_par_iter().with_min_len(64).map(|i| if me.vs.state[i] == STATE_DRIVING { Some(me.ctl_car(i)) } else { None }).collect()
         } else { (0..high).map(|i| if self.vs.state[i] == STATE_DRIVING { Some(self.ctl_car(i)) } else { None }).collect() };
-        let vs = &mut self.vs;
         for (i, o) in outs.into_iter().enumerate() {
             let Some(o) = o else { continue };
+            let vs = &mut self.vs;
             vs.ctl_approach[i] = o.ctl_approach; vs.ctl_type[i] = o.ctl_type; vs.ctl_state[i] = o.ctl_state; vs.ctl_dist[i] = o.ctl_dist; vs.ctl_time_in[i] = o.ctl_time_in;
             vs.ctl_time_left[i] = o.ctl_time_left; vs.ctl_move[i] = o.ctl_move; vs.ctl_stopped[i] = o.ctl_stopped; vs.ctl_inside[i] = o.ctl_inside; vs.ctl_inside_t[i] = o.ctl_inside_t;
             self.counters.signal_violations += o.sig; self.counters.stop_violations += o.stop;
+            if o.sig + o.stop > 0 { self.emit(crate::sim::EV_SIGNAL_VIOLATION, i, -1, f32::NAN, f32::NAN, f32::NAN, f32::NAN); }
         }
     }
 
@@ -163,6 +164,7 @@ impl Sim {
             if self.vs.state[i] != STATE_DRIVING { continue; }
             if self.vs.edge[i] != m.took { if self.vs.edge[i] == m.from { keep.push((i, m)); } continue; }
             self.counters.missed_exits += 1;
+            self.emit(crate::sim::EV_MISSED_EXIT, i, -1, f32::NAN, f32::NAN, f32::NAN, f32::NAN);
             let took_to = g.e_to[m.took as usize];
             let path = if took_to == m.goal { Some(Vec::new()) } else { self.router.route(took_to, m.goal, None, None) };
             let Some(path) = path else { self.counters.reroute_failed += 1; continue };
@@ -293,6 +295,7 @@ impl Sim {
         let g = self.gw();
         let s = self.vs.alloc(&g, AllocArgs { type_idx, traits: DEFAULT_TRAITS, route, commuter: -1, leg: 0, time: self.time, learner: false, dt: self.dt, step: self.step_count, lane });
         self.ensure_slot(s);
+        self.emit(crate::sim::EV_SPAWNED, s, -1, f32::NAN, f32::NAN, f32::NAN, f32::NAN);
         s
     }
 
@@ -618,6 +621,7 @@ impl Sim {
 
     pub(crate) fn strand(&mut self, i: usize) {
         self.events.stranded.push((i, self.vs.commuter[i]));
+        self.emit(crate::sim::EV_STRANDED, i, -1, f32::NAN, f32::NAN, f32::NAN, f32::NAN);
         self.vs.flags[i] |= FLAG_STRANDED;
         self.counters.stranded += 1;
         let tow = self.opts.fuel_cfg.tow_median * jm::exp(self.opts.fuel_cfg.tow_sigma * self.rng.gaussian());
