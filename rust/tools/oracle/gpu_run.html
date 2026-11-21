@@ -1,0 +1,35 @@
+<!doctype html><html><head><meta charset="utf-8"><title>gpu oracle run</title></head><body><pre id="out"></pre>
+<script type="module">
+// JS GPU sim reference run for the Rust host (rust/tools/oracle/compare_gpu.sh):
+// GPUSim on the real world, constant actions (steer 0, gas, brake 0), scatter(n, seed), `steps` steps in
+// awaited runSteps(batch) calls, then the full veh + pose buffers PUT to /__out/<name>.bin (+ stats JSON).
+// Query: ?n=10000&seed=11&steps=200&batch=10&gas=0.3&cap=131072&obs=v2&name=js_state&bench=0
+import { GPUSim } from '../../../src/gpu/gpuSim.js';
+import { initGPU } from '../../../src/gpu/device.js';
+import { loadWorld } from '../../../src/sim/data.js';
+const q = new URLSearchParams(location.search);
+const n = +(q.get('n') || 10000), seed = +(q.get('seed') || 11), steps = +(q.get('steps') || 200), batch = +(q.get('batch') || 10), gas = +(q.get('gas') || 0.3);
+const cap = +(q.get('cap') || 131072), obs = q.get('obs') || 'v2', name = q.get('name') || 'js_state';
+const log = (s) => { console.log(s); document.getElementById('out').textContent += s + '\n'; };
+const res = { ok: false };
+try {
+  const world = await loadWorld({ base: new URL('../../../data/', location.href) });
+  const gpu = await initGPU();
+  const sim = await GPUSim.create(world.graph, { gpu, capacity: Math.max(cap, n), obs, features: { accidents: true, fuel: true, collisions: true, laneChanges: true }, controls: world.controls });
+  const A = new Float32Array(sim.cap * 3); for (let i = 0; i < sim.cap; i++) A[3 * i + 1] = gas; sim.setActions(A);
+  res.scatter = sim.scatter(n, { seed });
+  const t0 = performance.now();
+  for (let k = 0; k < steps; k += batch) await sim.runSteps(Math.min(batch, steps - k));
+  await sim.sync();
+  res.msPerStep = (performance.now() - t0) / steps;
+  const st = await sim.readState();
+  const vb = new Uint8Array(st.veh.u.buffer), pb = new Uint8Array(st.pose.buffer);
+  const all = new Uint8Array(vb.length + pb.length); all.set(vb); all.set(pb, vb.length);
+  await fetch(`/__out/${name}.bin`, { method: 'PUT', body: all });
+  const s = sim.getStats();
+  res.stats = { driving: s.driving, crashes: s.crashes, crashScenes: s.crashScenes, bumps: s.bumps, avgSpeed: s.avgSpeed, time: sim.time, step: sim.step, minorContacts: s.minorContacts, missedExits: s.missedExits };
+  res.adapter = gpu.adapterName; res.ok = true;
+  await fetch(`/__out/${name}.json`, { method: 'PUT', body: JSON.stringify(res) });
+} catch (e) { res.error = String(e && e.stack || e); log('ERROR ' + res.error); }
+window.__result = res; window.__done = true; document.title = res.ok ? 'PASS' : 'FAIL';
+</script></body></html>
