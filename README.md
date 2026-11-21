@@ -1,16 +1,14 @@
 # bayarea-driving-env
 
 A multi-agent driving environment of the San Francisco Bay Area (San Francisco ↔ San Jose, both sides of
-the bay and the bridges), built from OpenStreetMap and USGS 3DEP elevation. It is the environment only:
-there is **no driving policy, no built-in/IDM driver, no neural net and no training code** in this repo.
-Every car is driven by actions you supply.
+the bay and the bridges), built from OpenStreetMap and USGS 3DEP elevation. Every car is driven by
+actions you supply.
 
 * Real road network: ~2 tiers (freeways/arterials + local streets), per-lane geometry, junction connectors,
   lane ends / merges / weaves, ramps, bridges, tunnels, stacked decks.
 * Real terrain: road heights from USGS 3DEP (1 m lidar in SF, 1/3" elsewhere), grades up to ~41 % in SF.
 * Traffic controls: OSM signals, stop / give-way signs and ramp meters, merged with the authoritative SFMTA (signals,
-  stop signs) and San Jose (signals) inventories; every control records its source. Signal timing is generated
-  (synthetic), not real (see "Traffic controls").
+  stop signs) and San Jose (signals) inventories; every control records its source.
 * Physics, not rules: dynamic bicycle model with tyres, friction circle, weight transfer, ABS/EBD, aero,
   grade; swept-SAT rigid-body contacts; crash severity = per-vehicle delta-v; incidents block lanes and get
   cleared / towed on realistic timelines; fuel and gas stations.
@@ -18,33 +16,6 @@ Every car is driven by actions you supply.
 
 Licence: code MIT (LICENSE). Map data © OpenStreetMap contributors, ODbL 1.0. Elevation: U.S. Geological
 Survey, 3D Elevation Program (public domain). See NOTICE.
-
-## Known limitations & disclaimers
-
-**Loading**
-* **First real-map load takes ~90 s and 6–10 GB RAM** unless `data/junctions.bin` is pre-built. Build it once with
-  `npm run build:junctions` (or `node --max-old-space-size=14000 tools/build_junctions.mjs data/`; see `docs/WORLD-BUILD.md`).
-
-**Road network**
-* Known geometry residuals: 3 lane-count jumps, 24 open weaves and 39 ramp overlaps (all from OSM crossings), plus 13
-  stacked SoMa/YBI ramp segments over the grade limit.
-* The flat road tier cannot be reproduced exactly from OSM. The original came from an inconsistent Overpass mirror,
-  and re-fetching differs by about ±2–4 % of edges. The committed snapshot (`data/src/flat/`) is the canonical
-  input. Elevation, junctions, lines, controls, crosswalks and water rebuild bit-identically from it.
-* Rebuilding controls from OSM alone moves 17 approach stop lines at 14 controls by 0.6–7.7 m. The committed data keeps the original
-  positions as the baseline.
-
-**Traffic controls**
-* Signal and stop locations are OSM merged with DataSF (signals and stop signs, PDDL) and San Jose (signals, CC BY).
-  About 22 other cities and Caltrans have no usable open source, so they are OSM only. Oakland, South San
-  Francisco, Emeryville, Mountain View and Cupertino data (no licence stated) were used only to verify, never merged.
-  Known gaps: Oakland ~74 missing signals, South SF 12, Emeryville 3, Mountain View 4, Cupertino ~415 missing stop
-  signs. Spot check: 23 of 24 intersections match.
-* All signal timing is synthetic: fixed two-axis plans, protected lefts only on major roads, 1.5 s all-red, ramp
-  meters 06:00–10:00, no flashing state. No city publishes timing. Records are tagged `timing: "synthetic"`.
-* Controls are assigned per approach, not per lane. There are no turn arrows.
-* Controls are points only. `src/look/signals.js` is an optional three.js helper that draws a generic pole, mast arm
-  and head; it is not a real per-site model.
 
 ## Setup
 
@@ -55,7 +26,7 @@ Survey, 3D Elevation Program (public domain). See NOTICE.
 
 ```
 npm test                 # CPU unit/integration tests (~3-4 min)
-npm run smoke            # synthetic world, trivial lane-keeping policy, prints steps/s
+npm run smoke            # synthetic world, prints steps/s
 npm run smoke:real       # the real Bay Area world (first load ~90 s: junctions built in memory unless data/junctions.bin exists)
 node test/gpu/run.mjs test/gpu/actions.html     # GPU: external actions + observations
 node test/gpu/run.mjs test/gpu/physics.html     # GPU vs CPU physics
@@ -76,7 +47,7 @@ for (;;) {
   command holds `{steer 0, gas 0, brake 0.3}` (`opts.defaultAction`). There is no background traffic model.
 * **Action:** `steer` ∈ [−1, 1] = target road-wheel angle as a fraction of `maxSteer` (actuator lag + slew rate
   in the physics), `gas`, `brake` ∈ [0, 1]. Actions pass through each driver's **reaction-time delay**
-  (0.6–1.8 s, log-normal, `vs.delaySteps`) before they act — a policy must not add its own delay.
+  (0.6–1.8 s, log-normal, `vs.delaySteps`) before they act.
 * **Observation:** a structured object per car (`src/sim/obs.js` header: lane frame, speed, neighbours,
   next traffic control and its state/time-to-change, lane ends, junction conflicts, oncoming traffic, grade,
   vehicle geometry). `env.observe({ v3: true })` adds `obs.v3`, a 358-float vector of ego-frame bodies (16 nearest
@@ -85,14 +56,9 @@ for (;;) {
   Full per-car state (3-D pose, velocities, dimensions, flags incl. crashed/disabled, applied brake) is in
   `env.sim.vs` (struct of arrays, `src/sim/LAYOUT.md`); signal states via `env.sim.controls`, wrecks /
   incidents via `env.sim.crashes` / `env.sim.activeCrashes`, placed obstacles via `env.sim.obstacles`.
-* **Reward:** not returned by `step()`. `src/sim/reward.js` defines it (`reward({progress, collision | crash,
-  stranded, arrived, lateBy, steerJerk, dt})`): crash −20 (or severity-scaled), stranded −20, arrival +10,
-  on time +2, −0.5/min late (cap −10), annealed progress shaping, small steering-jerk term. Per-step inputs
-  come from `env.sim.signalsFor(slot)`; trip-level fitness via `env.fitness()`. `examples/random_policy.mjs`
-  shows the loop.
 * **Termination (per car):** arrival; crash with own Δv ≥ 10 km/h (disabled); running out of fuel (stranded);
   not arrived by the end of the run (default day 05:00–13:00). Waiting is never a failure. `env.outcomes()`.
-* **Curriculum:** `trafficMode` `'empty'` (cars don't interact), `'sparse'` (+ stopped wrecks), `'full'`;
+* **Worlds:** `trafficMode` `'empty'` (cars don't interact), `'sparse'` (+ stopped wrecks), `'full'`;
   `obstacles`, `staticObstacles`; synthetic worlds in `data/scenarios/` (`src/scenarios/README.md`).
 * **Seeding:** population + sim RNG from `seed`; runs are bit-deterministic for the same seed and actions
   (checked: two runs → identical state hash; also identical to the original project's env).
