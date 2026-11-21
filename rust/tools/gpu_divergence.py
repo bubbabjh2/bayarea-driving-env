@@ -1,22 +1,23 @@
 """GPU half (and any-backend tracer) of the CPU-vs-GPU crash divergence dumps (rust/docs/crash-divergence.md).
 
     python rust/tools/gpu_divergence.py data --agents a,b,c [--backend gpu|cpu] [--from S] [--to T] [--prefix gpu]
-                                         [--n 5000] [--start 25200] [--seed 42] [--cpu-dir DIR] [--contact-tangent]
+                                         [--n 5000] [--start 25200] [--seed 42] [--cpu-dir DIR] [--no-contact-tangent]
 
 Same setup as cpu_divergence.py / compare_backends.py --cpu-connector-join --spawn-default (k = 1, every driving car
 [0, 0.3, 0], non-driving GPU rows [0, 0, 0.3], GPU with cpu_connector_join). Writes, per agent, one JSON object per
 step in [from, to] (state at the END of the step, the cpu_divergence.py keys) to
 rust/oracle/divergence/<prefix>-<agent>.jsonl. Default steps: those of rust/oracle/divergence/cpu-<agent>.jsonl
 (or --cpu-dir). Agents are mapped to slots by this backend's own spawn rows (events kind 6). Prints every event row
-of the traced agents in the window, with the partner slot mapped back to its agent. --contact-tangent: GPU model patch
-GpuOptions.contact_tangent as well (rust/docs/crash-divergence.md).
+of the traced agents in the window, with the partner slot mapped back to its agent. GPU: the default
+model (cpu_connector_join, contact_tangent); --no-contact-tangent: contact_tangent=False (the JS kernels' tangent; the
+gpu-<agent> dumps of rust/docs/crash-divergence.md).
 """
 import sys, os, json
 import numpy as np
 import bayenv
 
 args = sys.argv[1:]
-ct = "--contact-tangent" in args; args = [a for a in args if a != "--contact-tangent"]
+ct = "--no-contact-tangent" not in args; args = [a for a in args if a != "--no-contact-tangent"]
 def opt(name, d):
     if name in args: i = args.index(name); v = args[i + 1]; del args[i:i + 2]; return v
     return d

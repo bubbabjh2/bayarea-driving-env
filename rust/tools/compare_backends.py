@@ -1,12 +1,12 @@
 """CPU vs GPU events on the same scenario, k = 1 (rust/README.md "CPU vs GPU events").
 
-    python rust/tools/compare_backends.py data [n_commuters=5000] [steps=3000] [start=25200] [seed=42] [--legacy-gpu] [--spawn-default] [--missed-out-edge] [--contact-tangent]
+    python rust/tools/compare_backends.py data [n_commuters=5000] [steps=3000] [start=25200] [seed=42] [--legacy-gpu] [--spawn-default] [--missed-out-edge] [--no-contact-tangent]
 
---legacy-gpu: GPU with cpu_connector_join=False, the JS GPU kernels bit-for-bit including their junction connector-entry
-bug (rust/docs/kerb-investigation.md; the model of every GPU run before the fix became the default).
+--legacy-gpu: GPU with cpu_connector_join=False and contact_tangent=False, the JS GPU kernels bit-for-bit including their
+junction connector-entry bug (rust/docs/kerb-investigation.md) and their f32 contact tangent (rust/docs/crash-divergence.md).
 --missed-out-edge: GPU missed exits through a junction connector are reported on the taken out-edge (CPU timing).
---contact-tangent: GPU model patch GpuOptions.contact_tangent (f32-robust friction tangent in the contact impulse,
-rust/docs/crash-divergence.md); default off.
+--no-contact-tangent: GPU with contact_tangent=False only (the JS kernels' f32 friction tangent in the contact impulse,
+rust/docs/crash-divergence.md).
 --spawn-default: GPU rows of slots that are not driving get the CPU sim's default action [0, 0, 0.3]. The CPU applies
 an action only to cars driving when act() is called, so a car spawning during a step brakes (default action) on its
 first decision; the GPU holds the slot's row (gas 0.3). This shifts the CPU trajectories by ~2 steps (harness only).
@@ -19,8 +19,8 @@ import sys, collections
 import numpy as np
 import bayenv
 
-cj = "--legacy-gpu" not in sys.argv; sd = "--spawn-default" in sys.argv; mo = "--missed-out-edge" in sys.argv; ct = "--contact-tangent" in sys.argv
-sys.argv = [a for a in sys.argv if a not in ("--legacy-gpu", "--spawn-default", "--missed-out-edge", "--contact-tangent")]
+cj = "--legacy-gpu" not in sys.argv; sd = "--spawn-default" in sys.argv; mo = "--missed-out-edge" in sys.argv; ct = cj and "--no-contact-tangent" not in sys.argv
+sys.argv = [a for a in sys.argv if a not in ("--legacy-gpu", "--spawn-default", "--missed-out-edge", "--no-contact-tangent")]
 data = sys.argv[1] if len(sys.argv) > 1 else "data"
 n = int(sys.argv[2]) if len(sys.argv) > 2 else 5000
 steps = int(sys.argv[3]) if len(sys.argv) > 3 else 3000

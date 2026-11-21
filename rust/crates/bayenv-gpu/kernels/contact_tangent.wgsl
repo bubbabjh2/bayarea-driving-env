@@ -1,4 +1,4 @@
-// bayenv-gpu model patch (GpuOptions.contact_tangent, default off): text replacement in the resolved source of
+// bayenv-gpu model patch (GpuOptions.contact_tangent, default on; off = the JS kernel): text replacement in the resolved source of
 // src/gpu/kernels/collidefns.wgsl resolveContact (included by contacts.wgsl and kernels/resolve_fused.wgsl; kernels.rs
 // `patch_text`, each //#orig snippet must occur exactly once). See rust/docs/crash-divergence.md.
 // Changed vs the JS kernel: the tangent of the Coulomb friction impulse. collide.js computes t = rv - vn n in f64; for

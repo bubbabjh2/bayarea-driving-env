@@ -166,7 +166,7 @@ impl Env {
     /// Env(data_dir, n_cars=10000, seed=1, backend="gpu" | "cpu", capacity=None, obs="v2", dt=0.05, start_time=None (gpu 05:00, cpu first departure - 60 s),
     ///     accidents=True, collisions=True, fuel=True, controls=True, junctions=True, steer="position", decide_every=1,
     ///     keep_events=False, population=None, pop_seed=42, streaming=False, return_trips=True, stations=True,
-    ///     refuel_budget_ms=None, cpu_connector_join=True, contact_tangent=False)
+    ///     refuel_budget_ms=None, cpu_connector_join=True, contact_tangent=True)
     /// Loads the world (~0.1 s warm), builds the GPU buffers and scatters `n_cars` cars at rest on random routes
     /// (seeded; the JS GPUSim.scatter placement). Actions start at [0, 0, 0] for every slot.
     /// population=N (gpu): instead of the scatter, N commuters (src/sim/population.js, seed pop_seed, generated natively,
@@ -178,12 +178,12 @@ impl Env {
     /// deterministic; the JS default is 4 ms).
     /// cpu_connector_join (gpu, default True): junction connector entry as in the CPU sim (rust/docs/kerb-investigation.md).
     /// False = legacy mode, the JS GPU kernels bit-for-bit, with their connector-entry bug (all earlier GPU checkpoints).
-    /// contact_tangent (gpu, default False): model patch, f32-robust friction tangent in the contact impulse
-    /// (rust/docs/crash-divergence.md).
+    /// contact_tangent (gpu, default True): f32-robust friction tangent in the contact impulse (rust/docs/crash-divergence.md).
+    /// False = legacy mode, the JS GPU kernels bit-for-bit (aligned rear-end wrecks spin to the kerb).
     #[new]
     #[pyo3(signature = (data_dir, n_cars=10000, seed=1, backend="gpu", capacity=None, obs="v2", dt=0.05, start_time=None,
         accidents=true, collisions=true, fuel=true, controls=true, junctions=true, steer="position", decide_every=1, keep_events=false,
-        population=None, pop_seed=42.0, streaming=false, return_trips=true, stations=true, refuel_budget_ms=None, crash_share=false, missed_at_out_edge=false, cpu_connector_join=true, contact_tangent=false))]
+        population=None, pop_seed=42.0, streaming=false, return_trips=true, stations=true, refuel_budget_ms=None, crash_share=false, missed_at_out_edge=false, cpu_connector_join=true, contact_tangent=true))]
     #[allow(clippy::too_many_arguments)]
     fn new(py: Python<'_>, data_dir: &str, n_cars: usize, seed: u32, backend: &str, capacity: Option<usize>, obs: &str, dt: f64, start_time: Option<f64>,
            accidents: bool, collisions: bool, fuel: bool, controls: bool, junctions: bool, steer: &str, decide_every: u32, keep_events: bool,
@@ -623,7 +623,7 @@ impl VecEnv {
 #[pymethods]
 impl VecEnv {
     #[new]
-    #[pyo3(signature = (data_dir, n_envs, n_cars=1000, seed=1, capacity=None, obs="v2", dt=0.05, start_time=None, accidents=true, collisions=true, fuel=true, backend="gpu", cpu_connector_join=true, contact_tangent=false))]
+    #[pyo3(signature = (data_dir, n_envs, n_cars=1000, seed=1, capacity=None, obs="v2", dt=0.05, start_time=None, accidents=true, collisions=true, fuel=true, backend="gpu", cpu_connector_join=true, contact_tangent=true))]
     #[allow(clippy::too_many_arguments)]
     fn new(py: Python<'_>, data_dir: &str, n_envs: usize, n_cars: usize, seed: u32, capacity: Option<usize>, obs: &str, dt: f64, start_time: Option<f64>,
            accidents: bool, collisions: bool, fuel: bool, backend: &str, cpu_connector_join: bool, contact_tangent: bool) -> PyResult<VecEnv> {
