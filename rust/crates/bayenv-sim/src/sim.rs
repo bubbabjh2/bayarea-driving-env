@@ -219,7 +219,7 @@ pub struct Sim {
     pub batch_policy: Option<BatchPolicy>,
     pub phase_ns: [u64; 10],
     /// sub-phase timers (profile): 0 leaders phase 1, 1 integrate phase A, 2 reroute, 3 traffic sample, 4 spawn pre-eval
-    pub sub_ns: [u64; 8],
+    pub sub_ns: [u64; 10],
 }
 
 #[inline(always)] pub(crate) fn f(x: f32) -> f64 { x as f64 }
@@ -269,7 +269,7 @@ impl Sim {
             passers: Default::default(), conflict_with: HashMap::default(), off_lane: Default::default(), touch: HashSet::default(), barrier_touch: HashSet::default(), barrier_now: HashSet::default(),
             mv_into: Sim::build_moves_into(&g), yield_by: None, creep_until: Vec::new(), creep_ignore: Vec::new(), edge_speed: HashMap::default(), traffic_penalty: None,
             last_reroute: HashMap::default(), next_traffic: 0.0, next_reroute: 0.0, next_density: start, edge_count_scratch: vec![0; ne], fwy, fwy_lane_km,
-            near_buf: Vec::new(), static_obstacles: Vec::new(), obstacles: Vec::new(), profile: std::env::var("BAYENV_PROFILE").is_ok(), phase_ns: [0; 10], sub_ns: [0; 8], events: StepEvents::default(), event_log: Vec::new(), p2_reruns: 0, collided_last: Vec::new(), batch_policy: None,
+            near_buf: Vec::new(), static_obstacles: Vec::new(), obstacles: Vec::new(), profile: std::env::var("BAYENV_PROFILE").is_ok(), phase_ns: [0; 10], sub_ns: [0; 10], events: StepEvents::default(), event_log: Vec::new(), p2_reruns: 0, collided_last: Vec::new(), batch_policy: None,
             empty: opts.traffic_mode == TrafficMode::Empty, time: start, dt: opts.dt, step_count: 0, vs, rng, router, g, pop, opts,
         };
         if sim.opts.traffic_mode == TrafficMode::Sparse && sim.opts.wrecks > 0 { sim.place_wrecks(sim.opts.wrecks); }
