@@ -45,6 +45,39 @@ Thread scaling, real 2k x 28 envs: 1 thread 0.58 M, 4 threads 3.28 M, 8 threads 
 14 threads 9.29 M agent-steps/s. Before removing Arc clones of the shared world from the hot paths, 14 threads
 were *slower* than 4 (atomic refcount on one cache line).
 
+## VecEnv, single-threaded envs (2026-11-20, under the bench lock, load ~6-12, cruise policy, 14 rayon threads)
+
+| world | envs | agents per env | agent-steps/s before | after (memory work) | max RSS before | after | per-env memory before | after |
+|---|---|---|---|---|---|---|---|---|
+| real 2k | 1 | 242 | 0.80 M | 0.81 M | 1,226 MB | 1,222 MB | | |
+| real 2k | 2 | 242 | 1.57 M | 1.59 M | 1,324 MB | 1,204 MB | | |
+| real 2k | 4 | 242 | 3.07 M | 3.08 M | 1,505 MB | 1,218 MB | | |
+| real 2k | 8 | 242 | 6.22 M | 6.29 M | 1,886 MB | 1,259 MB | | |
+| real 2k | 14 | 242 | 7.94 M | 8.23 M | 2,462 MB | 1,350 MB | 95 MB | 9.8 MB |
+| real 20k | 1 | 2,919 | 0.58 M | 0.58 M | 1,234 MB | 1,213 MB | | |
+| real 20k | 14 | 2,919 | 4.59 M | 4.49 M (noise) | 2,634 MB | 1,533 MB | 108 MB | 24.6 MB |
+
+Scaling (real 2k): 1 / 2 / 4 / 8 / 14 envs = 1.0 / 2.0 / 3.8 / 7.8 / 10.2x: linear up to 8 envs, then the 4 efficiency
+cores. Real 20k reaches 7.7x at 14 envs (larger per-env working set). Per-env memory = (RSS(14) - RSS(1)) / 13; the
+shared world + population is ~1.2 GB. Live heap of one more env (examples/env_mem): 90 -> 5.3 MB at creation.
+
+Single-thread profile (bench, no BAYENV_PAR): real 2k 3,367 steps/s (215 cars): integrate 45 %, spawn 22 %, leaders
+17 %, contacts 6 %; real 20k 187 steps/s (1,917 cars): integrate 48 %, leaders 26 %, contacts 6 %, controls 6 %.
+Top self time (sampling): physics::step_dynamics (10 substeps of 0.01 s per 0.1 s step; atan x2, tanh x2, tan, cos /
+sin memoised per substep, all V8-exact fdlibm) 23 % at 2k, 11 % at 20k; then fdlibm atan / atan2 / sin / cos /
+rem_pio2, spatial-hash queries, lead_base, lane geometry (offset_point, y_along, lane_width), router searches
+(reroutes / refuel plans, ~5 %).
+
+| single-env / VecEnv change | result |
+|---|---|
+| LaneIndex per-key arrays in per-edge blocks (key layout and order unchanged) | -25.6 MB per env |
+| junction moves_into map once per world (World::mv_into) | -24 MB per env |
+| router: one search graph per world (World::nav_base) + search state per worker thread (ThreadNavRouter) | -36 MB per env |
+| rejected: fixed-point skip in step_dynamics (reuse a substep when (u, v, r, steer, sl, ax) repeat bitwise) | only 0.8 % (2k) / 1.4 % (20k) of substeps repeat |
+| rejected: periodic re-ordering of cars by edge / lane for locality | slot order is semantic (slot-order commits, contact pass order, event order) |
+| not pursued: allocation-free step | 0.35 allocations per car-step (73 per step at 2k, 701 at 20k): < 1 % of step time |
+| not pursued: SIMD fdlibm across cars | possible bit-exactly (lane-wise IEEE ops + V8's FMA pattern) but a large port for at most ~2x on the transcendental part (2 f64 lanes) |
+
 ## Optimizations (each re-checked with the differential traces; all are exact)
 
 | change | effect |
