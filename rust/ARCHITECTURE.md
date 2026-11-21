@@ -76,7 +76,7 @@ r2.route(start, goal); r2.route_with(start, goal, &q); r2.route_into(start, goal
     the key multiset alone and equals the JS heap's sequence (the JS heap holds the same entries plus the skipped
     ones, which are all above every key it pops before the goal), so states, pushes and the result are equal by
     induction. On the first tie the query is rerun with the exact route.js heap (same sift order, no skipping).
-    Ties are rare on the real graph (0 in 100k random queries; the synthetic equal-cost grid test forces them).
+    Ties are rare on the real graph (21 fallbacks in 102k random queries; the synthetic equal-cost grid test forces thousands).
     Keys must be NaN-free for the argument: queries with non-finite / huge penalties use the exact heap directly.
   * "no path" without a search when the goal's strongly connected component is not reachable from the start's
     in the condensation order (Tarjan numbering: an edge a -> b implies comp[b] <= comp[a]); bans and avoid sets only

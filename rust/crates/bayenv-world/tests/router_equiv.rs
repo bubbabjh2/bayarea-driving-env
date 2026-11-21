@@ -55,7 +55,7 @@ fn router_equals_reference() {
                 if let Some(&e) = base.first() { pen.push((e, 3.0)); }
                 let mut pen_odd = pen.clone();
                 if let Some(&e) = base.get(base.len() / 2) { pen_odd.push((e, f64::INFINITY)); }
-                pen_odd.push(((r() % e_n) as u32, f64::NAN)); pen_odd.push(((r() % e_n) as u32, -1.5));
+                pen_odd.push(((r() % e_n) as u32, f64::NAN)); pen_odd.push(((r() % e_n) as u32, -0.1)); // negative, but every edge keeps a positive cost (jp >= 0.2 s): no negative cycles
                 let av_small: Vec<u32> = avoid.iter().step_by(2).copied().collect();
                 let qs = [(false, avoid.clone(), vec![]), (false, vec![], pen.clone()), (false, av_small, pen.clone()), (false, vec![], pen_odd)];
                 v.push((Q { s, g: gl, w1: false, avoid: vec![], pen: vec![] }, plain));
