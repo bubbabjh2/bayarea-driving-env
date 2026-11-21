@@ -25,7 +25,7 @@ pub fn sim_opts_from(v: &Value) -> SimOpts {
     o.path_sight = n("pathSight", 0.0); o.deadlock_break = n("deadlockBreak", 0.0); o.spawn_lane_route = n("spawnLaneRoute", 0.0); o.junction_sight = n("junctionSight", 0.0);
     o.position_mode = v["actionMode"].as_str() != Some("rate");
     o.traffic_mode = match v["trafficMode"].as_str() { Some("sparse") => TrafficMode::Sparse, Some("empty") => TrafficMode::Empty, _ => TrafficMode::Full };
-    o.fuel = n("fuel", 1.0) != 0.0; o.parallel = std::env::var("BAYENV_PAR").is_ok(); o.seed = n("seed", 1.0); o.wrecks = n("wrecks", 0.0) as usize; o.slot_pool = n("slotPool", 0.0) as usize;
+    o.fuel = n("fuel", 1.0) != 0.0; o.parallel = std::env::var("BAYENV_PAR").map(|v| !v.is_empty()).unwrap_or(false); o.seed = n("seed", 1.0); o.wrecks = n("wrecks", 0.0) as usize; o.slot_pool = n("slotPool", 0.0) as usize;
     o
 }
 
@@ -80,7 +80,7 @@ pub fn env_from_parts(run: &Value, world: Arc<World>, pop: Arc<Population>) -> E
     let da = &run["defaultAction"];
     opts.default_action = Action { steer: da["steer"].as_f64(), steer_rate: da["steerRate"].as_f64(), gas: da["gas"].as_f64().unwrap_or(0.0), brake: da["brake"].as_f64().unwrap_or(0.3) };
     let cfg = EnvConfig { start_time: Some(run["startTime"].as_f64().unwrap()), static_obstacles: obstacles_from(&run["staticObstacles"]),
-        scenario_obstacles: obstacles_from(&run["obstacles"]), opts };
+        scenario_obstacles: obstacles_from(&run["obstacles"]), opts, obstacles: obstacle_spec(&run["obstaclesSpec"]) };
     Env::new(world, pop, cfg, Box::new(|w| router_for(&w)))
 }
 
@@ -185,4 +185,16 @@ pub fn check(dir: &str, max: usize, verbose: bool) -> (usize, Vec<Mismatch>, f64
 pub fn router_for(w: &Arc<World>) -> Box<dyn crate::sim::Router> {
     if std::env::var("BAYENV_ROUTER").as_deref() == Ok("stub") { return Box::new(crate::route_stub::AStar::new(w.clone(), 1.25)); }
     Box::new(crate::route_stub::NavRouter::new(w, 1.25))
+}
+
+fn obstacle_spec(v: &Value) -> Option<crate::env::ObstacleSpec> {
+    if !v.is_object() { return None; }
+    let mut o = crate::env::ObstacleSpec::default();
+    if let Some(c) = v["count"].as_u64() { o.count = c as usize; }
+    if let Some(s) = v["seed"].as_f64() { o.seed = s; }
+    if let Some(k) = v["kinds"].as_array() { o.kinds = k.iter().filter_map(|x| crate::env::OBSTACLE_KINDS.iter().find(|n| Some(**n) == x.as_str()).copied()).collect(); }
+    if let Some(a) = v["slowKmh"].as_array() { o.slow_kmh = (a[0].as_f64().unwrap(), a[1].as_f64().unwrap()); }
+    if let Some(a) = v["brakeEvery"].as_array() { o.brake_every = (a[0].as_f64().unwrap(), a[1].as_f64().unwrap()); }
+    o.allow_single_lane = v["allowSingleLane"].as_bool().unwrap_or(false);
+    Some(o)
 }

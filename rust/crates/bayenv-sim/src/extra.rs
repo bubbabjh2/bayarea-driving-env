@@ -69,19 +69,40 @@ pub fn state_of(g: &World, a: usize, mv: i8, t: f64) -> (i8, i8, f64, f64) {
     (ty, LIGHT_RED, jm::max(0.0, since), until)
 }
 
+#[derive(Clone, Copy)]
+struct Ctl { ctl_approach: i32, ctl_type: i8, ctl_state: i8, ctl_dist: f32, ctl_time_in: f32, ctl_time_left: f32, ctl_move: i8, ctl_stopped: u8, ctl_inside: i32, ctl_inside_t: f32, sig: u64, stop: u64 }
+
 impl Sim {
     pub(crate) fn control_obs(&mut self) {
+        let high = self.vs.high;
+        let par = self.opts.parallel && high >= 512;
+        let outs: Vec<Option<Ctl>> = if par {
+            use rayon::prelude::*;
+            let me = &*self;
+            (0..high).into_par_iter().with_min_len(64).map(|i| if me.vs.state[i] == STATE_DRIVING { Some(me.ctl_car(i)) } else { None }).collect()
+        } else { (0..high).map(|i| if self.vs.state[i] == STATE_DRIVING { Some(self.ctl_car(i)) } else { None }).collect() };
+        let vs = &mut self.vs;
+        for (i, o) in outs.into_iter().enumerate() {
+            let Some(o) = o else { continue };
+            vs.ctl_approach[i] = o.ctl_approach; vs.ctl_type[i] = o.ctl_type; vs.ctl_state[i] = o.ctl_state; vs.ctl_dist[i] = o.ctl_dist; vs.ctl_time_in[i] = o.ctl_time_in;
+            vs.ctl_time_left[i] = o.ctl_time_left; vs.ctl_move[i] = o.ctl_move; vs.ctl_stopped[i] = o.ctl_stopped; vs.ctl_inside[i] = o.ctl_inside; vs.ctl_inside_t[i] = o.ctl_inside_t;
+            self.counters.signal_violations += o.sig; self.counters.stop_violations += o.stop;
+        }
+    }
+
+    /// _controlObs for one car (reads only that car's fields and the static controls).
+    fn ctl_car(&self, i: usize) -> Ctl {
         let g = self.gw();
         let cc = g.controls.as_ref().unwrap();
         let look = self.opts.control_lookahead;
-        for i in 0..self.vs.high {
-            if self.vs.state[i] != STATE_DRIVING { continue; }
-            let vs = &mut self.vs;
+        {
+            let vs = &self.vs;
+            let mut o = Ctl { ctl_approach: vs.ctl_approach[i], ctl_type: vs.ctl_type[i], ctl_state: vs.ctl_state[i], ctl_dist: vs.ctl_dist[i], ctl_time_in: vs.ctl_time_in[i], ctl_time_left: vs.ctl_time_left[i], ctl_move: vs.ctl_move[i], ctl_stopped: vs.ctl_stopped[i], ctl_inside: vs.ctl_inside[i], ctl_inside_t: vs.ctl_inside_t[i], sig: 0, stop: 0 };
             let rp = vs.route_pos[i] as usize;
             let hl = 0.5 * f(vs.length[i]);
             let (mut a, mut dist, mut k) = (-1i32, 0.0f64, rp);
             let e = vs.edge[i] as usize;
-            let inside = vs.ctl_inside[i];
+            let inside = o.ctl_inside;
             let skip = |x: i32| inside >= 0 && cc.cluster_of[cc.ap_control[x as usize] as usize] == inside;
             let si = f(vs.s[i]);
             let mut ap = -1i32;
@@ -106,30 +127,31 @@ impl Sim {
                     k += 1;
                 }
             }
-            let prev_a = vs.ctl_approach[i];
-            let prev_dist = f(vs.ctl_dist[i]);
-            if prev_a >= 0 && prev_dist >= 0.0 && prev_dist < 30.0 && (a != prev_a || dist < 0.0) && !(vs.ctl_inside[i] >= 0 && cc.cluster_of[cc.ap_control[prev_a as usize] as usize] == vs.ctl_inside[i]) {
-                let (st, ty) = (vs.ctl_state[i], vs.ctl_type[i]);
-                if (ty == CTRL_SIGNAL || ty == CTRL_RAMP || ty == CTRL_CROSSING) && st == LIGHT_RED && vs.ctl_time_in[i] > 0.5 && !(vs.ctl_move[i] == MOVE_RIGHT && vs.ctl_stopped[i] != 0) { self.counters.signal_violations += 1; }
-                else if ty == CTRL_STOP && vs.ctl_stopped[i] == 0 { self.counters.stop_violations += 1; }
+            let prev_a = o.ctl_approach;
+            let prev_dist = f(o.ctl_dist);
+            if prev_a >= 0 && prev_dist >= 0.0 && prev_dist < 30.0 && (a != prev_a || dist < 0.0) && !(o.ctl_inside >= 0 && cc.cluster_of[cc.ap_control[prev_a as usize] as usize] == o.ctl_inside) {
+                let (st, ty) = (o.ctl_state, o.ctl_type);
+                if (ty == CTRL_SIGNAL || ty == CTRL_RAMP || ty == CTRL_CROSSING) && st == LIGHT_RED && o.ctl_time_in > 0.5 && !(o.ctl_move == MOVE_RIGHT && o.ctl_stopped != 0) { o.sig = 1; }
+                else if ty == CTRL_STOP && o.ctl_stopped == 0 { o.stop = 1; }
             }
             if a != prev_a {
-                vs.ctl_stopped[i] = 0;
+                o.ctl_stopped = 0;
                 if prev_a >= 0 && prev_dist >= -1.0 && prev_dist < 30.0 && cc.ty[cc.ap_control[prev_a as usize] as usize] == CTRL_SIGNAL {
-                    vs.ctl_inside[i] = cc.cluster_of[cc.ap_control[prev_a as usize] as usize]; vs.ctl_inside_t[i] = r32(self.time);
+                    o.ctl_inside = cc.cluster_of[cc.ap_control[prev_a as usize] as usize]; o.ctl_inside_t = r32(self.time);
                 }
             }
-            if vs.ctl_inside[i] >= 0 && self.time - f(vs.ctl_inside_t[i]) > 15.0 { vs.ctl_inside[i] = -1; }
-            vs.ctl_approach[i] = a;
-            if a < 0 { vs.ctl_type[i] = -1; vs.ctl_dist[i] = 1e9; continue; }
+            if o.ctl_inside >= 0 && self.time - f(o.ctl_inside_t) > 15.0 { o.ctl_inside = -1; }
+            o.ctl_approach = a;
+            if a < 0 { o.ctl_type = -1; o.ctl_dist = 1e9; return o; }
             let app_e = cc.ap_edge[a as usize] as usize;
             let mut mv = MOVE_THROUGH;
             let pos = if app_e as i32 == vs.edge[i] { rp } else { k };
             if pos + 1 < vs.routes[i].len() { mv = movement_of(&g, app_e, vs.routes[i][pos + 1] as usize); }
             let (ty, st, tin, tleft) = state_of(&g, a as usize, mv, self.time);
-            vs.ctl_type[i] = ty; vs.ctl_state[i] = st; vs.ctl_time_in[i] = r32(tin); vs.ctl_time_left[i] = r32(tleft);
-            vs.ctl_dist[i] = r32(dist); vs.ctl_move[i] = mv;
-            if dist < 10.0 && vs.speed[i] < 0.3 { vs.ctl_stopped[i] = 1; }
+            o.ctl_type = ty; o.ctl_state = st; o.ctl_time_in = r32(tin); o.ctl_time_left = r32(tleft);
+            o.ctl_dist = r32(dist); o.ctl_move = mv;
+            if dist < 10.0 && vs.speed[i] < 0.3 { o.ctl_stopped = 1; }
+            o
         }
     }
 

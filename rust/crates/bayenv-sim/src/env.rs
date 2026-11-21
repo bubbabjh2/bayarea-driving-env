@@ -21,7 +21,15 @@ pub struct EnvConfig {
     pub static_obstacles: Vec<StaticObstacle>,
     /// scenarios/load.js placeScenarioObstacles (re-placed on every reset)
     pub scenario_obstacles: Vec<StaticObstacle>,
+    /// env `obstacles` option -> Simulation.placeObstacles
+    pub obstacles: Option<ObstacleSpec>,
 }
+
+/// placeObstacles spec {count, kinds, seed, slowKmh, brakeEvery, allowSingleLane}.
+#[derive(Clone, Debug)]
+pub struct ObstacleSpec { pub count: usize, pub kinds: Vec<&'static str>, pub seed: f64, pub slow_kmh: (f64, f64), pub brake_every: (f64, f64), pub allow_single_lane: bool }
+pub const OBSTACLE_KINDS: [&str; 8] = ["midblock", "afterCurve", "afterMerge", "junction", "rampEnd", "partial", "slow", "braking"];
+impl Default for ObstacleSpec { fn default() -> Self { ObstacleSpec { count: 40, kinds: OBSTACLE_KINDS.to_vec(), seed: 1.0, slow_kmh: (10.0, 20.0), brake_every: (15.0, 40.0), allow_single_lane: false } } }
 
 pub struct Env { pub world: Arc<World>, pub pop: Arc<Population>, pub cfg: EnvConfig, pub sim: Sim, router: RouterFactory }
 
@@ -42,6 +50,7 @@ impl Env {
         o.start_time = cfg.start_time.unwrap_or_else(|| default_start(pop));
         if o.traffic_mode != TrafficMode::Sparse { o.wrecks = 0; }
         let mut sim = Sim::new(world.clone(), pop.clone(), o, router(world.clone()));
+        if let Some(o) = &cfg.obstacles { sim.place_obstacles(o.count, &o.kinds, o.seed, o.slow_kmh, o.brake_every, o.allow_single_lane); }
         let so: Vec<_> = cfg.static_obstacles.iter().map(|o| (o.edge, o.at, o.lane, o.lat, o.type_idx)).collect();
         if !so.is_empty() { sim.place_static_obstacles(&so, false); }
         let sc: Vec<_> = cfg.scenario_obstacles.iter().map(|o| (o.edge, o.at, o.lane, o.lat, o.type_idx)).collect();
@@ -120,7 +129,7 @@ impl Env {
     pub fn create_real(world: Arc<World>, data_dir: &std::path::Path, n: usize, seed: f64, traffic_mode: TrafficMode) -> Result<Env, String> {
         let pop = Arc::new(Population::generate_like_env(&world, "real", n, seed, Some(data_dir))?);
         let opts = SimOpts { dt: 0.1, seed, traffic_mode, wrecks: if traffic_mode == TrafficMode::Sparse { 40 } else { 0 }, ..SimOpts::default() };
-        let cfg = EnvConfig { opts, start_time: None, static_obstacles: Vec::new(), scenario_obstacles: Vec::new() };
+        let cfg = EnvConfig { opts, start_time: None, static_obstacles: Vec::new(), scenario_obstacles: Vec::new(), obstacles: None };
         Ok(Env::new(world, pop, cfg, Box::new(|w| crate::harness::router_for(&w))))
     }
     /// One-call world load for create_real.

@@ -102,7 +102,7 @@ pub struct Density { pub samples: u64, pub peak_mean_density: f64, pub peak_mean
 
 /// Routing service (src/sim/route.js makeRouter): route(start, goal, avoid, penalty) -> edge list or None.
 /// Implemented by bayenv_world::nav (lead); `crate::route_stub` holds a test implementation until then.
-pub trait Router: Send {
+pub trait Router: Send + Sync {
     fn route(&mut self, start: i32, goal: i32, avoid: Option<&HashSet<i32>>, penalty: Option<&HashMap<i32, f64>>) -> Option<Vec<i32>>;
 }
 
