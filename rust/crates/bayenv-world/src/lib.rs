@@ -20,6 +20,7 @@ pub mod graph;
 pub mod hops;
 pub mod jsjson;
 pub mod jsmath;
+pub mod jsmath_x2;
 pub mod junctions;
 pub mod junctions_build;
 pub mod lanegraph;
