@@ -187,6 +187,8 @@ pub struct Obs {
     pub grade: [f64; 3],
     pub leader_id: i32,
     pub signals: Signals,
+    /// junction-yield blocker write of this observation (ctx.yieldRequired -> _yieldBy[slot]), applied by apply_writes
+    pub yield_write: Option<i32>,
 }
 
 pub const OBS_N: usize = 77;
@@ -223,7 +225,10 @@ impl Obs {
 
 // ---------------------------------------------------------------- obs.js fillObs
 /// fillObs(sim, i, obs). Mutates sim like the JS (ctx.yieldRequired -> yield_by[i], conflict cache).
-pub fn fill_obs(sim: &mut Sim, i: usize, o: &mut Obs) {
+pub fn fill_obs(sim: &mut Sim, i: usize, o: &mut Obs) { fill_obs_ro(sim, i, o); apply_writes(sim, i, o); }
+
+/// fill_obs without the state effect (see observe_one_ro).
+pub fn fill_obs_ro(sim: &Sim, i: usize, o: &mut Obs) {
     let g = sim.gw();
     let e = sim.vs.edge[i] as usize;
     {
@@ -259,7 +264,8 @@ pub fn fill_obs(sim: &mut Sim, i: usize, o: &mut Obs) {
         c.time_in_state = f(vs.ctl_time_in[i]); c.time_to_change = f(vs.ctl_time_left[i]); c.movement = vs.ctl_move[i] as i32; c.stopped = vs.ctl_stopped[i] == 1;
     }
     let dist = g.e_length[e] - f(sim.vs.s[i]);
-    o.control.yield_required = sim.yield_required(i, e, dist);
+    let (yr, yw) = sim.yield_required_core(i, e, dist);
+    o.control.yield_required = yr; o.yield_write = yw;
     fill_neighbors(sim, i, e, &mut o.neighbors);
     {
         let vs = &sim.vs;
@@ -317,7 +323,7 @@ pub fn oncoming_obs(sim: &Sim, i: usize, out: &mut OncomingObs) {
 }
 
 /// sim.junctionObs: junction conflicts ahead for slot i.
-pub fn junction_obs(sim: &mut Sim, i: usize, out: &mut JunctionObs) {
+pub fn junction_obs(sim: &Sim, i: usize, out: &mut JunctionObs) {
     let g = sim.gw();
     let e = sim.vs.edge[i] as usize;
     out.mouth_distance = INF; out.in_box = sim.vs.conn[i] >= 0; out.distance = INF; out.time_to_conflict = INF; out.stopped = false;
@@ -331,7 +337,7 @@ pub fn junction_obs(sim: &mut Sim, i: usize, out: &mut JunctionObs) {
     let m = m as usize;
     let ti = f(sim.vs.s[i]) - jj.m_f[4 * m]; let hl = f(sim.vs.hl[i]);
     out.mouth_distance = jm::max(0.0, -ti - hl);
-    let confs = sim.conflicts(m);
+    let confs = sim.conflicts_ro(m);
     let vs = &sim.vs;
     for c in confs.iter() {
         let Some(list) = sim.conn_cars.get(&(c.other as usize)) else { continue };
@@ -405,7 +411,7 @@ pub fn indicator_of(sim: &Sim, j: usize) -> (bool, bool) {
 }
 
 /// senseBodies: NB block + mirror inputs 70..78 for slot i into out (an OBS3 vector).
-pub fn sense_bodies(sim: &mut Sim, i: usize, out: &mut [f32], lane_w: f64, lane_off: f64) {
+pub fn sense_bodies(sim: &Sim, i: usize, out: &mut [f32], lane_w: f64, lane_off: f64) {
     let r = NB_RANGE;
     let mut sel = Selection::default();
     let me;
@@ -465,7 +471,7 @@ pub fn sense_bodies(sim: &mut Sim, i: usize, out: &mut [f32], lane_w: f64, lane_
         me = Body { x, z, h, v, hl: hl_i, hw: hw_i, ..Default::default() };
     }
     let m_me = movement_ahead(sim, i, CONFLICT_DIST);
-    let conf = if m_me >= 0 { Some(sim.conflicts(m_me as usize)) } else { None };
+    let conf = if m_me >= 0 { Some(sim.conflicts_ro(m_me as usize)) } else { None };
     let vs = &sim.vs;
     for k in 0..NB_K {
         let at = NB_OFF + k * NB_D; let j = sel.j[k];
@@ -490,7 +496,7 @@ fn end_sign_type(cc: &Controls, e: usize) -> i8 {
 }
 
 /// senseControls3: controls extras 79..86 for slot i.
-pub fn sense_controls3(sim: &mut Sim, i: usize, out: &mut [f32]) {
+pub fn sense_controls3(sim: &Sim, i: usize, out: &mut [f32]) {
     let g = sim.gw();
     let o = CTL3_OFF;
     for k in 0..8 { out[o + k] = 0.0; }
@@ -506,7 +512,7 @@ pub fn sense_controls3(sim: &mut Sim, i: usize, out: &mut [f32]) {
         let jj = g.j.as_ref().unwrap();
         let in_e = jj.m_info[7 * m as usize] as usize; let my = end_sign_type(cc, in_e);
         let (mut n, mut signed, mut stops) = (0, 0, 0);
-        for q in sim.conflicts(m as usize).iter() {
+        for q in sim.conflicts_ro(m as usize).iter() {
             let e2 = jj.m_info[7 * q.other as usize] as usize; if e2 == in_e { continue; }
             let t = end_sign_type(cc, e2); n += 1;
             if t == CTRL_STOP || t == CTRL_GIVE_WAY { signed += 1; }
@@ -561,7 +567,7 @@ pub fn sense_commands(sim: &Sim, i: usize, out: &mut [f32]) {
 
 /// fillObs3: input version 3 into out (len >= OBS3), for an `obs` just filled by `fill_obs` for the same slot.
 /// The whole vector is zeroed first (JS: a fresh Float32Array per observe), so 0..69 and 94..101 are 0.
-pub fn fill_obs3(sim: &mut Sim, i: usize, obs: &Obs, out: &mut [f32]) {
+pub fn fill_obs3(sim: &Sim, i: usize, obs: &Obs, out: &mut [f32]) {
     let out = &mut out[..OBS3];
     out.fill(0.0);
     sense_bodies(sim, i, out, obs.lane_width, obs.lane_offset);
@@ -571,11 +577,21 @@ pub fn fill_obs3(sim: &mut Sim, i: usize, obs: &Obs, out: &mut [f32]) {
 
 /// One env.observe() entry: fill_obs (+ fill_obs3 into v3 when given) + signals.
 pub fn observe_one(sim: &mut Sim, i: usize, obs: &mut Obs, v3: Option<&mut [f32]>) {
-    fill_obs(sim, i, obs);
+    observe_one_ro(sim, i, obs, v3);
+    apply_writes(sim, i, obs);
+}
+
+/// observe_one without its side effect (the junction-yield blocker write, kept in `obs.yield_write`): for parallel
+/// observation; apply it afterwards (`apply_writes`, any order: each write is to the car's own entry).
+pub fn observe_one_ro(sim: &Sim, i: usize, obs: &mut Obs, v3: Option<&mut [f32]>) {
+    fill_obs_ro(sim, i, obs);
     if let Some(v) = v3 { fill_obs3(sim, i, obs, v); }
     obs.leader_id = sim.vs.leader[i];
     obs.signals = sim.signals_for(i);
 }
+
+/// The state effect of an observation of slot i (ctx.yieldRequired -> _yieldBy[i]).
+pub fn apply_writes(sim: &mut Sim, i: usize, obs: &Obs) { if let Some(v) = obs.yield_write { sim.set_yield_by(i, v); } }
 
 /// The slots env.observe() covers (every driving car, ascending slot).
 pub fn driving_slots(sim: &Sim) -> Vec<usize> { (0..sim.vs.high).filter(|&i| sim.vs.state[i] == STATE_DRIVING).collect() }
@@ -588,12 +604,18 @@ pub const fn flat_stride(v3: bool) -> usize { OBS_N + if v3 { OBS3 } else { 0 } 
 pub fn observe_flat(sim: &mut Sim, slots: &[usize], out: &mut [f32], v3: bool) {
     let st = flat_stride(v3);
     assert!(out.len() >= slots.len() * st, "observe_flat: out too small");
-    let mut obs = Obs::default();
-    for (r, &i) in slots.iter().enumerate() {
-        let row = &mut out[r * st..(r + 1) * st];
+    let row_fn = |sim: &Sim, i: usize, row: &mut [f32]| -> Option<i32> {
+        let mut obs = Obs::default();
         let (head, tail) = row.split_at_mut(OBS_N);
-        observe_one(sim, i, &mut obs, if v3 { Some(tail) } else { None });
+        observe_one_ro(sim, i, &mut obs, if v3 { Some(tail) } else { None });
         let sc = obs.scalars(i, sim.vs.commuter[i]);
         for (d, s) in head.iter_mut().zip(sc.iter()) { *d = *s as f32; }
-    }
+        obs.yield_write
+    };
+    let writes: Vec<Option<i32>> = if sim.opts.parallel && slots.len() >= 256 {
+        use rayon::prelude::*;
+        let me: &Sim = sim;
+        out[..slots.len() * st].par_chunks_mut(st).zip(slots.par_iter()).with_min_len(32).map(|(row, &i)| row_fn(me, i, row)).collect()
+    } else { out[..slots.len() * st].chunks_mut(st).zip(slots.iter()).map(|(row, &i)| row_fn(sim, i, row)).collect() };
+    for (k, w) in writes.into_iter().enumerate() { if let Some(v) = w { sim.set_yield_by(slots[k], v); } }
 }

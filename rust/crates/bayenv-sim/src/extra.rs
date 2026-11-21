@@ -485,13 +485,27 @@ impl Sim {
 
     /// ctx.yieldRequired(i, e, dist)
     pub fn yield_required(&mut self, i: usize, e: usize, dist: f64) -> bool {
-        if self.empty { return false; }
+        let (r, w) = self.yield_required_core(i, e, dist);
+        if let Some(v) = w { self.set_yield_by(i, v); }
+        r
+    }
+
+    /// yieldRequired without side effects: (result, the yield-blocker write of _yieldJ if any). Read-only callers
+    /// (parallel observation) apply the write afterwards with `set_yield_by`.
+    pub fn yield_required_core(&self, i: usize, e: usize, dist: f64) -> (bool, Option<i32>) {
+        if self.empty { return (false, None); }
         let g = self.gw();
         if g.j.is_some() {
-            let r = self.yield_j(i, e);
-            if r && self.creep_until.len() > i && self.creep_until[i] > self.time && self.yield_by.as_ref().map(|y| y[i]) == Some(self.creep_ignore[i]) { return false; }
-            return r;
+            let (r, w) = self.yield_j_core(i, e);
+            let yb_i = match w { Some(v) => Some(v), None => self.yield_by.as_ref().and_then(|y| y.get(i).copied()) };
+            if r && self.creep_until.len() > i && self.creep_until[i] > self.time && yb_i == Some(self.creep_ignore[i]) { return (false, w); }
+            return (r, w);
         }
+        (self.yield_required_plain(i, e, dist), None)
+    }
+
+    fn yield_required_plain(&self, i: usize, e: usize, dist: f64) -> bool {
+        let g = self.gw();
         if dist < 1.5 { return false; }
         let to = g.e_to[e] as usize;
         let inc: Vec<usize> = (g.in_start[to]..g.in_start[to + 1]).map(|k| g.in_edges[k as usize]).filter(|&x| x != e as i32 && x != g.e_rev[e]).map(|x| x as usize).collect();

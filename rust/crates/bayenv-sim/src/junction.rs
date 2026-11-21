@@ -31,9 +31,14 @@ impl Sim {
         vs.ctl_state[j] == 2 || (vs.ctl_type[j] == 1 && vs.ctl_stopped[j] == 0)
     }
 
+    /// _conflicts(m) without filling the cache (cache hit, else computed): for read-only (parallel) perception.
+    pub(crate) fn conflicts_ro(&self, m: usize) -> &'static [Conflict] {
+        let g = self.gw();
+        g.conf_ext[m].get_or_init(|| self.compute_conflicts(m).into_boxed_slice())
+    }
+
     /// _conflicts(m): world conflicts + same-junction movements whose paths pass within 4.2 m (cached).
-    pub(crate) fn conflicts(&mut self, m: usize) -> Arc<Vec<Conflict>> {
-        if let Some(c) = self.conf_cache.get(&m) { return c.clone(); }
+    pub(crate) fn compute_conflicts(&self, m: usize) -> Vec<Conflict> {
         let g = self.gw();
         let j = g.j.as_ref().unwrap();
         let base = j.conflicts_of(m);
@@ -52,11 +57,11 @@ impl Sim {
             } }
             if best < 4.2 { c.push(Conflict { other: o as u32, ty: 0, s: sa, s_other: sb }); }
         }
-        if self.conf_cache.len() > 200000 { self.conf_cache.clear(); }
-        let c = Arc::new(c);
-        self.conf_cache.insert(m, c.clone());
         c
     }
+
+    /// _conflicts(m), memoised per world (a pure function of the junction data; shared by every env of the world).
+    pub(crate) fn conflicts(&self, m: usize) -> &'static [Conflict] { self.conflicts_ro(m) }
 
     fn stuck_in(&self, k: usize) -> bool { let vs = &self.vs; vs.speed[k] < 0.3 && vs.stopped_since[k] >= 0.0 && self.time - f(vs.stopped_since[k]) > 20.0 }
 
@@ -242,23 +247,21 @@ impl Sim {
     }
 
     /// _yieldJ(i, e): must slot i wait at the mouth of e's junction?
-    pub(crate) fn yield_j(&mut self, i: usize, e: usize) -> bool {
+    /// _yieldJ(i, e) with its write to the yield-blocker array as a value (None = not written).
+    pub(crate) fn yield_j_core(&self, i: usize, e: usize) -> (bool, Option<i32>) {
         let g = self.gw();
         let j = g.j.as_ref().unwrap();
-        if self.vs.conn[i] >= 0 || !(g.e_s_stop[e] < g.e_length[e]) { return false; }
+        if self.vs.conn[i] >= 0 || !(g.e_s_stop[e] < g.e_length[e]) { return (false, None); }
         let rp = self.vs.route_pos[i] as usize;
-        if rp + 1 >= self.vs.routes[i].len() { return false; }
+        if rp + 1 >= self.vs.routes[i].len() { return (false, None); }
         let m = j.movement(e, self.vs.lane[i] as i32, self.vs.routes[i][rp + 1]);
-        if m < 0 { return false; }
+        if m < 0 { return (false, None); }
         let m = m as usize;
         let hl = f(self.vs.hl[i]);
         let d_s = jm::max(0.0, jm::min(g.e_s_stop[e], j.s_in(m)) - f(self.vs.s[i]) - hl);
         let v = f(self.vs.speed[i]);
         let l0 = self.vs.leader[i];
-        let cap = self.vs.capacity;
-        match &mut self.yield_by { Some(yb) if yb.len() >= cap => {}, Some(yb) => yb.resize(cap, -1), None => self.yield_by = Some(vec![-1; cap]) }
-        self.yield_by.as_mut().unwrap()[i] = -1;
-        macro_rules! wait { ($j:expr) => {{ self.yield_by.as_mut().unwrap()[i] = $j as i32; return true; }}; }
+        macro_rules! wait { ($j:expr) => {{ return (true, Some($j as i32)); }}; }
         {
             let vs = &self.vs;
             if l0 >= 0 { let lu = l0 as usize; if vs.state[lu] == STATE_DRIVING && vs.speed[lu] < 1.0 && (vs.edge[lu] != e as i32 || vs.conn[lu] >= 0) && f(vs.gap[i]) - d_s - j.m_len[m] < f(vs.length[i]) + 1.0 { wait!(lu); } }
@@ -266,7 +269,7 @@ impl Sim {
         let left = j.turn(m) < -0.5;
         let my_stop = self.signed(i);
         let sight = self.opts.junction_sight >= 1.0;
-        let confs = self.conflicts(m);
+        let confs = self.conflicts_ro(m);
         for c in confs.iter() {
             let o = c.other as usize;
             if c.ty == 0 { if let Some(list) = self.conn_cars.get(&o) { for &jj in list { if f(self.vs.s[jj]) - j.s_in(o) - f(self.vs.hl[jj]) < c.s_other + f(self.vs.hw[i]) + 1.0 { wait!(jj); } } } }
@@ -295,7 +298,7 @@ impl Sim {
                 if first(self, ju, jm::max(0.0, g.e_s_stop[o_in] - f(vs.s[ju]) - f(vs.hl[ju]))) { wait!(ju); }
                 continue;
             }
-            if self.see_approach(i, o_in, o_lane, o_out, &first) { let sj = self.seen_j; wait!(sj); }
+            if let Some(sj) = self.see_approach(i, o_in, o_lane, o_out, &first) { wait!(sj); }
         }
         let node = g.e_to[e] as usize;
         let my_out = self.vs.routes[i][rp + 1];
@@ -324,21 +327,31 @@ impl Sim {
                 }
             }
         }
-        false
+        (false, Some(-1))
     }
 
-    fn moves_into(&mut self, e: usize) -> Vec<usize> {
-        if self.mv_into.is_none() {
-            let g = self.gw();
-            let j = g.j.as_ref().unwrap();
-            let mut m2: crate::fx::HashMap<u32, Vec<usize>> = Default::default();
-            for m in 0..j.move_count { m2.entry(j.info(m, 2)).or_default().push(m); }
-            self.mv_into = Some(m2);
-        }
-        self.mv_into.as_ref().unwrap().get(&(e as u32)).cloned().unwrap_or_default()
+    pub(crate) fn yield_j(&mut self, i: usize, e: usize) -> bool {
+        let (r, w) = self.yield_j_core(i, e);
+        if let Some(v) = w { self.set_yield_by(i, v); }
+        r
+    }
+    pub fn set_yield_by(&mut self, i: usize, v: i32) {
+        let cap = self.vs.capacity;
+        match &mut self.yield_by { Some(yb) if yb.len() >= cap => {}, Some(yb) => yb.resize(cap, -1), None => self.yield_by = Some(vec![-1; cap]) }
+        self.yield_by.as_mut().unwrap()[i] = v;
     }
 
-    fn see_approach(&mut self, i: usize, o_in: usize, o_lane: i32, o_out: i32, first: &dyn Fn(&Sim, usize, f64) -> bool) -> bool {
+    pub(crate) fn build_moves_into(g: &crate::world::World) -> Option<crate::fx::HashMap<u32, Vec<usize>>> {
+        let j = g.j.as_ref()?;
+        let mut m2: crate::fx::HashMap<u32, Vec<usize>> = Default::default();
+        for m in 0..j.move_count { m2.entry(j.info(m, 2)).or_default().push(m); }
+        Some(m2)
+    }
+    fn moves_into(&self, e: usize) -> Vec<usize> {
+        match &self.mv_into { Some(m) => m.get(&(e as u32)).cloned().unwrap_or_default(), None => Self::build_moves_into(self.gw()).and_then(|m| m.get(&(e as u32)).cloned()).unwrap_or_default() }
+    }
+
+    fn see_approach(&self, i: usize, o_in: usize, o_lane: i32, o_out: i32, first: &dyn Fn(&Sim, usize, f64) -> bool) -> Option<usize> {
         let g = self.gw();
         let j = g.j.as_ref().unwrap();
         let r = 80.0;
@@ -353,14 +366,14 @@ impl Sim {
             let ju = jj as usize;
             if self.vs.conn[ju] < 0 {
                 let d2 = jm::max(0.0, g.e_s_stop[o_in] - f(self.vs.s[ju]) - f(self.vs.hl[ju]));
-                if d2 > r { return false; }
+                if d2 > r { return None; }
                 n += 1;
-                if ok(self, ju, 1) && first(self, ju, d2) { self.seen_j = ju as i32; return true; }
+                if ok(self, ju, 1) && first(self, ju, d2) { return Some(ju); }
             }
             jj = self.lanes.behind(&self.vs, ju, o_lane);
         }
         let s_e = g.e_s_stop[o_in];
-        if !(s_e < r) { return false; }
+        if !(s_e < r) { return None; }
         let ups = self.moves_into(o_in);
         for m2 in ups {
             let (len2, s_in2, s_out2) = (j.m_len[m2], j.s_in(m2), j.s_out(m2));
@@ -368,7 +381,7 @@ impl Sim {
             if let Some(list) = self.conn_cars.get(&m2).cloned() {
                 for k in list {
                     let d2 = base + jm::max(0.0, s_in2 + len2 - f(self.vs.s[k])) - f(self.vs.hl[k]);
-                    if d2 <= r && ok(self, k, 2) && first(self, k, jm::max(0.0, d2)) { self.seen_j = k as i32; return true; }
+                    if d2 <= r && ok(self, k, 2) && first(self, k, jm::max(0.0, d2)) { return Some(k); }
                 }
             }
             let (in_e, in_l) = (j.info(m2, 0) as i32, j.info(m2, 1) as i32);
@@ -382,12 +395,12 @@ impl Sim {
                     c += 1;
                     let vs = &self.vs;
                     let nxt = vs.routes[qu].get(vs.route_pos[qu] as usize + 1).copied();
-                    if !vs.routes[qu].is_empty() && nxt == Some(o_in as i32) && ok(self, qu, 2) && !self.must_stop(qu) && first(self, qu, d2) { self.seen_j = qu as i32; return true; }
+                    if !vs.routes[qu].is_empty() && nxt == Some(o_in as i32) && ok(self, qu, 2) && !self.must_stop(qu) && first(self, qu, d2) { return Some(qu); }
                 }
                 q = self.lanes.behind(&self.vs, qu, in_l);
             }
         }
-        false
+        None
     }
 
     pub(crate) fn path_bodies(&mut self, i: usize) {
