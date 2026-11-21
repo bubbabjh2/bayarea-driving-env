@@ -14,7 +14,7 @@ fn host_matches_js_setup() {
     }
     let world = Arc::new(bayenv_world::World::load(data).expect("world"));
     let cap = o.meta["cap"].as_u64().unwrap() as usize;
-    let mut opts = GpuOptions { capacity: cap, cpu_connector_join: false, contact_tangent: false, ..Default::default() };   // the JS kernels (legacy model)
+    let mut opts = GpuOptions { capacity: cap, cpu_connector_join: false, contact_tangent: false, deterministic_contacts: false, deterministic_spawn: false, deterministic_events: false, deterministic_leaders: false, ..Default::default() };   // the JS kernels (legacy model)
     opts.features.accidents = true; opts.start_time = o.meta["time"].as_f64().unwrap() - o.meta["k"].as_f64().unwrap() * opts.dt;
     let mut sim = match bayenv_gpu::env::create(world, opts) { Ok(s) => s, Err(e) => { eprintln!("host_oracle: no GPU ({e}): not run"); return } };
     let jp: &[u32] = bytemuck::cast_slice(o.buffer("params").unwrap());
