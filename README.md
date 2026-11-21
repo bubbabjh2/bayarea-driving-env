@@ -19,6 +19,39 @@ Every car is driven by actions you supply.
 Licence: code MIT (LICENSE). Map data © OpenStreetMap contributors, ODbL 1.0. Elevation: U.S. Geological
 Survey, 3D Elevation Program (public domain). See NOTICE.
 
+## Known limitations & disclaimers
+
+**Simulation**
+* **No background traffic.** The built-in rule-based driver was removed, so your policy drives every car. For dense
+  traffic use the GPU sim (~4.7 ms/step at 100k cars, 1.47 ms at 10k); the CPU sim is slow at full scale.
+* **Crash rate is about 10⁴× real-world**, and dense traffic tends to gridlock at junction boxes and wrecks.
+* **Every command is delayed** by a per-driver reaction time of 0.6–1.8 s, which destabilises naive controllers.
+  Do not add your own delay.
+* **`step()` returns no reward.** Compute it from `env.sim.signalsFor(slot)` with `src/sim/reward.js`.
+* **First real-map load takes ~90 s and 6–10 GB RAM** unless `data/junctions.bin` is pre-built. Build it once with
+  `npm run build:junctions` (or `node --max-old-space-size=14000 tools/build_junctions.mjs data/`; see `docs/WORLD-BUILD.md`).
+
+**Road network**
+* Known geometry residuals: 3 lane-count jumps, 24 open weaves and 39 ramp overlaps (all from OSM crossings), plus 13
+  stacked SoMa/YBI ramp segments over the grade limit.
+* The flat road tier cannot be reproduced exactly from OSM. The original came from an inconsistent Overpass mirror,
+  and re-fetching differs by about ±2–4 % of edges. The committed snapshot (`data/src/flat/`) is the canonical
+  input. Elevation, junctions, lines, controls, crosswalks and water rebuild bit-identically from it.
+* Rebuilding controls from OSM alone moves 17 approach stop lines at 14 controls by 0.6–7.7 m. The committed data keeps the original
+  positions as the baseline.
+
+**Traffic controls**
+* Signal and stop locations are OSM merged with DataSF (signals and stop signs, PDDL) and San Jose (signals, CC BY).
+  About 22 other cities and Caltrans have no usable open source, so they are OSM only. Oakland, South San
+  Francisco, Emeryville, Mountain View and Cupertino data (no licence stated) were used only to verify, never merged.
+  Known gaps: Oakland ~74 missing signals, South SF 12, Emeryville 3, Mountain View 4, Cupertino ~415 missing stop
+  signs. Spot check: 23 of 24 intersections match.
+* All signal timing is synthetic: fixed two-axis plans, protected lefts only on major roads, 1.5 s all-red, ramp
+  meters 06:00–10:00, no flashing state. No city publishes timing. Records are tagged `timing: "synthetic"`.
+* Controls are assigned per approach, not per lane. There are no turn arrows.
+* Controls are points only. `src/look/signals.js` is an optional three.js helper that draws a generic pole, mast arm
+  and head; it is not a real per-site model.
+
 ## Setup
 
 * Node ≥ 22. No `npm install` needed for the CPU sim.
@@ -146,19 +179,3 @@ Everything committed under `data/` can be regenerated and checked against pinned
   (no attic date reproduces it; a rebuild differs by ~±2–4 % of edges), so the committed flat snapshot
   `data/src/flat/` is the canonical input and everything downstream of it is reproducible.
 * **Synthetic scenarios:** `npm run build:scenarios`.
-
-## Known issues (from the original project's own measurements)
-
-* **Crash rate is far above real** (~10⁴× real freeway rates with the original learned/rule drivers) and
-  high-density runs tend to **gridlock / collapse** around junction boxes and wrecks (docs in the original:
-  junction-box conflicts ~45 %, unseen wrecks ~37 % of collapse causes; partly fixed in layout v8).
-* Road geometry residuals: 3 lane-count jumps, 24 open weaves, 39 ramp overlaps (OSM crossings), 13 stacked
-  SoMa/YBI ramp segments over the grade limit.
-* Signal timing plans are **synthetic**: fixed-time plans generated per junction (`src/sim/controls.js`). No city
-  publishes timing plans, and there are no flashing/beacon states. Signal and stop locations are authoritative only
-  in San Francisco and San Jose; elsewhere they are OSM, with known gaps (see "Traffic controls").
-* The reaction-time delay (up to 1.8 s) makes naive controllers unstable; plan for it.
-* With no built-in driver, the sim's deadlock breaker / IDM-related options are inert, and every car must be
-  driven by your policy (expensive at full scale on CPU: use the GPU sim).
-* The CPU real-world load takes ~90 s and ~6–10 GB RAM (`--max-old-space-size=12000`) when
-  `data/junctions.bin` is absent; build it once (`docs/WORLD-BUILD.md`).
