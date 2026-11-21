@@ -3,7 +3,8 @@
 //! * `setPopulation(pop, {stations})` + `_enqueueSpawns`: trip schedule (outbound + return legs sorted by departure),
 //!   spawn queue entries, fuel carried between legs (`fuelLeft`), outcomes, agents buffer sizing.
 //! * `setStreaming(table)` + `_enqueueStream`: CommuterTable (src/sim/stream.js), routes at departure from a
-//!   synchronous RouteProvider (A*, OD cache) into the size-class route arena.
+//!   RouteProvider (A*, OD LRU cache, prefetch workers as streamPack.js RouteWorkers; deterministic: a route in
+//!   flight is waited for) into the size-class route arena.
 //! * Refuel plans (`_processRefuels` / `_applyRefuel`, the main-thread path with `StationNetwork.plan` of
 //!   bayenv-sim), station lots (`_enterStation`, REENTER) and pumps (`_pumps`).
 //! * `placeObstacles` (spec or explicit list), `placeWrecks`, `importSnapshot` (src/sim/state.js exportState),
@@ -134,18 +135,133 @@ impl CommuterTable {
     pub fn delta_for(&self, id: usize) -> [f32; DELTA_SIZE] { pg::delta_for(&self.seed_str, &self.cfg, &self.base, id, self.reaction_time[id] as f64) }
 }
 
-/// `RouteProvider` (stream.js): A* (weight 1.25) with an OD cache (the cache never changes a route).
-pub struct RouteProvider { router: bayenv_world::nav::Router, cache: HashMap<u64, Option<Arc<Vec<i32>>>>, cache_size: usize, pub hits: u64, pub misses: u64 }
+/// OD cache with the JS `Map` LRU semantics of `RouteProvider` (a hit moves the entry to the back, an insert into a
+/// full cache drops the front). The cache never changes a route (A* is deterministic), only how often it runs.
+struct OdLru { map: HashMap<u64, (Option<Arc<Vec<i32>>>, u64)>, order: VecDeque<(u64, u64)>, seq: u64, cap: usize }
+impl OdLru {
+    fn new(cap: usize) -> OdLru { OdLru { map: HashMap::new(), order: VecDeque::new(), seq: 0, cap: cap.max(1) } }
+    fn get(&mut self, key: u64) -> Option<Option<Arc<Vec<i32>>>> {
+        let e = self.map.get_mut(&key)?;
+        self.seq += 1; e.1 = self.seq; self.order.push_back((self.seq, key));
+        let v = e.0.clone();
+        if self.order.len() > 4 * self.map.len() + 1024 { self.compact(); }
+        Some(v)
+    }
+    fn contains(&self, key: u64) -> bool { self.map.contains_key(&key) }
+    fn insert(&mut self, key: u64, v: Option<Arc<Vec<i32>>>) {
+        if !self.map.contains_key(&key) && self.map.len() >= self.cap {
+            while let Some((s, k)) = self.order.pop_front() { if self.map.get(&k).is_some_and(|e| e.1 == s) { self.map.remove(&k); break; } }
+        }
+        self.seq += 1; self.map.insert(key, (v, self.seq)); self.order.push_back((self.seq, key));
+    }
+    fn compact(&mut self) { let m = &self.map; self.order.retain(|&(s, k)| m.get(&k).is_some_and(|e| e.1 == s)); }
+    fn len(&self) -> usize { self.map.len() }
+    /// route edges held (memory estimate: 4 B per edge + ~80 B per entry)
+    fn edges(&self) -> usize { self.map.values().map(|e| e.0.as_ref().map_or(0, |r| r.len())).sum() }
+}
+
+/// Shared state of the prefetch workers: the OD cache, the ODs being routed, worker routers.
+struct RouteShared { od: std::sync::Mutex<RouteState>, ready: std::sync::Condvar, routers: std::sync::Mutex<Vec<bayenv_world::nav::Router>>, world: Arc<World> }
+struct RouteState { cache: OdLru, inflight: HashSet<u64>, computed: u64, worker_ns: u64 }
+
+/// Streaming route statistics (`RouteProvider` + prefetch pool).
+#[derive(Clone, Copy, Debug, Default)]
+pub struct RouteStats {
+    /// departures that asked for a route; served from the OD cache (incl. prefetched routes); computed on the sim thread
+    pub lookups: u64, pub hits: u64, pub misses: u64,
+    /// routes computed by the prefetch workers; departures that found their route still being computed and waited
+    pub prefetched: u64, pub waited: u64,
+    /// wall time the sim thread spent routing (misses) / waiting for workers; worker CPU time routing (ns)
+    pub route_ns: u64, pub wait_ns: u64, pub worker_ns: u64,
+    pub cache_len: usize, pub cache_edges: usize,
+}
+
+fn od_key(from: i32, to: i32) -> u64 { (from as u32 as u64) << 32 | to as u32 as u64 }
+fn astar(r: &mut bayenv_world::nav::Router, from: i32, to: i32) -> Option<Arc<Vec<i32>>> {
+    r.route(from as usize, to as usize).map(|v| Arc::new(v.into_iter().map(|x| x as i32).collect::<Vec<i32>>()))
+}
+fn stream_router(w: &World) -> bayenv_world::nav::Router {
+    bayenv_world::nav::Router::new(&w.graph, &bayenv_world::nav::RouterOpts { weight: 1.25, cache_max: 0, ..Default::default() })
+}
+
+/// `RouteProvider` (stream.js): A* (weight 1.25) with an OD LRU cache, plus the prefetch design of `RouteWorkers`
+/// (src/gpu/streamPack.js): `prefetch` queues departures ahead of time on a pool of worker threads (one A* router
+/// each, preallocated search state), results land in the shared OD cache. `get` is deterministic: a route that is
+/// still being computed is waited for (never the JS `waitingRoute` delay), one that was not prefetched is computed on
+/// the calling thread, so every commuter gets the same route at the same step as with `threads = 0` (serial).
+pub struct RouteProvider {
+    router: bayenv_world::nav::Router, shared: Arc<RouteShared>, pool: Option<rayon::ThreadPool>,
+    batch: Vec<(u64, i32, i32)>, pub stats: RouteStats,
+}
 impl RouteProvider {
-    pub fn new(w: &World) -> RouteProvider { RouteProvider { router: bayenv_world::nav::Router::new(&w.graph, &bayenv_world::nav::RouterOpts { weight: 1.25, cache_max: 0, ..Default::default() }), cache: HashMap::new(), cache_size: 200000, hits: 0, misses: 0 } }
+    const BATCH: usize = 16;
+    /// threads = 0: serial (route at departure); n: n prefetch workers.
+    pub fn new(w: &Arc<World>, threads: usize) -> RouteProvider { Self::with_cache(w, threads, 200000) }
+    pub fn with_cache(w: &Arc<World>, threads: usize, cache_size: usize) -> RouteProvider {
+        let pool = (threads > 0).then(|| rayon::ThreadPoolBuilder::new().num_threads(threads).thread_name(|i| format!("bayenv-route-{i}")).build().expect("route pool"));
+        RouteProvider { router: stream_router(w), pool, batch: Vec::new(), stats: RouteStats::default(),
+            shared: Arc::new(RouteShared { od: std::sync::Mutex::new(RouteState { cache: OdLru::new(cache_size), inflight: HashSet::new(), computed: 0, worker_ns: 0 }),
+                ready: std::sync::Condvar::new(), routers: std::sync::Mutex::new(Vec::new()), world: w.clone() }) }
+    }
+    pub fn threads(&self) -> usize { self.pool.as_ref().map_or(0, |p| p.current_num_threads()) }
+    /// The route of (from, to): cache, else wait for a prefetch in flight, else A* here.
     pub fn get(&mut self, from: i32, to: i32) -> Option<Arc<Vec<i32>>> {
-        let key = (from as u32 as u64) << 32 | to as u32 as u64;
-        if let Some(r) = self.cache.get(&key) { self.hits += 1; return r.clone(); }
-        self.misses += 1;
-        let r = self.router.route(from as usize, to as usize).map(|v| Arc::new(v.into_iter().map(|x| x as i32).collect::<Vec<i32>>()));
-        if self.cache.len() >= self.cache_size { self.cache.clear(); }
-        self.cache.insert(key, r.clone());
+        let key = od_key(from, to); self.stats.lookups += 1;
+        {
+            let mut st = self.shared.od.lock().unwrap();
+            if let Some(r) = st.cache.get(key) { self.stats.hits += 1; return r; }
+            if st.inflight.contains(&key) {
+                let t0 = std::time::Instant::now();
+                while st.inflight.contains(&key) { st = self.shared.ready.wait(st).unwrap(); }
+                self.stats.wait_ns += t0.elapsed().as_nanos() as u64; self.stats.waited += 1;
+                if let Some(r) = st.cache.get(key) { self.stats.hits += 1; return r; }
+            }
+        }
+        self.stats.misses += 1;
+        let t0 = std::time::Instant::now();
+        let r = astar(&mut self.router, from, to);
+        self.stats.route_ns += t0.elapsed().as_nanos() as u64;
+        self.shared.od.lock().unwrap().cache.insert(key, r.clone());
         r
+    }
+    /// Queue (from, to) for the workers (no-op when serial, cached or already in flight).
+    pub fn prefetch(&mut self, from: i32, to: i32) {
+        if self.pool.is_none() { return; }
+        let key = od_key(from, to);
+        {
+            let mut st = self.shared.od.lock().unwrap();
+            if st.cache.contains(key) || !st.inflight.insert(key) { return; }
+        }
+        self.batch.push((key, from, to));
+        if self.batch.len() >= Self::BATCH { self.flush(); }
+    }
+    pub fn flush(&mut self) {
+        let Some(pool) = &self.pool else { return };
+        if self.batch.is_empty() { return; }
+        let b = std::mem::take(&mut self.batch); let sh = self.shared.clone();
+        pool.spawn(move || {
+            let popped = sh.routers.lock().unwrap().pop();
+            let mut r = popped.unwrap_or_else(|| stream_router(&sh.world));
+            for (key, from, to) in b {
+                let t0 = std::time::Instant::now();
+                let route = astar(&mut r, from, to);
+                let ns = t0.elapsed().as_nanos() as u64;
+                let mut st = sh.od.lock().unwrap();
+                st.cache.insert(key, route); st.inflight.remove(&key); st.computed += 1; st.worker_ns += ns;
+                drop(st); sh.ready.notify_all();
+            }
+            sh.routers.lock().unwrap().push(r);
+        });
+    }
+    /// Wait until every queued prefetch is done.
+    pub fn drain(&mut self) {
+        self.flush();
+        let mut st = self.shared.od.lock().unwrap();
+        while !st.inflight.is_empty() { st = self.shared.ready.wait(st).unwrap(); }
+    }
+    pub fn stats(&self) -> RouteStats {
+        let st = self.shared.od.lock().unwrap();
+        RouteStats { prefetched: st.computed, worker_ns: st.worker_ns, cache_len: st.cache.len(), cache_edges: st.cache.edges(), ..self.stats }
     }
 }
 
@@ -153,7 +269,13 @@ impl RouteProvider {
 struct Arena { free: HashMap<u32, Vec<u32>>, slot: Vec<i32>, cls: Vec<u8> }
 
 #[derive(Clone, Copy, Debug, Default)]
-pub struct StreamStats { pub routed: u64, pub waiting_route: u64, pub pool_full: u64 }
+pub struct StreamStats {
+    pub routed: u64, pub waiting_route: u64, pub pool_full: u64,
+    /// FNV-1a over every placed departure in placement order (commuter, step, route edges): equal hashes = the same
+    /// spawn table (serial vs prefetch check). Slots / queue entries / arena offsets are left out: they follow the order
+    /// of the GPU's arrival events, which is not repeatable run to run over long runs
+    pub spawn_hash: u64,
+}
 
 /// Stations: refuel planner (bayenv-sim `StationNetwork`) + the pump queues of `gpuSim.js` (FIFO per station).
 pub struct Stations {
@@ -192,7 +314,7 @@ pub struct Ext {
     pub trips: Vec<i32>, pub trip_depart: Vec<f32>, pub trip_ptr: usize,
     /// per commuter: fuel left after the last leg (-1 none), outcome of the outbound leg (1 arrived, 2 crash, 3 stranded, 4 stuck, 5 no route)
     pub fuel_left: Vec<f32>, pub outcome: Vec<u8>,
-    pub table: Option<Arc<CommuterTable>>, table_ptr: usize, pending_stream: Vec<u32>, provider: Option<RouteProvider>, arena: Option<Arena>,
+    pub table: Option<Arc<CommuterTable>>, table_ptr: usize, pending_stream: Vec<u32>, prefetch_ptr: usize, provider: Option<RouteProvider>, arena: Option<Arena>,
     pub stream_deltas: Option<Arc<Vec<f32>>>, pub stream_stats: StreamStats,
     pub stations: Option<Stations>, pumping: Vec<Pump>, pub(super) in_lot: HashSet<u32>,
     pub obstacles: Vec<Placed>,
@@ -303,11 +425,12 @@ impl GpuSim {
     /// `setStreaming(table, { stations, deltas })`: commuters stream in at departure, routes from a RouteProvider.
     pub fn set_streaming(&mut self, table: Arc<CommuterTable>, stations: bool, deltas: Option<Arc<Vec<f32>>>) {
         self.x.stream_deltas = deltas;
-        if self.x.provider.is_none() { self.x.provider = Some(RouteProvider::new(&self.world)); }
+        let threads = self.opts.route_threads;
+        if self.x.provider.as_ref().is_none_or(|p| p.threads() != threads) { self.x.provider = Some(RouteProvider::new(&self.world, threads)); }
         let n = table.n;
         self.resize_agents(n);
         self.x.trips.clear(); self.x.trip_ptr = 0;
-        self.x.table_ptr = table.index_at(self.time - 3600.0); self.x.pending_stream.clear();
+        self.x.table_ptr = table.index_at(self.time - 3600.0); self.x.pending_stream.clear(); self.x.prefetch_ptr = self.x.table_ptr;
         self.x.fuel_left = vec![-1.0; n]; self.x.outcome = vec![0; n];
         self.route_words = self.route_words.max(1); self.route_mirror.clear();
         self.x.arena = Some(Arena { free: HashMap::new(), slot: vec![-1; self.cap], cls: vec![0; self.cap] });
@@ -372,6 +495,18 @@ impl GpuSim {
 
     fn enqueue_stream(&mut self, t_end: f64) {
         let t = self.x.table.clone().unwrap();
+        // prefetch (RouteWorkers.prefetch): departures up to route_ahead sim s ahead go to the route workers first, so
+        // this frame's departures are routed in parallel too. place_stream waits for a route in flight: same routes,
+        // same spawn steps as serial.
+        if self.x.provider.as_ref().is_some_and(|p| p.threads() > 0) {
+            let p = self.x.provider.as_mut().unwrap();
+            if self.x.prefetch_ptr < self.x.table_ptr { self.x.prefetch_ptr = self.x.table_ptr; }
+            let ahead = t_end + self.opts.route_ahead.max(2.0);
+            while self.x.prefetch_ptr < t.n && t.sorted_depart[self.x.prefetch_ptr] as f64 <= ahead {
+                let id = t.order[self.x.prefetch_ptr] as usize; self.x.prefetch_ptr += 1; p.prefetch(t.home[id], t.work[id]);
+            }
+            p.flush();
+        }
         if !self.x.pending_stream.is_empty() {
             let pend = std::mem::take(&mut self.x.pending_stream); let mut keep = Vec::new();
             for id in pend { if !self.place_stream(&t, id) { keep.push(id); } }
@@ -399,6 +534,11 @@ impl GpuSim {
         let tank = Self::tank(ty);
         self.write_entry(q, slot, ty, tr, off as u32, r.len() as u32, t.work_start[i] as f64, len, 2 * id, t.depart[i] as f64, t.fuel_fill[i] as f64 * tank, tank);
         self.slot_trip[slot as usize] = 2 * id as i32; self.slot_route[2 * slot as usize] = off as u32; self.slot_route[2 * slot as usize + 1] = r.len() as u32;
+        let mut h = self.x.stream_stats.spawn_hash; if h == 0 { h = 0xcbf29ce484222325; }
+        let mut mix = |v: u32| { for b in v.to_le_bytes() { h ^= b as u64; h = h.wrapping_mul(0x100000001b3); } };
+        for v in [id, self.step as u32, r.len() as u32] { mix(v); }
+        for &e in r.iter() { mix(e as u32); }
+        self.x.stream_stats.spawn_hash = h;
         true
     }
 
@@ -733,7 +873,7 @@ impl GpuSim {
         self.reroute_queue.clear(); self.last_reroute.clear(); self.closed_key = None; self.closed_n = 0; self.closed_edges.clear();
         self.edge_speed_ema.clear(); self.edge_speed_order.clear(); self.traffic_penalty.clear(); self.penalty_order.clear(); self.pending_penalty = None; self.next_traffic = -1e9;
         if let Some(t) = self.x.table.clone() {
-            self.x.table_ptr = t.index_at(start - 3600.0); self.x.pending_stream.clear();
+            self.x.table_ptr = t.index_at(start - 3600.0); self.x.pending_stream.clear(); self.x.prefetch_ptr = self.x.table_ptr;
             self.x.fuel_left.iter_mut().for_each(|x| *x = -1.0); self.x.outcome.iter_mut().for_each(|x| *x = 0);
             self.x.arena = Some(Arena { free: HashMap::new(), slot: vec![-1; self.cap], cls: vec![0; self.cap] }); self.route_words = 1;
         } else if self.x.pop.is_some() {
@@ -775,10 +915,13 @@ impl GpuSim {
     pub fn slot_station(&self) -> &[i32] { &self.slot_station }
     pub fn queue_high(&self) -> usize { self.queue_high }
     pub fn free_len(&self) -> usize { self.free.len() }
+    pub fn queue_free_list(&self) -> &[u32] { &self.queue_free }
     pub fn route_of_slot(&self, slot: u32) -> Vec<u32> { self.route_of(slot).to_vec() }
     pub fn edge_head(&self) -> &[u32] { &self.edge_head }
     pub fn scene_rows(&self) -> Vec<(u32, u32, f64, i32, f64, &'static str)> { self.active.iter().map(|&i| { let r = &self.crashes[i]; (r.edge, r.lane_mask, r.s, r.block, r.squeeze_at, r.cause) }).collect() }
     /// Trips not yet enqueued (population mode).
+    /// streaming route statistics (None without setStreaming)
+    pub fn route_stats(&self) -> Option<RouteStats> { self.x.provider.as_ref().map(|p| p.stats()) }
     pub fn trips_remaining(&self) -> usize { self.x.trips.len() - self.x.trip_ptr }
     pub fn stations(&self) -> Option<&Stations> { self.x.stations.as_ref() }
 }

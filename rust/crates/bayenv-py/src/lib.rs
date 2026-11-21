@@ -166,7 +166,7 @@ impl Env {
     /// Env(data_dir, n_cars=10000, seed=1, backend="gpu" | "cpu", capacity=None, obs="v2", dt=0.05, start_time=None (gpu 05:00, cpu first departure - 60 s),
     ///     accidents=True, collisions=True, fuel=True, controls=True, junctions=True, steer="position", decide_every=1,
     ///     keep_events=False, population=None, pop_seed=42, streaming=False, return_trips=True, stations=True,
-    ///     refuel_budget_ms=None, cpu_connector_join=True, contact_tangent=True)
+    ///     refuel_budget_ms=None, cpu_connector_join=True, contact_tangent=True, route_threads=None)
     /// Loads the world (~0.1 s warm), builds the GPU buffers and scatters `n_cars` cars at rest on random routes
     /// (seeded; the JS GPUSim.scatter placement). Actions start at [0, 0, 0] for every slot.
     /// population=N (gpu): instead of the scatter, N commuters (src/sim/population.js, seed pop_seed, generated natively,
@@ -182,14 +182,16 @@ impl Env {
     /// False = legacy mode, the JS GPU kernels bit-for-bit (aligned rear-end wrecks spin to the kerb).
     /// replan_at_missed_event (cpu, default True): re-plan a missed turn at the event, as the GPU does
     /// (SimOpts::replan_at_missed_event, rust/docs/crash-divergence.md cause A). False = the JS CPU sim's model.
+    /// route_threads (streaming): worker threads that route departures up to 300 sim s ahead (default: the machine's
+    /// cores; 0 = serial A* at departure). Every value gives the same routes and the same spawn steps.
     #[new]
     #[pyo3(signature = (data_dir, n_cars=10000, seed=1, backend="gpu", capacity=None, obs="v2", dt=0.05, start_time=None,
         accidents=true, collisions=true, fuel=true, controls=true, junctions=true, steer="position", decide_every=1, keep_events=false,
-        population=None, pop_seed=42.0, streaming=false, return_trips=true, stations=true, refuel_budget_ms=None, crash_share=false, missed_at_out_edge=false, cpu_connector_join=true, contact_tangent=true, replan_at_missed_event=true))]
+        population=None, pop_seed=42.0, streaming=false, return_trips=true, stations=true, refuel_budget_ms=None, crash_share=false, missed_at_out_edge=false, cpu_connector_join=true, contact_tangent=true, replan_at_missed_event=true, route_threads=None))]
     #[allow(clippy::too_many_arguments)]
     fn new(py: Python<'_>, data_dir: &str, n_cars: usize, seed: u32, backend: &str, capacity: Option<usize>, obs: &str, dt: f64, start_time: Option<f64>,
            accidents: bool, collisions: bool, fuel: bool, controls: bool, junctions: bool, steer: &str, decide_every: u32, keep_events: bool,
-           population: Option<usize>, pop_seed: f64, streaming: bool, return_trips: bool, stations: bool, refuel_budget_ms: Option<f64>, crash_share: bool, missed_at_out_edge: bool, cpu_connector_join: bool, contact_tangent: bool, replan_at_missed_event: bool) -> PyResult<Env> {
+           population: Option<usize>, pop_seed: f64, streaming: bool, return_trips: bool, stations: bool, refuel_budget_ms: Option<f64>, crash_share: bool, missed_at_out_edge: bool, cpu_connector_join: bool, contact_tangent: bool, replan_at_missed_event: bool, route_threads: Option<usize>) -> PyResult<Env> {
         if backend == "cpu" {
             let cobs = match obs { "v2" => CpuObs::V2, "v3" => CpuObs::V3, "flat" => CpuObs::Flat, "none" => CpuObs::None, _ => return Err(PyValueError::new_err("obs must be 'v2', 'v3', 'flat' or 'none'")) };
             // CPU reference sim (crate bayenv-sim): commuter population (population.js, n_cars commuters, seed),
@@ -222,6 +224,7 @@ impl Env {
             let world = Arc::new(World::load_with(&data, &LoadOptions::default()).map_err(|e| format!("world: {e}"))?);
             let mut o = GpuOptions { capacity: cap, dt, start_time: start_time.unwrap_or(18000.0), seed, obs: obs_mode, steer_rate, decide_every, controls, junctions, keep_events, record_share: crash_share, missed_at_out_edge,
                 return_trips, refuel_budget_ms: refuel_budget_ms.unwrap_or(f64::INFINITY), cpu_connector_join, contact_tangent, ..Default::default() };
+            if let Some(t) = route_threads { o.route_threads = t; }
             o.features.accidents = accidents; o.features.collisions = collisions; o.features.fuel = fuel;
             let mut sim = bayenv_gpu::env::create(world.clone(), o)?;
             match population {
@@ -480,6 +483,12 @@ impl Env {
             d.set_item("commuters", nc)?; d.set_item("trips_remaining", sim.trips_remaining())?;
             let mut fb = [0usize; 6]; for &o in &sim.x.outcome { fb[(o as usize).min(5)] += 1; }
             for (k, i) in [("outcome_arrived", 1), ("outcome_crash", 2), ("outcome_stranded", 3), ("outcome_stuck", 4), ("outcome_no_route", 5), ("outcome_unfinished", 0)] { d.set_item(k, fb[i])?; }
+        }
+        if let Some(r) = sim.route_stats() {
+            let ss = sim.x.stream_stats;
+            for (k, v) in [("route_threads", sim.opts.route_threads as u64), ("route_lookups", r.lookups), ("route_cache_hits", r.hits), ("route_sync", r.misses), ("route_prefetched", r.prefetched),
+                ("route_waited", r.waited), ("stream_routed", ss.routed), ("stream_pool_full", ss.pool_full)] { d.set_item(k, v)?; }
+            d.set_item("route_wait_s", r.wait_ns as f64 * 1e-9)?; d.set_item("route_sync_s", r.route_ns as f64 * 1e-9)?; d.set_item("spawn_hash", format!("{:016x}", ss.spawn_hash))?;
         }
         Ok(d)
     }
