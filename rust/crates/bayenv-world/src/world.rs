@@ -22,9 +22,12 @@ pub struct LoadOptions {
     /// check every input against tools/osm/world-manifest.json and fail loudly on anything missing / different
     /// (default true; false for custom data dirs, e.g. synthetic scenarios)
     pub verify: bool,
+    /// derive the smoothed frame geometry for `curvature_dynamics` ([`crate::smooth`], DECISIONS.md 33): replaces
+    /// `lanes` and the junction connector points after loading (default false: the JS geometry, bit-exact)
+    pub smooth_geometry: bool,
 }
 impl Default for LoadOptions {
-    fn default() -> Self { LoadOptions { local: true, junctions: true, controls: true, stations: true, dem: false, bake: None, verify_bake: false, verify: true } }
+    fn default() -> Self { LoadOptions { local: true, junctions: true, controls: true, stations: true, dem: false, bake: None, verify_bake: false, verify: true, smooth_geometry: false } }
 }
 
 pub struct World {
@@ -44,6 +47,8 @@ pub struct World {
     pub node_grid: NodeGrid,
     /// load timings (ms) per stage
     pub timings: Vec<(&'static str, f64)>,
+    /// Some when `lanes` / `junctions` hold the smoothed frame geometry ([`World::smooth_geometry`])
+    pub smoothing: Option<crate::smooth::SmoothStats>,
 }
 
 pub const LG_SECTIONS: [&str; 17] = ["vFirst", "vx", "vy", "vz", "vs", "mx", "mz", "Rd", "Rend", "tau", "tapR", "tapL", "xR", "xL", "laneW", "laneWEnd", "LW"];
@@ -115,7 +120,9 @@ impl World {
         lap("controls", &mut tm);
         let dem = if o.dem { Dem::load(&dir).ok() } else { None };
         lap("dem", &mut tm);
-        Ok(World { dir, main, local, graph, lane_graph, lanes, junctions, surfaces, controls_pack, controls, stations, contact_pairs, dem, node_grid, timings: tm })
+        let mut w = World { dir, main, local, graph, lane_graph, lanes, junctions, surfaces, controls_pack, controls, stations, contact_pairs, dem, node_grid, timings: tm, smoothing: None };
+        if o.smooth_geometry { w.smooth_geometry(); w.timings.push(("smooth", t.elapsed().as_secs_f64() * 1e3)); }
+        Ok(w)
     }
 }
 
@@ -203,6 +210,13 @@ fn junctions_verified(dir: &Path, path: &Path, lanes: &LaneGeometry, g: &LaneGra
 }
 
 impl World {
+    /// Replace the lane geometry and the junction connectors by their smoothed copies ([`crate::smooth`],
+    /// DECISIONS.md 33) for `curvature_dynamics`. Deterministic; a no-op when already smoothed.
+    pub fn smooth_geometry(&mut self) {
+        if self.smoothing.is_some() { return; }
+        let (lg, j, st) = crate::smooth::smooth_geometry(&self.lanes, &self.lane_graph, &self.graph.speed_limit, self.junctions.as_ref(), &crate::smooth::SmoothCfg::default());
+        self.lanes = lg; self.junctions = j; self.smoothing = Some(st);
+    }
     /// xxh3 over the derived world content (graph geometry / topology / attributes, lane geometry, junctions, control
     /// plans, stations, contact pairs): equal hashes = the same world.
     pub fn content_hash(&self) -> u64 {

@@ -1,6 +1,7 @@
 //! CPU reference sim (bayenv-sim) vs the GPU sim with the default model (GpuOptions: cpu_connector_join, contact_tangent
 //! and the physics-audit fixes on, curvature_dynamics off; the CPU SimOpts default is the same model), and once more with
-//! curvature_dynamics on for both backends:
+//! curvature_dynamics on for both backends, on the smoothed frame geometry (smooth_geometry, DECISIONS.md 33: both
+//! sims built from the same smoothed world, so the GPU blob carries the smoothed lane vertices and connector points):
 //! rust/tools/compare_backends.py --spawn-default as a test. 5,000 commuters (population.js, seed 42) from 07:00,
 //! dt 0.05, 1,200 steps, every driving car commanded [0, 0.3, 0]; GPU slots that are not driving get the CPU's default
 //! action [0, 0, 0.3] (a car spawning during a step brakes on its first decision, as on the CPU). Aggregate event
@@ -20,15 +21,15 @@ fn counts(log: &bayenv_world::events::EventLog, c: &mut [usize; 10], barrier: &m
 }
 
 /// (cpu counts, gpu counts, cpu barrier rows, gpu barrier rows), or None when skipped
-fn run(curvature: bool) -> Option<([usize; 10], [usize; 10], usize, usize)> {
+fn run(curvature: bool, smooth: bool) -> Option<([usize; 10], [usize; 10], usize, usize)> {
     let data = Path::new("../../../data");
-    let world = match bayenv_world::World::load(data) { Ok(w) => Arc::new(w), Err(e) => { bayenv_world::oracle::skip("cpu_vs_gpu", &format!("world: {e}")); return None } };
+    let world = match bayenv_world::World::load_with(data, &bayenv_world::LoadOptions { smooth_geometry: smooth, ..Default::default() }) { Ok(w) => Arc::new(w), Err(e) => { bayenv_world::oracle::skip("cpu_vs_gpu", &format!("world: {e}")); return None } };
     let cap = (N + 1023) / 1024 * 1024;
     let mut o = GpuOptions { capacity: cap, start_time: START, seed: 42, obs: ObsMode::None, refuel_budget_ms: f64::INFINITY, ..Default::default() };
     assert!(o.cpu_connector_join && o.contact_tangent, "the CPU connector entry and the f32 contact tangent are the default GPU model");
     assert_eq!(o.model_fixes(), bayenv_gpu::kernels::ModelFixes::default_model(), "the physics-audit model fixes are on by default on the GPU, except curvature_dynamics");
     assert!(!o.curvature_dynamics, "curvature_dynamics is opt-in (default off) on the GPU");
-    o.curvature_dynamics = curvature;
+    o.curvature_dynamics = curvature; o.smooth_geometry = smooth;
     o.features.accidents = true;
     let mut gpu = match bayenv_gpu::env::create(world.clone(), o) { Ok(s) => s, Err(e) => { eprintln!("cpu_vs_gpu: no GPU ({e}): not run"); return None } };
     gpu.set_population(Arc::new(GpuPopulation::generate(&world, N, 42.0, true).unwrap()), true);
@@ -37,7 +38,7 @@ fn run(curvature: bool) -> Option<([usize; 10], [usize; 10], usize, usize)> {
     let mut opts = bayenv_sim::sim::SimOpts::default(); opts.dt = 0.05; opts.seed = 42.0;
     assert!(opts.replan_at_missed_event, "the CPU re-plans a missed turn at the event (crash-divergence cause A) by default");
     assert!(!opts.curvature_dynamics, "curvature_dynamics is opt-in (default off) on the CPU");
-    opts.curvature_dynamics = curvature;
+    opts.curvature_dynamics = curvature; opts.smooth_geometry = smooth;
     let cfg = bayenv_sim::env::EnvConfig { opts, start_time: Some(START), static_obstacles: Vec::new(), scenario_obstacles: Vec::new(), obstacles: None };
     let mut cpu = bayenv_sim::env::Env::new(sw, pop, cfg, Box::new(|w| bayenv_sim::harness::router_for(&w)));
     let (mut cc, mut gc, mut cb, mut gb) = ([0usize; 10], [0usize; 10], 0, 0);
@@ -49,7 +50,7 @@ fn run(curvature: bool) -> Option<([usize; 10], [usize; 10], usize, usize)> {
         for i in 0..cap { let driving = st.veh[i * bayenv_gpu::layout::VEH_WORDS + 7] == 1; acts[3 * i..3 * i + 3].copy_from_slice(if driving { &[0.0, 0.3, 0.0] } else { &[0.0, 0.0, 0.3] }); }
         gpu.set_actions(&acts, 0); gpu.run_steps(1); counts(&gpu.take_records(), &mut gc, &mut gb);
     }
-    eprintln!("curvature_dynamics {curvature}");
+    eprintln!("curvature_dynamics {curvature} smooth_geometry {smooth}");
     for k in [1, 2, 3, 6, 7, 8] { eprintln!("{:12} cpu {:6} gpu {:6}", NAME[k], cc[k], gc[k]); }
     eprintln!("barrier rows cpu {cb} gpu {gb}");
     assert!(cc[6] > 500, "spawned {}", cc[6]);
@@ -64,7 +65,7 @@ fn near(cc: &[usize; 10], gc: &[usize; 10], k: usize, rel: f64, abs: f64) {
 /// missed exits 114 / 123, violations 1,626 / 1,625.
 #[test]
 fn cpu_and_gpu_agree_in_aggregate() {
-    let Some((cc, gc, cb, gb)) = run(false) else { return };
+    let Some((cc, gc, cb, gb)) = run(false, false) else { return };
     near(&cc, &gc, 1, 0.5, 3.0);      // arrived
     near(&cc, &gc, 2, 0.25, 6.0);     // crashed
     near(&cc, &gc, 3, 0.5, 12.0);     // contact rows (legacy GPU 1,336)
@@ -73,12 +74,13 @@ fn cpu_and_gpu_agree_in_aggregate() {
     near(&cc, &gc, 8, 0.03, 20.0);    // violations
 }
 
-/// curvature_dynamics on (both backends): a car held at steer 0 no longer follows the road, so most cars of this
-/// policy hit a kerb. Measured: arrived 0 / 0, crashed 751 / 751, contacts 1,804 / 1,805 (barrier 1,800 / 1,801),
-/// missed exits 12 / 14, violations 342 / 343.
+/// curvature_dynamics on (both backends) with smooth_geometry: a car held at steer 0 no longer follows the road, so
+/// most cars of this policy hit a kerb. Measured: arrived 0 / 0, crashed 733 / 733, contacts 1,909 / 1,903 (barrier
+/// 1,906 / 1,900), missed exits 13 / 15, violations 342 / 343. (On the raw geometry: crashed 751 / 751, contacts
+/// 1,804 / 1,805, barrier 1,800 / 1,801, missed exits 12 / 14, violations 342 / 343.)
 #[test]
 fn cpu_and_gpu_agree_with_curvature_dynamics() {
-    let Some((cc, gc, cb, gb)) = run(true) else { return };
+    let Some((cc, gc, cb, gb)) = run(true, true) else { return };
     near(&cc, &gc, 1, 0.5, 3.0);
     near(&cc, &gc, 2, 0.05, 6.0);
     near(&cc, &gc, 3, 0.05, 12.0);

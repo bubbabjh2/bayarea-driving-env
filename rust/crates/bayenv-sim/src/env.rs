@@ -214,6 +214,15 @@ impl Env {
         let bw = bayenv_world::World::load(data_dir).map_err(|e| e.to_string())?;
         Ok(Arc::new(World::from_bayenv(&bw)))
     }
+    /// load_world with the smoothed frame geometry (LoadOptions::smooth_geometry; for SimOpts::smooth_geometry with
+    /// curvature_dynamics, DECISIONS.md 33).
+    pub fn load_world_smoothed(data_dir: &std::path::Path) -> Result<Arc<World>, String> { Self::load_world_with(data_dir, true, true) }
+    /// load_world with the manifest check (`verify`) and geometry smoothing (`smooth`) chosen.
+    pub fn load_world_with(data_dir: &std::path::Path, verify: bool, smooth: bool) -> Result<Arc<World>, String> {
+        let o = bayenv_world::LoadOptions { verify, smooth_geometry: smooth, ..Default::default() };
+        let bw = bayenv_world::World::load_with(data_dir, &o).map_err(|e| e.to_string())?;
+        Ok(Arc::new(World::from_bayenv(&bw)))
+    }
     /// load_world for scenario / synthetic / custom data dirs (no world-manifest sha check).
     pub fn load_world_unverified(data_dir: &std::path::Path) -> Result<Arc<World>, String> {
         let o = bayenv_world::LoadOptions { verify: false, ..Default::default() };

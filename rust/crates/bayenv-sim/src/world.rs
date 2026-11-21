@@ -364,6 +364,9 @@ pub struct World {
     /// (out edge, hop) per (edge, out edge of its head node), CSR order; edge e at [hop_base[e], hop_base[e + 1])
     hop_tab: Vec<(u32, Hop)>,
     pub bounds: (f64, f64, f64, f64),
+    /// the lane geometry and connectors are the smoothed frame geometry (bayenv_world::smooth, DECISIONS.md 33);
+    /// a Sim on this world needs SimOpts::smooth_geometry (and curvature_dynamics)
+    pub geometry_smoothed: bool,
 }
 
 impl World {
@@ -436,7 +439,7 @@ impl World {
             out_start: p.i32s("outStart"), out_edges: p.i32s("outEdges"), in_start: p.i32s("inStart"), in_edges: p.i32s("inEdges"),
             highway_names: names, max_speed: meta["maxSpeed"].as_f64().unwrap_or(0.0), banned_hops, contact_pairs, lg, j, controls, stations,
             surfaces: meta["surfaces"].as_bool().unwrap_or(false), hop_base: Vec::new(), hop_tab: Vec::new(), conf_ext: Vec::new(), nav_base: std::sync::OnceLock::new(), mv_into: std::sync::OnceLock::new(),
-            bounds: (b["minX"].as_f64().unwrap_or(0.0), b["maxX"].as_f64().unwrap_or(0.0), b["minZ"].as_f64().unwrap_or(0.0), b["maxZ"].as_f64().unwrap_or(0.0)),
+            bounds: (b["minX"].as_f64().unwrap_or(0.0), b["maxX"].as_f64().unwrap_or(0.0), b["minZ"].as_f64().unwrap_or(0.0), b["maxZ"].as_f64().unwrap_or(0.0)), geometry_smoothed: false,
         };
         w.build_hops();
         w
@@ -498,7 +501,7 @@ impl World {
             lg: Some(lg), j, controls,
             stations: w.stations.iter().map(|s| Station { node: s.node as i32, pumps: s.pumps as i32, x: s.x, z: s.z }).collect(),
             surfaces: w.surfaces, hop_base: Vec::new(), hop_tab: Vec::new(), conf_ext: Vec::new(), nav_base: std::sync::OnceLock::new(), mv_into: std::sync::OnceLock::new(),
-            bounds: (g.bounds.min_x, g.bounds.max_x, g.bounds.min_z, g.bounds.max_z),
+            bounds: (g.bounds.min_x, g.bounds.max_x, g.bounds.min_z, g.bounds.max_z), geometry_smoothed: w.smoothing.is_some(),
         };
         world.build_hops();
         world
@@ -524,8 +527,45 @@ impl World {
             contact_pairs: None, lg: None, j: None, controls: None,
             stations: w.stations.iter().map(|s| Station { node: s.node as i32, pumps: s.pumps as i32, x: s.x, z: s.z }).collect(),
             surfaces: false, conf_ext: Vec::new(), hop_base: Vec::new(), hop_tab: Vec::new(), nav_base: std::sync::OnceLock::new(), mv_into: std::sync::OnceLock::new(),
-            bounds: (g.bounds.min_x, g.bounds.max_x, g.bounds.min_z, g.bounds.max_z),
+            bounds: (g.bounds.min_x, g.bounds.max_x, g.bounds.min_z, g.bounds.max_z), geometry_smoothed: w.smoothing.is_some(),
         }
+    }
+
+    /// Smooth this world's lane geometry and connectors in place (bayenv_world::smooth with the default config; the
+    /// same arrays as `from_bayenv` of a world loaded with `LoadOptions::smooth_geometry`). For worlds from a pack
+    /// (synthetic test worlds); returns the statistics, None when there is no lane geometry or already smoothed.
+    pub fn smooth_geometry(&mut self) -> Option<bayenv_world::smooth::SmoothStats> {
+        if self.geometry_smoothed { return None; }
+        let lg = self.lg.as_ref()?;
+        let f32v = |v: &[f64]| v.iter().map(|&x| x as f32).collect::<Vec<f32>>();
+        let u8v = |v: &[f64]| v.iter().map(|&x| x as u8).collect::<Vec<u8>>();
+        let ne = self.edge_count;
+        let col = |k: usize| lg.vtx.iter().map(|v| v[k]).collect::<Vec<f64>>();
+        let blg = bayenv_world::LaneGeometry {
+            v_first: lg.v_first.clone().into(), vx: col(0).into(), vy: f32v(&col(1)).into(), vz: col(2).into(), vs: lg.vs.clone().into(), mx: col(3).into(), mz: col(4).into(),
+            rd: f32v(&lg.rd).into(), rend: f32v(&lg.rend).into(), tau: f32v(&lg.tau).into(), tap_r: lg.tap_r.clone().into(), tap_l: lg.tap_l.clone().into(),
+            x_r: u8v(&lg.x_r).into(), x_l: u8v(&lg.x_l).into(), lw: LANE_WIDTH, lane_w: f32v(&lg.lane_w).into(), lane_w_end: f32v(&lg.lane_w_end).into(),
+            length: f32v(&lg.g_length).into(), lanes: lg.g_lanes.iter().map(|&x| x as u8).collect::<Vec<u8>>().into(),
+        };
+        let mut g = bayenv_world::LaneGraph {
+            xyz: lg.g_xyz.clone(), first: lg.g_first.clone(), count: lg.g_count.clone(), poly: lg.g_poly.clone(),
+            lanes: lg.g_lanes.iter().map(|&x| x as u8).collect(), opp: lg.g_opp.iter().map(|&x| x as u8).collect(), twin: lg.g_twin.clone(), cls: lg.g_cls.clone(),
+            length: f32v(&lg.g_length), out_start: lg.g_out_start.clone(), in_start: lg.g_in_start.clone(), out_list: lg.g_out_list.clone(), in_list: lg.g_in_list.clone(),
+            ..Default::default()
+        };
+        g.node_count = lg.g_xyz.len() / 3; g.edge_count = ne;
+        let js = self.j.as_ref().map(|j| bayenv_world::JunctionSet {
+            m_info: j.m_info.clone().into(), m_f: f32v(&j.m_f).into(), pts: f32v(&j.pts).into(), j_node: j.j_node.clone().into(), ..Default::default()
+        });
+        let (slg, sj, st) = bayenv_world::smooth::smooth_geometry(&blg, &g, &self.e_speed, js.as_ref(), &bayenv_world::smooth::SmoothCfg::default());
+        let f64v = |v: &[f32]| v.iter().map(|&x| x as f64).collect::<Vec<f64>>();
+        let lgm = self.lg.as_mut().unwrap();
+        lgm.v_first = slg.v_first.to_vec(); lgm.vs = slg.vs.to_vec();
+        lgm.vtx = interleave_vtx(&slg.vx, &f64v(&slg.vy), &slg.vz, &slg.mx, &slg.mz);
+        if let (Some(j), Some(sj)) = (self.j.as_mut(), sj) { j.pts = f64v(&sj.pts); j.m_info = sj.m_info.to_vec(); }
+        self.geometry_smoothed = true;
+        self.build_hops();
+        Some(st)
     }
 
     fn build_hops(&mut self) {
