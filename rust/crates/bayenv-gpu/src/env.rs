@@ -5,7 +5,7 @@ use bayenv_world::World;
 use std::sync::Arc;
 
 /// World + GPU sim, packed natively.
-pub fn create(world: Arc<World>, opts: GpuOptions) -> Result<GpuSim, String> { create_on(crate::gpu::Gpu::new()?, world, opts) }
+pub fn create(world: Arc<World>, opts: GpuOptions) -> Result<GpuSim, String> { create_on(crate::gpu::Gpu::new_with(opts.gpu_features())?, world, opts) }
 
 /// As `create` on a given context (`sim.gpu.share()` for several sims on one device).
 pub fn create_on(gpu: crate::gpu::Gpu, world: Arc<World>, opts: GpuOptions) -> Result<GpuSim, String> {
@@ -27,7 +27,7 @@ pub fn scatter(sim: &mut GpuSim, n: usize, seed: u32) -> ScatterInfo {
 pub fn create_many(world: Arc<World>, opts: &GpuOptions, n: usize) -> Result<Vec<GpuSim>, String> {
     let blob: WorldBlob = pack::build_world_blob(&world, opts.max_blocks).into();
     let packer = Arc::new(RoutePacker::new(&world.graph));
-    let base = crate::gpu::Gpu::new()?;
+    let base = crate::gpu::Gpu::new_with(opts.gpu_features())?;
     let mut out = Vec::with_capacity(n);
     for _ in 0..n {
         let mut sim = GpuSim::with_blob_on(base.share(), world.clone(), blob.clone(), opts.clone())?;

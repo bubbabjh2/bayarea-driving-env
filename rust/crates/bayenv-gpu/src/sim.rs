@@ -44,6 +44,8 @@ pub struct GpuOptions {
     pub keep_events: bool,
     /// size the contact-resolve rounds by the contacts found (indirect dispatch; identical results). JS: off
     pub indirect_resolve: bool,
+    /// GPU timestamp profile of the first step of every batch (`crate::profile`; needs TIMESTAMP_QUERY). JS: opts.profile
+    pub profile: bool,
 }
 #[derive(Clone, Copy, Debug)]
 pub struct Features { pub lane_changes: bool, pub accidents: bool, pub fuel: bool, pub collisions: bool, pub yield_: bool, pub policy: bool, pub zip_fix: bool, pub empty: bool }
@@ -55,11 +57,17 @@ impl Features {
             | (if self.yield_ { YIELD } else { 0 }) | (if self.policy { POLICY } else { 0 }) | (if self.zip_fix { ZIPFIX } else { 0 }) | (if self.empty { EMPTY } else { 0 })
     }
 }
+impl GpuOptions {
+    /// Optional device features these options use (timestamp queries when profiling).
+    pub fn gpu_features(&self) -> wgpu::Features {
+        if self.profile { wgpu::Features::TIMESTAMP_QUERY | wgpu::Features::TIMESTAMP_QUERY_INSIDE_PASSES } else { wgpu::Features::empty() }
+    }
+}
 impl Default for GpuOptions {
     fn default() -> Self {
         GpuOptions { capacity: 131072, dt: 0.05, start_time: 5.0 * 3600.0, seed: 1, obs: ObsMode::V2, steer_rate: false, decide_every: 1, features: Features::default(),
             controls: true, junctions: true, table_bits: 18, contact_cap: 131072, ev_cap: 16384, spawn_queue: 16384, op_cap: 16384, max_blocks: 4096, route_slack: 1 << 22,
-            resolve_rounds: 12, progress_weight: 1.0, jerk_weight: 0.5, jerk_reward: false, grade_obs: true, squeeze_delay: 15.0 * 60.0, deadlock_break: 0, reroute: true, keep_events: false, indirect_resolve: true }
+            resolve_rounds: 12, progress_weight: 1.0, jerk_weight: 0.5, jerk_reward: false, grade_obs: true, squeeze_delay: 15.0 * 60.0, deadlock_break: 0, reroute: true, keep_events: false, indirect_resolve: true, profile: false }
     }
 }
 
@@ -101,6 +109,10 @@ pub struct Counters { pub minor_contacts: u64, pub crash_events: u64, pub crashe
 
 
 struct ScanLevel { n: usize, blocks: usize }
+
+/// One dispatch of a step: JS `_stages` stage label, pipeline, bind-group set, workgroups (0 = indirect from `cargs`).
+#[derive(Clone, Debug)]
+pub struct Dispatch { pub stage: &'static str, pub kernel: &'static str, pub bg: String, pub x: u32 }
 
 pub struct GpuSim {
     pub gpu: Gpu,
@@ -155,6 +167,8 @@ pub struct GpuSim {
     /// a submitted batch whose readback / events are processed lazily (`run_steps_async`, `sync`)
     pending: Option<Pending>,
     io_host: Vec<u32>,
+    /// timestamp profiler (opts.profile)
+    pub profiler: Option<crate::profile::Profiler>,
 }
 
 #[derive(Clone, Copy, Debug, Default)]
@@ -172,7 +186,7 @@ fn bf(u: u32) -> f64 { f32::from_bits(u) as f64 }
 
 impl GpuSim {
     /// Build on the given world + packed blob (see `crate::pack::build_world_blob`).
-    pub fn with_blob(world: Arc<World>, blob: WorldBlob, opts: GpuOptions) -> Result<GpuSim, String> { Self::with_blob_on(Gpu::new()?, world, blob, opts) }
+    pub fn with_blob(world: Arc<World>, blob: WorldBlob, opts: GpuOptions) -> Result<GpuSim, String> { Self::with_blob_on(Gpu::new_with(opts.gpu_features())?, world, blob, opts) }
 
     /// As `with_blob` on a given context (e.g. `other_sim.gpu.share()`: several sims on one device).
     pub fn with_blob_on(gpu: Gpu, world: Arc<World>, blob: WorldBlob, opts: GpuOptions) -> Result<GpuSim, String> {
@@ -239,10 +253,15 @@ impl GpuSim {
             refuel_queue: Vec::new(), reroute_queue: Default::default(), last_reroute: HashMap::new(), lot: 0, new_pose: false, crashes: Vec::new(), active: Vec::new(),
             counters: Counters::default(), gpu_stats: [0; 64], events: Vec::new(), closed_key: None, closed_n: 0, closed_edges: Vec::new(),
             edge_speed_ema: HashMap::new(), edge_speed_order: Vec::new(), traffic_penalty: HashMap::new(), penalty_order: Vec::new(), pending_penalty: None, next_traffic: -1e9,
-            router: None, packer: None, out_staging: None, pending: None, staging, io_host: vec![0; io_words], blob, gpu, opts,
+            router: None, packer: None, out_staging: None, pending: None, staging, io_host: vec![0; io_words], profiler: None, blob, gpu, opts,
         };
         if !use_j { sim.blob.j_m = None; }
         sim.blob.words = Vec::new();   // uploaded: no host copy kept (block writes go straight to the GPU)
+        if sim.opts.profile {
+            let f = sim.gpu.device.features();
+            if !f.contains(wgpu::Features::TIMESTAMP_QUERY) { return Err("profile: adapter has no TIMESTAMP_QUERY".into()); }
+            sim.profiler = Some(crate::profile::Profiler::new(&sim.gpu.device, &sim.gpu.queue, f.contains(wgpu::Features::TIMESTAMP_QUERY_INSIDE_PASSES)));
+        }
         sim.ensure_routes(1 << 16);
         sim.compile()?;
         sim.make_bind_groups();
@@ -385,72 +404,102 @@ impl GpuSim {
     fn rand(&mut self) -> f64 { let mut x = self.rng_state; x ^= x << 13; x ^= x >> 17; x ^= x << 5; self.rng_state = x; x as f64 / 4294967296.0 }
     fn gauss(&mut self) -> f64 { let mut u = 0.0; while u == 0.0 { u = self.rand(); } (-2.0 * jsmath::log(u)).sqrt() * jsmath::cos(2.0 * std::f64::consts::PI * self.rand()) }
 
-    fn stages(&mut self, step_index: u64, first: bool, op_count: usize) -> Vec<(&'static str, String, u32)> {
-        let cap = self.cap as u32; let f = self.opts.features; let mut d: Vec<(&'static str, String, u32)> = Vec::new();
+    fn stages(&mut self, step_index: u64, first: bool, op_count: usize) -> Vec<Dispatch> {
+        let cap = self.cap as u32; let f = self.opts.features; let mut d: Vec<Dispatch> = Vec::new();
+        let mut stage: &'static str = "tick";
         let g = |n: usize, wg: usize| ((n + wg - 1) / wg).max(1) as u32;
-        let mut push = |k: &'static str, bg: &str, x: u32| d.push((k, bg.to_string(), x));
-        push("build.tick", "build.tick", 1);
-        if first && op_count > 0 { push("ops", "ops", g(op_count, 64)); }
+        macro_rules! push { ($k:expr, $bg:expr, $x:expr) => { d.push(Dispatch { stage, kernel: $k, bg: $bg.to_string(), x: $x }) } }
+        push!("build.tick", "build.tick", 1);
+        if first && op_count > 0 { stage = "ops"; push!("ops", "ops", g(op_count, 64)); }
         let fresh = first && self.new_pose;
         if self.queue_high > 0 || self.lot > 0 || fresh {
-            if fresh { self.new_pose = false; }
-            if self.lot > 0 { push("leave", "leave", g(cap as usize, 128)); }
-            if self.queue_high > 0 { push("spawn", "spawn", g(self.queue_high, 64)); }
-            push("integrate.newPose", "integrate.newPose", g(cap as usize, 256));
+            stage = "spawn"; if fresh { self.new_pose = false; }
+            if self.lot > 0 { push!("leave", "leave", g(cap as usize, 128)); }
+            if self.queue_high > 0 { push!("spawn", "spawn", g(self.queue_high, 64)); }
+            push!("integrate.newPose", "integrate.newPose", g(cap as usize, 256));
         }
         if f.collisions {
-            push("hash.hclear", "hash.hclear", g(self.t_size + 1, 256)); push("hash.hcount", "hash.hcount", g(cap as usize, 256));
-            for l in 0..self.hscan.len() { push("scanBlocks", &format!("hscanB{l}"), self.hscan[l].blocks as u32); }
-            for l in (0..self.hscan.len().saturating_sub(1)).rev() { push("addSums", &format!("hscanA{l}"), self.hscan[l].blocks as u32); }
-            push("hash.hscatter", "hash.hscatter", g(cap as usize, 256));
-            push("contacts.barrier", "contacts.barrier", g(cap as usize, 128));
-            push("contacts.detect", "contacts.detect", g(cap as usize, 128));
-            let wg = if self.opts.indirect_resolve { push("contactArgs", "contactArgs", 1); 0 } else { g(self.opts.contact_cap, 128) };
-            for _ in 0..self.opts.resolve_rounds { push("contacts.ownClear", "contacts.ownClear", wg); push("contacts.ownMin", "contacts.ownMin", wg); push("contacts.resolveRound", "contacts.resolveRound", wg); }
-            push("contacts.resolve", "contacts.resolve", 1);
+            stage = "contacts"; push!("hash.hclear", "hash.hclear", g(self.t_size + 1, 256)); push!("hash.hcount", "hash.hcount", g(cap as usize, 256));
+            for l in 0..self.hscan.len() { push!("scanBlocks", &format!("hscanB{l}"), self.hscan[l].blocks as u32); }
+            for l in (0..self.hscan.len().saturating_sub(1)).rev() { push!("addSums", &format!("hscanA{l}"), self.hscan[l].blocks as u32); }
+            push!("hash.hscatter", "hash.hscatter", g(cap as usize, 256));
+            stage = "barrier"; push!("contacts.barrier", "contacts.barrier", g(cap as usize, 128));
+            stage = "detect"; push!("contacts.detect", "contacts.detect", g(cap as usize, 128));
+            stage = "resolve";
+            let wg = if self.opts.indirect_resolve { push!("contactArgs", "contactArgs", 1); 0 } else { g(self.opts.contact_cap, 128) };
+            for _ in 0..self.opts.resolve_rounds { push!("contacts.ownClear", "contacts.ownClear", wg); push!("contacts.ownMin", "contacts.ownMin", wg); push!("contacts.resolveRound", "contacts.resolveRound", wg); }
+            push!("contacts.resolve", "contacts.resolve", 1);
         }
-        push("build.clear", "build.clear", g(self.n_counts, 256)); push("build.count", "build.count", g(cap as usize, 256));
-        for l in 0..self.scan.len() { push("scanBlocks", &format!("scan{l}"), self.scan[l].blocks as u32); }
-        for l in (0..self.scan.len().saturating_sub(1)).rev() { push("addSums", &format!("add{l}"), self.scan[l].blocks as u32); }
-        push("build.scatter", "build.scatter", g(cap as usize, 256)); push("build.sortLanes", "build.sortLanes", g(cap as usize, 256));
+        stage = "lists"; push!("build.clear", "build.clear", g(self.n_counts, 256)); push!("build.count", "build.count", g(cap as usize, 256));
+        for l in 0..self.scan.len() { push!("scanBlocks", &format!("scan{l}"), self.scan[l].blocks as u32); }
+        for l in (0..self.scan.len().saturating_sub(1)).rev() { push!("addSums", &format!("add{l}"), self.scan[l].blocks as u32); }
+        push!("build.scatter", "build.scatter", g(cap as usize, 256)); push!("build.sortLanes", "build.sortLanes", g(cap as usize, 256));
         let hj = self.blob.j_m.is_some() && !f.empty;
-        if hj { push("junction.clear", "junction.clear", g(self.j_m() + self.blob.e, 256)); push("junction.clearOff", "junction.clearOff", g(self.blob.e, 256)); push("junction.link", "junction.link", g(cap as usize, 256)); }
-        push("leaders", "leaders", g(cap as usize, 128));
+        if hj { stage = "jlists"; push!("junction.clear", "junction.clear", g(self.j_m() + self.blob.e, 256)); push!("junction.clearOff", "junction.clearOff", g(self.blob.e, 256)); push!("junction.link", "junction.link", g(cap as usize, 256)); }
+        stage = "leaders"; push!("leaders", "leaders", g(cap as usize, 128));
         if hj {
-            if f.collisions { push("junction.perceive", "junction.perceive", g(cap as usize, 128)); }
-            push("courtesy.propose", "courtesy.propose", g(cap as usize, 128)); push("courtesy.apply", "courtesy.apply", g(cap as usize, 128));
-            if self.opts.deadlock_break != 0 { push("junction.dlFind", "junction.dlFind", g(cap as usize, 128)); push("junction.dlApply", "junction.dlApply", g(cap as usize, 128)); }
-            push("junction.yield", "junction.yield", g(cap as usize, 128));
+            stage = "junctions";
+            if f.collisions { push!("junction.perceive", "junction.perceive", g(cap as usize, 128)); }
+            push!("courtesy.propose", "courtesy.propose", g(cap as usize, 128)); push!("courtesy.apply", "courtesy.apply", g(cap as usize, 128));
+            if self.opts.deadlock_break != 0 { push!("junction.dlFind", "junction.dlFind", g(cap as usize, 128)); push!("junction.dlApply", "junction.dlApply", g(cap as usize, 128)); }
+            push!("junction.yield", "junction.yield", g(cap as usize, 128));
             let every = jsmath::round(2.0 / self.dt).max(1.0) as u64;
-            if (self.closed_n > 0 || !self.traffic_penalty.is_empty()) && self.opts.reroute && step_index % every == 0 { push("junction.reroute", "junction.reroute", g(cap as usize, 128)); }
+            if (self.closed_n > 0 || !self.traffic_penalty.is_empty()) && self.opts.reroute && step_index % every == 0 { push!("junction.reroute", "junction.reroute", g(cap as usize, 128)); }
         }
         if f.policy {
-            if self.opts.obs != ObsMode::None { push("sense", "sense", g(cap as usize, 128)); }
-            if self.opts.obs == ObsMode::V3 { push("perceive", "perceive", g(cap as usize, 64)); }
-            push("act", "act", g(cap as usize, 128));
+            if self.opts.obs != ObsMode::None { stage = "sense"; push!("sense", "sense", g(cap as usize, 128)); }
+            if self.opts.obs == ObsMode::V3 { stage = "perceive"; push!("perceive", "perceive", g(cap as usize, 64)); }
+            stage = "act"; push!("act", "act", g(cap as usize, 128));
         }
-        push("integrate", "integrate", g(cap as usize, 256));
+        stage = "integrate"; push!("integrate", "integrate", g(cap as usize, 256));
         d
     }
 
     fn encode(&mut self, enc: &mut wgpu::CommandEncoder, n: usize, op_count: usize) {
+        use crate::profile::Profiler as P;
+        let cargs = self.gpu.get("cargs");
         for k in 0..n {
             let si = self.step + k as u64 + 1;
             let st = self.stages(si, k == 0, op_count);
-            let cargs = self.gpu.get("cargs");
-            let mut pass = enc.begin_compute_pass(&wgpu::ComputePassDescriptor { label: None, timestamp_writes: None });
-            for (kn, bgn, x) in &st {
-                pass.set_pipeline(&self.k[kn].pipeline);
-                for (gi, b) in self.bg[bgn.as_str()].iter().enumerate() { pass.set_bind_group(gi as u32, b, &[]); }
-                if *x == 0 { pass.dispatch_workgroups_indirect(&cargs, 0); } else { pass.dispatch_workgroups(*x, 1, 1); }
+            let (kt, bgt) = (&self.k, &self.bg);
+            let rec = |pass: &mut wgpu::ComputePass, d: &Dispatch| {
+                pass.set_pipeline(&kt[d.kernel].pipeline);
+                for (gi, b) in bgt[d.bg.as_str()].iter().enumerate() { pass.set_bind_group(gi as u32, b, &[]); }
+                if d.x == 0 { pass.dispatch_workgroups_indirect(&cargs, 0); } else { pass.dispatch_workgroups(d.x, 1, 1); }
+            };
+            match self.profiler.as_mut() {
+                Some(p) if k == 0 && st.len() <= p.max_dispatches() => {
+                    p.pending.clear();
+                    if p.inside {
+                        let mut pass = enc.begin_compute_pass(&Default::default());
+                        for (i, d) in st.iter().enumerate() { let q = P::dispatch_index(i); pass.write_timestamp(&p.qs, q); rec(&mut pass, d); pass.write_timestamp(&p.qs, q + 1); p.pending.push((d.stage, d.kernel)); }
+                    } else {
+                        for (i, d) in st.iter().enumerate() {
+                            let q = P::dispatch_index(i); let tw = wgpu::ComputePassTimestampWrites { query_set: &p.qs, beginning_of_pass_write_index: Some(q), end_of_pass_write_index: Some(q + 1) };
+                            let mut pass = enc.begin_compute_pass(&wgpu::ComputePassDescriptor { label: Some(d.kernel), timestamp_writes: Some(tw) });
+                            rec(&mut pass, d); p.pending.push((d.stage, d.kernel));
+                        }
+                    }
+                }
+                Some(p) if k == 1 => {
+                    let i = p.step_index(); p.step_pair = true;
+                    let tw = wgpu::ComputePassTimestampWrites { query_set: &p.qs, beginning_of_pass_write_index: Some(i), end_of_pass_write_index: Some(i + 1) };
+                    let mut pass = enc.begin_compute_pass(&wgpu::ComputePassDescriptor { label: None, timestamp_writes: Some(tw) });
+                    for d in &st { rec(&mut pass, d); }
+                }
+                _ => {
+                    let mut pass = enc.begin_compute_pass(&wgpu::ComputePassDescriptor { label: None, timestamp_writes: None });
+                    for d in &st { rec(&mut pass, d); }
+                }
             }
         }
+        if let Some(p) = &self.profiler { p.resolve(enc); }
     }
 
     /// The dispatch list (kernel, x) of the next step (diagnostics / oracle comparison).
     pub fn peek_stages(&mut self, first: bool, op_count: usize) -> Vec<(&'static str, u32)> {
         let np = self.new_pose; let wg = ((self.opts.contact_cap + 127) / 128) as u32;
-        let v = self.stages(self.step + 1, first, op_count).into_iter().filter(|(k, _, _)| *k != "contactArgs").map(|(k, _, x)| (k, if x == 0 { wg } else { x })).collect(); self.new_pose = np; v
+        let v = self.stages(self.step + 1, first, op_count).into_iter().filter(|d| d.kernel != "contactArgs").map(|d| (d.kernel, if d.x == 0 { wg } else { d.x })).collect(); self.new_pose = np; v
     }
 
     /// Run n sim steps in one submit, then read back stats + events and process them (host side).
@@ -540,6 +589,7 @@ impl GpuSim {
               if let Some(v) = veh { bytemuck::cast_slice_mut::<u32, u8>(v).copy_from_slice(&m[p.ob4..p.ob4 + p.vb4]); } }
             os.unmap();
         }
+        if let Some(p) = self.profiler.as_mut() { p.collect(&self.gpu.device); }
         self.ingest();
     }
 
