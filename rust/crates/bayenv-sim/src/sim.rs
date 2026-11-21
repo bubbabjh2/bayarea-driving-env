@@ -44,6 +44,13 @@ pub struct SimOpts {
     pub batch_dynamics: bool,
 }
 
+/// one car's phase-A result (integrate_all)
+pub(crate) struct PhaseA { pub slot: u32, pub locked: bool, pub c: Car, pub out: CarOut, pub ret: i32, pub pose: Pose }
+/// pose fields of update_pose
+#[derive(Clone, Copy, Default)]
+pub(crate) struct Pose { pub x: f32, pub y: f32, pub z: f32, pub heading: f32, pub seg: i32 }
+impl Pose { fn of(c: &Car, g: &World) -> Pose { let mut pc = *c; pc.update_pose(g); Pose { x: pc.x, y: pc.y, z: pc.z, heading: pc.heading, seg: pc.seg } } }
+
 impl SimOpts {
     /// The JS sim's model (oracle checks, trace_check / v2_check, JS-port tests): Default with the model fixes off
     /// (replan_at_missed_event = false). Checkpoints trained on the JS CPU sim saw this model.
@@ -194,6 +201,8 @@ pub struct Sim {
     pub(crate) plan_prefetch: HashMap<(i32, i32), (Option<crate::fuel::Plan>, f64)>,
     /// departures up to this time have had their plans prefetched
     pub(crate) plan_horizon: f64,
+    /// integrate_all phase-A results (reused buffer)
+    pub(crate) phase_a: Vec<PhaseA>,
     /// edge of each slot listed in the lane index at its last rebuild (-1 not listed)
     pub(crate) indexed: Vec<i32>,
     pub(crate) pair_event: HashMap<i64, f64>,
@@ -272,7 +281,7 @@ impl Sim {
             fitness: vec![0.0; n_c], actual_arrival: vec![-1.0; n_c], late_by: vec![0.0; n_c], early_by: vec![0.0; n_c],
             trips, trip_ptr: 0, pending: Vec::new(), lot: Vec::new(), crashes: Vec::new(), active: Vec::new(), edge_crashes: HashMap::default(), edge_has_crash: vec![0; ne],
             counters: Counters::default(), accum: Accum::default(), live: Live::default(), density: Density::default(), obstacle_rng: None, brake_every: (15.0, 40.0),
-            spawned_keys: HashSet::default(), spawn_dirty: HashSet::default(), plan_prefetch: HashMap::default(), plan_horizon: f64::NEG_INFINITY, indexed: Vec::new(), pair_event: HashMap::default(), stuck_labelled: HashMap::default(), conn_cars: Default::default(), node_conn: Default::default(),
+            spawned_keys: HashSet::default(), spawn_dirty: HashSet::default(), plan_prefetch: HashMap::default(), plan_horizon: f64::NEG_INFINITY, phase_a: Vec::new(), indexed: Vec::new(), pair_event: HashMap::default(), stuck_labelled: HashMap::default(), conn_cars: Default::default(), node_conn: Default::default(),
             passers: Default::default(), conflict_with: HashMap::default(), off_lane: Default::default(), touch: HashSet::default(), barrier_touch: HashSet::default(), barrier_now: HashSet::default(),
             yield_by: None, creep_until: Vec::new(), creep_ignore: Vec::new(), edge_speed: HashMap::default(), traffic_penalty: None,
             last_reroute: HashMap::default(), next_traffic: 0.0, next_reroute: 0.0, next_density: start, edge_count_scratch: vec![0; ne], fwy, fwy_lane_km,
@@ -641,108 +650,83 @@ impl Sim {
         let g = self.gw();
         let high = self.vs.high;
         let fuel_on = self.opts.fuel;
-        // phase A (pure per-car physics + pose), in parallel when enabled: identical results, written back in slot order
+        // phase A (pure per-car physics + pose), in parallel when enabled; single-threaded with 4 cars' vehicle dynamics
+        // interleaved (integrate_car4). Identical results: each car reads only its own slot; written back in slot order.
+        // Results are kept dense, in slot order (self.phase_a, reused across steps).
         let ta = std::time::Instant::now();
-        let mut pre: Vec<Option<(Car, CarOut, i32, Car)>> = Vec::new();
         let par = self.opts.parallel && high >= 512 && self.vs.missed_t.len() + high <= 100000;
-        if par {
-            use rayon::prelude::*;
-            let vs = &self.vs;
-            let (time, step, pm) = (self.time, self.step_count, vs.position_mode);
-            pre = (0..high).into_par_iter().with_min_len(64).map(|i| {
-                let st = vs.state[i];
-                let locked = if st == STATE_DRIVING { false } else if st == STATE_CRASHED && (vs.speed[i] > 0.01 || jm::abs(f(vs.v_lat[i])) > 0.01 || jm::abs(f(vs.yaw_rate[i])) > 0.01) { true } else { return None };
-                let mut c = vs.gather(i);
-                if !locked && !fuel_on { c.fuel = vs.tank[i]; }
-                let mut out = CarOut::default();
-                let ret = VehicleStore::integrate_car(&mut c, &vs.routes[i], &vs.ctrl_ring[i * 120..(i + 1) * 120], vs.missed_t.get(&i).copied(), pm, &mut out, dt, time, &g, step, locked);
-                let mut pc = c; pc.update_pose(&g);
-                Some((c, out, ret, pc))
-            }).collect();
-        }
-        // single-threaded: phase A as well, two cars at a time with their vehicle dynamics interleaved
-        // (VehicleStore::integrate_car2; each car's result is integrate_car's), written back serially
-        let mut par_ok = true;
         let batch = !par && self.opts.batch_dynamics && high >= 2 && self.vs.missed_t.len() + high <= 100000;
-        if batch {
+        let mut buf = std::mem::take(&mut self.phase_a);
+        buf.clear();
+        {
             let vs = &self.vs;
             let (time, step, pm) = (self.time, self.step_count, vs.position_mode);
-            pre = (0..high).map(|_| None).collect();
-            // groups of BATCH (4, or 2 with BAYENV_BATCH2) consecutive cars; the rest in pairs / alone
-            let width = if std::env::var("BAYENV_BATCH2").is_ok() { 2 } else { 4 };
-            let mut held: Vec<(usize, Car, bool)> = Vec::with_capacity(4);
-            let ring = |i: usize| &vs.ctrl_ring[i * 120..(i + 1) * 120];
-            let mut flush = |held: &mut Vec<(usize, Car, bool)>, pre: &mut Vec<Option<(Car, CarOut, i32, Car)>>| {
-                let mut outs: [CarOut; 4] = Default::default();
-                let rets: Vec<i32> = match held.len() {
-                    4 => {
-                        let [(i0, c0, l0), (i1, c1, l1), (i2, c2, l2), (i3, c3, l3)] = held.as_mut_slice() else { unreachable!() };
-                        let [o0, o1, o2, o3] = &mut outs;
-                        VehicleStore::integrate_car4([
-                            (c0, &vs.routes[*i0], ring(*i0), vs.missed_t.get(i0).copied(), o0, *l0), (c1, &vs.routes[*i1], ring(*i1), vs.missed_t.get(i1).copied(), o1, *l1),
-                            (c2, &vs.routes[*i2], ring(*i2), vs.missed_t.get(i2).copied(), o2, *l2), (c3, &vs.routes[*i3], ring(*i3), vs.missed_t.get(i3).copied(), o3, *l3)], pm, dt, time, &g, step).to_vec()
-                    }
-                    2 | 3 => {
-                        let (a, rest) = held.split_at_mut(1); let (b, rest) = rest.split_at_mut(1);
-                        let (oa, ob) = { let (x, y) = outs.split_at_mut(1); (&mut x[0], &mut y[0]) };
-                        let (ia, ib) = (a[0].0, b[0].0);
-                        let (x, y) = VehicleStore::integrate_car2((&mut a[0].1, &vs.routes[ia], ring(ia), vs.missed_t.get(&ia).copied(), oa, a[0].2), (&mut b[0].1, &vs.routes[ib], ring(ib), vs.missed_t.get(&ib).copied(), ob, b[0].2), pm, dt, time, &g, step);
-                        let mut v = vec![x, y];
-                        if let Some(c) = rest.first_mut() { let ic = c.0; v.push(VehicleStore::integrate_car(&mut c.1, &vs.routes[ic], ring(ic), vs.missed_t.get(&ic).copied(), pm, &mut outs[2], dt, time, &g, step, c.2)); }
-                        v
-                    }
-                    1 => { let c = &mut held[0]; let ic = c.0; vec![VehicleStore::integrate_car(&mut c.1, &vs.routes[ic], ring(ic), vs.missed_t.get(&ic).copied(), pm, &mut outs[0], dt, time, &g, step, c.2)] }
-                    _ => Vec::new(),
-                };
-                for (k, (i, c, _)) in held.drain(..).enumerate() { let mut pc = c; pc.update_pose(&g); pre[i] = Some((c, std::mem::take(&mut outs[k]), rets[k], pc)); }
-            };
-            for i in 0..high {
+            let eligible = |i: usize| -> Option<bool> {
                 let st = vs.state[i];
-                let locked = if st == STATE_DRIVING { false } else if st == STATE_CRASHED && (vs.speed[i] > 0.01 || jm::abs(f(vs.v_lat[i])) > 0.01 || jm::abs(f(vs.yaw_rate[i])) > 0.01) { true } else { continue };
-                let mut c = vs.gather(i);
-                if !locked && !fuel_on { c.fuel = vs.tank[i]; }
-                held.push((i, c, locked));
-                if held.len() == width { flush(&mut held, &mut pre); }
+                if st == STATE_DRIVING { Some(false) } else if st == STATE_CRASHED && (vs.speed[i] > 0.01 || jm::abs(f(vs.v_lat[i])) > 0.01 || jm::abs(f(vs.yaw_rate[i])) > 0.01) { Some(true) } else { None }
+            };
+            let ring = |i: usize| &vs.ctrl_ring[i * 120..(i + 1) * 120];
+            let start = |i: usize, locked: bool| { let mut c = vs.gather(i); if !locked && !fuel_on { c.fuel = vs.tank[i]; } PhaseA { slot: i as u32, locked, c, out: CarOut::default(), ret: 0, pose: Pose::default() } };
+            let one = |e: &mut PhaseA| { let i = e.slot as usize; e.ret = VehicleStore::integrate_car(&mut e.c, &vs.routes[i], ring(i), vs.missed_t.get(&i).copied(), pm, &mut e.out, dt, time, &g, step, e.locked); };
+            if par {
+                use rayon::prelude::*;
+                // eligible slots first (cheap), then an indexed parallel map (collects in place, no concatenation)
+                let elig: Vec<(usize, bool)> = (0..high).filter_map(|i| eligible(i).map(|l| (i, l))).collect();
+                elig.into_par_iter().with_min_len(64).map(|(i, l)| { let mut e = start(i, l); one(&mut e); e.pose = Pose::of(&e.c, &g); e }).collect_into_vec(&mut buf);
+            } else if batch {
+                for i in 0..high { if let Some(l) = eligible(i) { buf.push(start(i, l)); } }
+                let width = if std::env::var("BAYENV_BATCH2").is_ok() { 2 } else { 4 };
+                for ch in buf.chunks_mut(width) {
+                    match ch {
+                        [a, b, c, d] => {
+                            let (ia, ib, ic, id) = (a.slot as usize, b.slot as usize, c.slot as usize, d.slot as usize);
+                            let r = VehicleStore::integrate_car4([
+                                (&mut a.c, &vs.routes[ia], ring(ia), vs.missed_t.get(&ia).copied(), &mut a.out, a.locked), (&mut b.c, &vs.routes[ib], ring(ib), vs.missed_t.get(&ib).copied(), &mut b.out, b.locked),
+                                (&mut c.c, &vs.routes[ic], ring(ic), vs.missed_t.get(&ic).copied(), &mut c.out, c.locked), (&mut d.c, &vs.routes[id], ring(id), vs.missed_t.get(&id).copied(), &mut d.out, d.locked)], pm, dt, time, &g, step);
+                            a.ret = r[0]; b.ret = r[1]; c.ret = r[2]; d.ret = r[3];
+                        }
+                        [a, b, rest @ ..] => {
+                            let (ia, ib) = (a.slot as usize, b.slot as usize);
+                            let (x, y) = VehicleStore::integrate_car2((&mut a.c, &vs.routes[ia], ring(ia), vs.missed_t.get(&ia).copied(), &mut a.out, a.locked), (&mut b.c, &vs.routes[ib], ring(ib), vs.missed_t.get(&ib).copied(), &mut b.out, b.locked), pm, dt, time, &g, step);
+                            a.ret = x; b.ret = y;
+                            for e in rest { one(e); }
+                        }
+                        rest => { for e in rest { one(e); } }
+                    }
+                }
+                for e in buf.iter_mut() { e.pose = Pose::of(&e.c, &g); }
             }
-            flush(&mut held, &mut pre);
         }
         // stuck_cause (labels a car stuck past stuck_timeout) reads the cars ahead, which phase A has already
         // integrated: in a step where a label may be computed, use the in-order path instead (exact; rare)
-        if (par || batch) && pre.iter().enumerate().any(|(i, p)| matches!(p, Some((c, _, 0, _)) if self.vs.state[i] == STATE_DRIVING && c.stopped_since >= 0.0
-                && self.time - f(c.stopped_since) > self.opts.stuck_timeout && self.stuck_labelled.get(&i) != Some(&c.stopped_since))) {
-            pre.clear(); par_ok = false;
+        let mut have_pre = par || batch;
+        if have_pre && buf.iter().any(|e| e.ret == 0 && !e.locked && e.c.stopped_since >= 0.0 && self.time - f(e.c.stopped_since) > self.opts.stuck_timeout
+                && self.stuck_labelled.get(&(e.slot as usize)) != Some(&e.c.stopped_since)) {
+            buf.clear(); have_pre = false;
         }
-        let (par, batch) = (par && par_ok, batch && par_ok);
-        if batch {
-            let ptrs = crate::vehicle::CarPtrs::new(&mut self.vs);
-            for (i, p) in pre.iter().enumerate() { if let Some((c, _, _, _)) = p {
-                self.vs.px[i] = c.x; self.vs.pz[i] = c.z; self.vs.pyaw[i] = c.heading;
-                // SAFETY: slot i < high; the arrays were not reallocated since the pointers were taken
-                unsafe { ptrs.write(i, c); }
-            } }
-        }
-        let have_pre = par || batch;
-        if par {
-            // write the per-car results back in parallel (distinct slots; save_pose first: px = x before the pose update)
-            use rayon::prelude::*;
+        if have_pre {
+            // write the per-car results back (distinct slots; save_pose first: px = x before the pose update)
             let ptrs = crate::vehicle::CarPtrs::new(&mut self.vs);
             let (ppx, ppz, ppy) = (SyncPtr(self.vs.px.as_mut_ptr()), SyncPtr(self.vs.pz.as_mut_ptr()), SyncPtr(self.vs.pyaw.as_mut_ptr()));
-            pre.par_iter().enumerate().with_min_len(64).for_each(|(i, p)| if let Some((c, _, _, _)) = p {
-                // SAFETY: one task per slot i < high; the arrays were not reallocated since the pointers were taken
-                unsafe { *ppx.get().add(i) = c.x; *ppz.get().add(i) = c.z; *ppy.get().add(i) = c.heading; ptrs.write(i, c); }
-            });
+            // SAFETY: one write per slot < high; the arrays were not reallocated since the pointers were taken
+            let wr = |e: &PhaseA| unsafe { let i = e.slot as usize; *ppx.get().add(i) = e.c.x; *ppz.get().add(i) = e.c.z; *ppy.get().add(i) = e.c.heading; ptrs.write(i, &e.c); };
+            if par { use rayon::prelude::*; buf.par_iter().with_min_len(64).for_each(wr); } else { buf.iter().for_each(wr); }
         }
         if self.profile { self.sub_ns[1] += ta.elapsed().as_nanos() as u64; }
         let (mut driving, mut crashed, mut refueling, mut sum_speed) = (0u64, 0u64, 0u64, 0.0f64);
         let (mut speeding_sec, mut speeding_km, mut total_sec, mut total_km) = (0.0f64, 0.0f64, 0.0f64, 0.0f64);
         let check_every = self.opts.fuel_cfg.check_interval;
-        macro_rules! pose { ($i:expr) => { match pre.get($i).and_then(|p| p.as_ref()) { Some((_, _, _, pc)) => { let v = &mut self.vs; v.x[$i] = pc.x; v.y[$i] = pc.y; v.z[$i] = pc.z; v.heading[$i] = pc.heading; v.seg[$i] = pc.seg; } None => self.vs.update_pose($i, &g) } }; }
+        let mut cur = 0usize;
+        macro_rules! pose { ($e:expr, $i:expr) => { match $e { Some(e) => { let pc = &e.pose; let v = &mut self.vs; v.x[$i] = pc.x; v.y[$i] = pc.y; v.z[$i] = pc.z; v.heading[$i] = pc.heading; v.seg[$i] = pc.seg; } None => self.vs.update_pose($i, &g) } }; }
         for i in 0..high {
+            // this slot's phase-A result (buf is in slot order)
+            while cur < buf.len() && (buf[cur].slot as usize) < i { cur += 1; }
+            let res: Option<&PhaseA> = if have_pre { buf.get(cur).filter(|e| e.slot as usize == i) } else { None };
             let st = self.vs.state[i];
             if st == STATE_CRASHED {
                 crashed += 1;
                 if have_pre {
-                    match &pre[i] { Some((_, out, _, _)) => { self.vs.scatter_side(i, out); pose!(i); } None => self.vs.save_pose(i) }
+                    match res { Some(e) => { self.vs.scatter_side(i, &e.out); pose!(res, i); } None => self.vs.save_pose(i) }
                     continue;
                 }
                 let vs = &mut self.vs;
@@ -755,9 +739,9 @@ impl Sim {
             if st != STATE_DRIVING { continue; }
             let mut done;
             if have_pre {
-                let (_, out, ret, _) = pre[i].as_ref().unwrap();
-                self.vs.scatter_side(i, out);
-                done = *ret;
+                let e = res.unwrap();
+                self.vs.scatter_side(i, &e.out);
+                done = e.ret;
             } else {
                 if !fuel_on { self.vs.fuel[i] = self.vs.tank[i]; }
                 self.vs.save_pose(i);
@@ -775,8 +759,8 @@ impl Sim {
                 if (rp + 1 >= self.vs.routes[i].len() || stop_here) && (rem < 2.5 || (rem < 8.0 && sp < 0.3)) { done = if stop_here { 2 } else { 1 }; }
             }
             if done == 1 { self.arrive(i); continue; }
-            if done == 2 { pose!(i); self.enter_station(i); refueling += 1; continue; }
-            if self.vs.fuel[i] <= 0.0 && sp < 0.05 { pose!(i); self.strand(i); crashed += 1; continue; }
+            if done == 2 { pose!(res, i); self.enter_station(i); refueling += 1; continue; }
+            if self.vs.fuel[i] <= 0.0 && sp < 0.05 { pose!(res, i); self.strand(i); crashed += 1; continue; }
             let ss = self.vs.stopped_since[i];
             if ss >= 0.0 && self.time - f(ss) > self.opts.stuck_timeout && self.stuck_labelled.get(&i) != Some(&ss) {
                 self.stuck_labelled.insert(i, ss);
@@ -785,12 +769,13 @@ impl Sim {
                 *self.counters.stuck_by.entry(k).or_insert(0) += 1;
             }
             if self.stations.is_some() && self.time - f(self.vs.last_fuel_check[i]) > check_every { let tf = std::time::Instant::now(); self.check_fuel(i, false); if self.profile { self.sub_ns[7] += tf.elapsed().as_nanos() as u64; } }
-            pose!(i);
+            pose!(res, i);
             driving += 1; sum_speed += f(self.vs.speed[i]);
         }
         self.live = Live { driving, crashed, refueling, sum_speed };
         let a = &mut self.accum;
         a.vehicle_sec += total_sec; a.vehicle_km += total_km; a.speeding_sec += speeding_sec; a.speeding_km += speeding_km;
+        self.phase_a = buf;
     }
 
     pub(crate) fn set_outcome(&mut self, cid: usize, leg: u8, o: u8) {
