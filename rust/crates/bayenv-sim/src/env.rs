@@ -115,7 +115,7 @@ impl Env {
     pub fn take_records(&mut self) -> bayenv_world::events::EventLog {
         let mut log = bayenv_world::events::EventLog::default();
         for e in std::mem::take(&mut self.sim.event_log) {
-            log.push(e.time, e.kind, e.slot as u32, e.agent, e.other as i64, e.dv_kmh, e.other_dv_kmh, e.share);
+            log.push(e.step, e.time, e.kind, e.slot as u32, e.agent, e.other as i64, e.dv_kmh, e.other_dv_kmh, e.share);
             let k = log.len() - 1;
             log.late_by[k] = e.late_by; log.progress_m[k] = e.progress_m; log.trip_m[k] = e.trip_m; log.trip_s[k] = e.trip_s;
         }
@@ -174,8 +174,9 @@ impl Env {
             "v_lat" => v_lat, "lane" => lane, "x" => x, "y" => y, "z" => z, "heading" => heading, "commuter" => commuter, "leader" => leader, "gap" => gap, "progress_m" => route_dist);
         let mut cols = cols;
         let g = &self.world;
-        cols.push(("speed_limit", (0..h).map(|i| if vs.edge[i] >= 0 && (vs.edge[i] as usize) < g.edge_count { g.e_speed[vs.edge[i] as usize] } else { 0.0 }).collect()));
-        cols.push(("collided", (0..h).map(|i| if vs.flags[i] & crate::vehicle::FLAG_COLLIDED != 0 { 1.0 } else { 0.0 }).collect()));
+        cols.push(("speed_limit", (0..h).map(|i| if vs.state[i] != crate::vehicle::STATE_FREE && vs.edge[i] >= 0 && (vs.edge[i] as usize) < g.edge_count { g.e_speed[vs.edge[i] as usize] as f32 as f64 } else { f64::NAN }).collect()));
+        let mut col = vec![0.0; h]; for &i in &self.sim.collided_last { if i < h { col[i] = 1.0; } }
+        cols.push(("collided", col));
         cols
     }
     /// stats(): counters (same keys as the GPU backend where they exist).
