@@ -40,6 +40,8 @@ pub struct SimOpts {
     /// re-plans one step late, so at the connector exit the next-box lookup sees the stale route and the late box
     /// entry is re-projected (headingRel += dh); rust/docs/crash-divergence.md "Cause A".
     pub replan_at_missed_event: bool,
+    /// single-threaded integrate: two cars at a time with interleaved vehicle dynamics (identical results; A/B switch)
+    pub batch_dynamics: bool,
 }
 
 impl SimOpts {
@@ -58,7 +60,7 @@ impl Default for SimOpts {
             cell_size: 25.0, table_bits: 18, leader_lookahead: 250.0, merge_lookahead: 80.0, lane_end_lookahead: 450.0, control_lookahead: 250.0,
             reroute: true, reroute_sight: 2000.0, squeeze_delay: 900.0, squeeze_speed: 3.0, density_interval: 60.0, path_sight: 0.0,
             deadlock_break: 0.0, spawn_lane_route: 0.0, junction_sight: 0.0, position_mode: true, traffic_mode: TrafficMode::Full, fuel: true,
-            seed: 1.0, wrecks: 0, default_action: Action { steer: Some(0.0), steer_rate: None, gas: 0.0, brake: 0.3 }, fuel_cfg: Default::default(), slot_pool: 0, parallel: false, replan_at_missed_event: true }
+            seed: 1.0, wrecks: 0, default_action: Action { steer: Some(0.0), steer_rate: None, gas: 0.0, brake: 0.3 }, fuel_cfg: Default::default(), slot_pool: 0, parallel: false, replan_at_missed_event: true, batch_dynamics: true }
     }
 }
 
@@ -658,6 +660,44 @@ impl Sim {
                 Some((c, out, ret, pc))
             }).collect();
         }
+        // single-threaded: phase A as well, two cars at a time with their vehicle dynamics interleaved
+        // (VehicleStore::integrate_car2; each car's result is integrate_car's), written back serially
+        let batch = !par && self.opts.batch_dynamics && high >= 2 && self.vs.missed_t.len() + high <= 100000;
+        if batch {
+            let vs = &self.vs;
+            let (time, step, pm) = (self.time, self.step_count, vs.position_mode);
+            pre = (0..high).map(|_| None).collect();
+            let mut held: Option<(usize, Car, bool)> = None;
+            for i in 0..high {
+                let st = vs.state[i];
+                let locked = if st == STATE_DRIVING { false } else if st == STATE_CRASHED && (vs.speed[i] > 0.01 || jm::abs(f(vs.v_lat[i])) > 0.01 || jm::abs(f(vs.yaw_rate[i])) > 0.01) { true } else { continue };
+                let mut c = vs.gather(i);
+                if !locked && !fuel_on { c.fuel = vs.tank[i]; }
+                match held.take() {
+                    None => held = Some((i, c, locked)),
+                    Some((j, mut cj, lj)) => {
+                        let (mut oj, mut oi) = (CarOut::default(), CarOut::default());
+                        let (rj, ri) = VehicleStore::integrate_car2(
+                            (&mut cj, &vs.routes[j], &vs.ctrl_ring[j * 120..(j + 1) * 120], vs.missed_t.get(&j).copied(), &mut oj, lj),
+                            (&mut c, &vs.routes[i], &vs.ctrl_ring[i * 120..(i + 1) * 120], vs.missed_t.get(&i).copied(), &mut oi, locked), pm, dt, time, &g, step);
+                        let mut pj = cj; pj.update_pose(&g); pre[j] = Some((cj, oj, rj, pj));
+                        let mut pi = c; pi.update_pose(&g); pre[i] = Some((c, oi, ri, pi));
+                    }
+                }
+            }
+            if let Some((j, mut cj, lj)) = held {
+                let mut oj = CarOut::default();
+                let rj = VehicleStore::integrate_car(&mut cj, &vs.routes[j], &vs.ctrl_ring[j * 120..(j + 1) * 120], vs.missed_t.get(&j).copied(), pm, &mut oj, dt, time, &g, step, lj);
+                let mut pj = cj; pj.update_pose(&g); pre[j] = Some((cj, oj, rj, pj));
+            }
+            let ptrs = crate::vehicle::CarPtrs::new(&mut self.vs);
+            for (i, p) in pre.iter().enumerate() { if let Some((c, _, _, _)) = p {
+                self.vs.px[i] = c.x; self.vs.pz[i] = c.z; self.vs.pyaw[i] = c.heading;
+                // SAFETY: slot i < high; the arrays were not reallocated since the pointers were taken
+                unsafe { ptrs.write(i, c); }
+            } }
+        }
+        let have_pre = par || batch;
         if par {
             // write the per-car results back in parallel (distinct slots; save_pose first: px = x before the pose update)
             use rayon::prelude::*;
@@ -677,7 +717,7 @@ impl Sim {
             let st = self.vs.state[i];
             if st == STATE_CRASHED {
                 crashed += 1;
-                if par {
+                if have_pre {
                     match &pre[i] { Some((_, out, _, _)) => { self.vs.scatter_side(i, out); pose!(i); } None => self.vs.save_pose(i) }
                     continue;
                 }
@@ -690,7 +730,7 @@ impl Sim {
             if st == STATE_REFUELING { refueling += 1; continue; }
             if st != STATE_DRIVING { continue; }
             let mut done;
-            if par {
+            if have_pre {
                 let (_, out, ret, _) = pre[i].as_ref().unwrap();
                 self.vs.scatter_side(i, out);
                 done = *ret;
