@@ -1,0 +1,10 @@
+[package]
+name = "bayenv-sim"
+description = "Bay Area driving env: CPU reference simulation (port of src/sim)"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+
+[dependencies]
+bayenv-world.workspace = true

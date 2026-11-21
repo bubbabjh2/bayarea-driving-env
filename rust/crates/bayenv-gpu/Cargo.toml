@@ -1,0 +1,14 @@
+[package]
+name = "bayenv-gpu"
+description = "Bay Area driving env: wgpu host for the WGSL GPU sim (src/gpu/kernels)"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+
+[dependencies]
+bayenv-world.workspace = true
+wgpu.workspace = true
+pollster.workspace = true
+bytemuck.workspace = true
+serde_json.workspace = true
