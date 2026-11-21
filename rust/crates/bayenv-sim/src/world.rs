@@ -214,6 +214,33 @@ pub struct Junctions {
 pub struct Conflict { pub other: u32, pub ty: u32, pub s: f64, pub s_other: f64 }
 
 impl Junctions {
+    #[allow(clippy::too_many_arguments)]
+    pub fn from_arrays(n: usize, ne: usize, m_info: Vec<u32>, m_f: Vec<f64>, pts: Vec<f64>, conf: Vec<u32>, conf_s: Vec<f64>, mouth_s: Vec<f64>, gore_s: Vec<f64>,
+        j_node: Vec<u32>, j_first_m: Vec<u32>, j_count_m: Vec<u32>) -> Junctions {
+        let mc = m_info.len() / 7;
+        let mut by_in_start = vec![0u32; ne + 1];
+        for m in 0..mc { by_in_start[m_info[7 * m] as usize + 1] += 1; }
+        for e in 0..ne { by_in_start[e + 1] += by_in_start[e]; }
+        let mut fill = by_in_start.clone();
+        let mut by_in = vec![0u32; mc];
+        for m in 0..mc { let a = m_info[7 * m] as usize; by_in[fill[a] as usize] = m as u32; fill[a] += 1; }
+        let nc = conf.len() / 3;
+        let mut cnt = vec![0u32; mc + 1];
+        for c in 0..nc { cnt[conf[3 * c] as usize + 1] += 1; cnt[conf[3 * c + 1] as usize + 1] += 1; }
+        for m in 0..mc { cnt[m + 1] += cnt[m]; }
+        let mut fill = cnt.clone();
+        let mut list = vec![Conflict { other: 0, ty: 0, s: 0.0, s_other: 0.0 }; 2 * nc];
+        for c in 0..nc {
+            let (a, b, t) = (conf[3 * c] as usize, conf[3 * c + 1] as usize, conf[3 * c + 2]);
+            let (sa, sb) = (conf_s[2 * c], conf_s[2 * c + 1]);
+            list[fill[a] as usize] = Conflict { other: b as u32, ty: t, s: sa, s_other: sb }; fill[a] += 1;
+            list[fill[b] as usize] = Conflict { other: a as u32, ty: t, s: sb, s_other: sa }; fill[b] += 1;
+        }
+        let mut j_of_node = vec![-1i32; n];
+        for (jj, &nd) in j_node.iter().enumerate() { if (nd as usize) < n { j_of_node[nd as usize] = jj as i32; } }
+        let m_len = (0..mc).map(|m| (m_f[4 * m + 2] as f32) as f64).collect();
+        Junctions { mouth_s, gore_s, j_node, j_first_m, j_count_m, m_f, m_len, pts, move_count: mc, j_of_node, by_in_start, by_in, conf_start: cnt, conf_list: list, m_info }
+    }
     #[inline] pub fn info(&self, m: usize, k: usize) -> u32 { self.m_info[7 * m + k] }
     #[inline] pub fn s_in(&self, m: usize) -> f64 { self.m_f[4 * m] }
     #[inline] pub fn s_out(&self, m: usize) -> f64 { self.m_f[4 * m + 1] }
@@ -352,36 +379,8 @@ impl World {
             })
         } else { None };
         let j = if meta["junctions"].as_bool().unwrap_or(false) {
-            let m_info = p.u32s("J.mInfo");
-            let mc = m_info.len() / 7;
-            let mut by_in_start = vec![0u32; ne + 1];
-            for m in 0..mc { by_in_start[m_info[7 * m] as usize + 1] += 1; }
-            for e in 0..ne { by_in_start[e + 1] += by_in_start[e]; }
-            let mut fill = by_in_start.clone();
-            let mut by_in = vec![0u32; mc];
-            for m in 0..mc { let a = m_info[7 * m] as usize; by_in[fill[a] as usize] = m as u32; fill[a] += 1; }
-            let conf = p.u32s("J.conf");
-            let conf_s = p.f64s("J.confS");
-            let nc = conf.len() / 3;
-            let mut cnt = vec![0u32; mc + 1];
-            for c in 0..nc { cnt[conf[3 * c] as usize + 1] += 1; cnt[conf[3 * c + 1] as usize + 1] += 1; }
-            for m in 0..mc { cnt[m + 1] += cnt[m]; }
-            let mut fill = cnt.clone();
-            let mut list = vec![Conflict { other: 0, ty: 0, s: 0.0, s_other: 0.0 }; 2 * nc];
-            for c in 0..nc {
-                let (a, b, t) = (conf[3 * c] as usize, conf[3 * c + 1] as usize, conf[3 * c + 2]);
-                let (sa, sb) = (conf_s[2 * c], conf_s[2 * c + 1]);
-                list[fill[a] as usize] = Conflict { other: b as u32, ty: t, s: sa, s_other: sb }; fill[a] += 1;
-                list[fill[b] as usize] = Conflict { other: a as u32, ty: t, s: sb, s_other: sa }; fill[b] += 1;
-            }
-            let j_node = p.u32s("J.jNode");
-            let mut j_of_node = vec![-1i32; n];
-            for (jj, &nd) in j_node.iter().enumerate() { if (nd as usize) < n { j_of_node[nd as usize] = jj as i32; } }
-            Some(Junctions {
-                mouth_s: p.f64s("J.mouthS"), gore_s: p.f64s("J.goreS"), j_node, j_first_m: p.u32s("J.jFirstM"), j_count_m: p.u32s("J.jCountM"),
-                m_f: p.f64s("J.mF"), m_len: p.f64s("J.mLen"), pts: p.f64s("J.pts"), move_count: mc, j_of_node, by_in_start, by_in,
-                conf_start: cnt, conf_list: list, m_info,
-            })
+            Some(Junctions::from_arrays(n, ne, p.u32s("J.mInfo"), p.f64s("J.mF"), p.f64s("J.pts"), p.u32s("J.conf"), p.f64s("J.confS"),
+                p.f64s("J.mouthS"), p.f64s("J.goreS"), p.u32s("J.jNode"), p.u32s("J.jFirstM"), p.u32s("J.jCountM")))
         } else { None };
         let controls = if p.has("C.type") {
             let ps = p.u32s("C.phaseStart");
@@ -426,6 +425,68 @@ impl World {
         };
         w.build_hops();
         w
+    }
+
+    /// From the shared world crate (bayenv_world::World::load): same numbering and values as the JS-loaded world.
+    pub fn from_bayenv(w: &bayenv_world::World) -> World {
+        use bayenv_world::graph::ef;
+        let g = &w.graph;
+        let (n, ne) = (g.node_count, g.edge_count);
+        let names: Vec<String> = bayenv_world::roadpack::CLASSES_ALL.iter().map(|s| s.to_string()).collect();
+        let hwbits: Vec<u8> = names.iter().map(|s| {
+            let mut b = 0u8;
+            if matches!(s.as_str(), "motorway" | "trunk" | "motorway_link" | "trunk_link") { b |= HW_SHOULDER; }
+            if matches!(s.as_str(), "motorway" | "trunk") { b |= HW_PULLOVER | HW_MAINLINE; }
+            b
+        }).collect();
+        let f64v = |v: &[f32]| v.iter().map(|&x| x as f64).collect::<Vec<f64>>();
+        let u8f = |v: &[u8]| v.iter().map(|&x| x as f64).collect::<Vec<f64>>();
+        let lgs = &w.lanes;
+        let lgr = &w.lane_graph;
+        let lg = LaneGeom {
+            v_first: lgs.v_first.to_vec(), vx: lgs.vx.to_vec(), vy: f64v(&lgs.vy), vz: lgs.vz.to_vec(), vs: lgs.vs.to_vec(), mx: lgs.mx.to_vec(), mz: lgs.mz.to_vec(),
+            rd: f64v(&lgs.rd), rend: f64v(&lgs.rend), tau: f64v(&lgs.tau), x_r: u8f(&lgs.x_r), x_l: u8f(&lgs.x_l), lane_w: f64v(&lgs.lane_w), lane_w_end: f64v(&lgs.lane_w_end),
+            tap_r: lgs.tap_r.to_vec(), tap_l: lgs.tap_l.to_vec(),
+            g_length: f64v(&lgr.length), g_lanes: lgr.lanes.iter().map(|&x| x as i32).collect(), g_opp: lgr.opp.iter().map(|&x| x as i32).collect(), g_twin: lgr.twin.clone(), g_cls: lgr.cls.clone(),
+            g_first: lgr.first.clone(), g_count: lgr.count.clone(), g_poly: lgr.poly.clone(), g_xyz: lgr.xyz.clone(),
+            g_out_start: lgr.out_start.clone(), g_out_list: lgr.out_list.clone(), g_in_start: lgr.in_start.clone(), g_in_list: lgr.in_list.clone(),
+        };
+        let j = w.junctions.as_ref().map(|js| Junctions::from_arrays(n, ne, js.m_info.to_vec(), f64v(&js.m_f), f64v(&js.pts), js.conf.to_vec(), f64v(&js.conf_s),
+            f64v(&js.mouth_s), f64v(&js.gore_s), js.j_node.to_vec(), js.j_first_m.to_vec(), js.j_count_m.to_vec()));
+        let has_j = j.is_some();
+        let nan = |v: &[f32]| if has_j { f64v(v) } else { vec![f64::NAN; ne] };
+        let controls = w.controls.as_ref().map(|c| {
+            let mut phase_start = vec![0u32; c.count + 1];
+            let mut phases = Vec::new();
+            for k in 0..c.count { phase_start[k] = phases.len() as u32; for p in &c.phases[k] { phases.push([p.group as f64, if p.left { 1.0 } else { 0.0 }, p.g, p.y, p.r]); } }
+            phase_start[c.count] = phases.len() as u32;
+            Controls { count: c.count, ty: c.ty.clone(), flags: c.flags.clone(), cycle: f64v(&c.cycle), offset: f64v(&c.offset), ap_control: c.ap_control.clone(), ap_stop_at: f64v(&c.ap_stop_at),
+                ap_edge: c.ap_edge.clone(), ap_group: c.ap_group.clone(), ap_prot_left: c.ap_prot_left.clone(), cluster_of: c.cluster_of.clone(), edge_ap_start: c.edge_ap_start.clone(),
+                edge_ap_list: c.edge_ap_list.clone(), phase_start, phases, ramp_start: c.ramp_start, ramp_end: c.ramp_end }
+        });
+        let i32v = |v: &[u32]| v.iter().map(|&x| x as i32).collect::<Vec<i32>>();
+        let mut world = World {
+            node_count: n, nx: g.nx.clone(), nz: g.nz.clone(), node_y: f64v(&g.node_y), edge_count: ne,
+            e_from: i32v(&g.from), e_to: i32v(&g.to), e_rev: g.reverse.clone(), e_lanes: g.lanes.iter().map(|&x| x as i32).collect(), e_opp: g.opp_lanes.iter().map(|&x| x as i32).collect(),
+            e_speed: g.speed_limit.clone(), e_length: g.length.clone(), e_rank: g.rank.iter().map(|&x| x as i32).collect(),
+            e_hw: g.class.iter().map(|&c| hwbits[c as usize]).collect(), e_class: g.class.clone(),
+            e_is_link: g.eflags.iter().map(|&f| f & ef::LINK != 0).collect(), e_has_ys: g.eflags.iter().map(|&f| f & ef::HAS_YS != 0).collect(),
+            e_head_start: g.heading_start.clone(), e_head_end: g.heading_end.clone(), e_y: f64v(&g.y), e_right: g.right_edge.clone(),
+            e_s_exit: nan(&g.s_exit), e_s_stop: nan(&g.s_stop), e_gore: nan(&g.gore),
+            e_surf: g.surf.clone(), e_gnd_r: g.gnd_r.clone(), e_gnd_l: g.gnd_l.clone(),
+            v_start: g.pt_start.clone(), px: g.px.clone(), pz: g.pz.clone(), cum: g.cum.clone(), ys: f64v(&g.ys),
+            l_start: g.lane_start.clone(), lane_off: f64v(&g.lane_off),
+            out_start: i32v(&g.out_start), out_edges: i32v(&g.out_edges), in_start: i32v(&g.in_start), in_edges: i32v(&g.in_edges),
+            highway_names: names, max_speed: g.max_speed,
+            banned_hops: g.banned_hops.iter().map(|(&k, v)| (k as i64, v.iter().map(|&x| x as i32).collect())).collect(),
+            contact_pairs: w.contact_pairs.as_ref().map(|c| c.set.iter().map(|&k| k as i64).collect()),
+            lg: Some(lg), j, controls,
+            stations: w.stations.iter().map(|s| Station { node: s.node as i32, pumps: s.pumps as i32, x: s.x, z: s.z }).collect(),
+            surfaces: w.surfaces, hop_base: Vec::new(), hops: Vec::new(),
+            bounds: (g.bounds.min_x, g.bounds.max_x, g.bounds.min_z, g.bounds.max_z),
+        };
+        world.build_hops();
+        world
     }
 
     fn build_hops(&mut self) {

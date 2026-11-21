@@ -73,7 +73,7 @@ pub fn env_from_dir(dir: &str) -> (Env, Value) {
     opts.default_action = Action { steer: da["steer"].as_f64(), steer_rate: da["steerRate"].as_f64(), gas: da["gas"].as_f64().unwrap_or(0.0), brake: da["brake"].as_f64().unwrap_or(0.3) };
     let cfg = EnvConfig { start_time: Some(run["startTime"].as_f64().unwrap()), static_obstacles: obstacles_from(&run["staticObstacles"]),
         scenario_obstacles: obstacles_from(&run["obstacles"]), opts };
-    let env = Env::new(world, pop, cfg, Box::new(|w| Box::new(crate::route_stub::AStar::new(w, 1.25))));
+    let env = Env::new(world, pop, cfg, Box::new(|w| router_for(&w)));
     (env, run)
 }
 
@@ -134,4 +134,10 @@ pub fn check(dir: &str, max: usize, verbose: bool) -> (usize, Vec<Mismatch>, f64
     }
     if verbose { eprintln!("wall {:.2}s (sim {:.3}s) for {steps} steps", t0.elapsed().as_secs_f64(), sim_time); }
     (steps, bad, sim_time)
+}
+
+/// Router used by the harness: the shared bayenv_world::nav Router (BAYENV_ROUTER=stub selects the local route.js port).
+pub fn router_for(w: &Arc<World>) -> Box<dyn crate::sim::Router> {
+    if std::env::var("BAYENV_ROUTER").as_deref() == Ok("stub") { return Box::new(crate::route_stub::AStar::new(w.clone(), 1.25)); }
+    Box::new(crate::route_stub::NavRouter::new(w, 1.25))
 }
