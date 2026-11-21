@@ -707,6 +707,16 @@ impl VecEnv {
         if self.obs_size == 0 { return Err(PyRuntimeError::new_err("created with obs='none'")); }
         let fmt = parse_fmt(dtype)?;
         if lag > 1 { return Err(PyValueError::new_err("lag must be 0 or 1")); }
+        if !self.cpu.is_empty() && lag == 0 {
+            // CPU: each env applies its actions and steps in its own pool task (no serial act pass)
+            if let Some(a) = actions {
+                let sh = a.shape(); if sh[0] != self.cpu.len() || sh[2] != 3 { return Err(PyValueError::new_err("actions must have shape (n_envs, N, 3)")); }
+                let sl = a.as_slice().map_err(|_| PyValueError::new_err("actions must be C-contiguous float32"))?; let per = sh[1] * 3;
+                use rayon::prelude::*; let c = &mut self.cpu;
+                py.detach(|| c.par_iter_mut().enumerate().for_each(|(i, e)| { let e = e.get_mut().unwrap(); e.env.act_rows(&sl[i * per..(i + 1) * per], 0); e.step(k); }));
+            } else { self.step(py, k); }
+            return self.cpu_obs(py, out, fmt);
+        }
         if let Some(a) = actions { self.act(a)?; }
         if !self.cpu.is_empty() {
             let o = if lag == 1 { Some(self.cpu_obs(py, None, fmt)?) } else { None };
