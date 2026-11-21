@@ -22,3 +22,16 @@ Traffic controls (data/controls.*, tools/controls/): besides OpenStreetMap, two 
     from the City of San Jose open data portal, licensed under CC BY." Changes: points snapped to the road graph, converted to per-approach controls.
 Other city datasets listed in tools/controls/sources.json (Oakland, South San Francisco, Emeryville, Mountain View,
 Cupertino) state no licence; they are used only for comparison and are not redistributed.
+
+Rendering (world.html, src/look/, src/stream/, src/viewer/, tools/tiles/, tools/landscape/):
+  - All road, paint, concrete, curb, lawn, grass and water textures and materials are procedural (generated in code
+    on canvases and in GLSL by src/look/textures.js and src/look/materials.js), written for this project, MIT.
+    No third-party images, textures or models are included.
+  - three.js r160 (vendor/three-0.160.0/: three.module.min.js, OrbitControls.js), MIT License,
+    Copyright (c) 2010-2023 three.js authors; licence text in vendor/three-0.160.0/LICENSE.
+  - Render assets built locally by `npm run build:landscape` (data/landscape/, not committed) are derived from:
+      OpenStreetMap land cover, natural features and tree nodes (ODbL 1.0, (c) OpenStreetMap contributors);
+      DataSF "Building Footprints" (ynuv-fyni) and "San Francisco Street Tree Inventory" (tkzw-k3nq), City and County
+      of San Francisco / San Francisco Public Works, Open Data Commons PDDL 1.0;
+      USGS 3D Elevation Program (public domain). Golden Gate Bridge tower/anchorage positions are public coordinates.
+  - The streamed road tiles (data/tiles/, `npm run build:tiles`, not committed) are derived from the OSM data above.

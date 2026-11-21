@@ -24,3 +24,7 @@ data/src/flat/controls.json
 
 # verify-only traffic-control datasets (no licence stated: fetched, never committed; tools/controls/sources.json)
 data/controls-src/verify/
+
+# render build outputs (npm run build:tiles, npm run build:landscape; see README "Viewing the world")
+data/tiles/
+data/landscape/
