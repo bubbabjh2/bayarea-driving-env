@@ -162,9 +162,35 @@ impl Sim {
         let mut keep = Vec::new();
         for (i, m) in list {
             if self.vs.state[i] != STATE_DRIVING { continue; }
-            if self.vs.edge[i] != m.took { if self.vs.edge[i] == m.from { keep.push((i, m)); } continue; }
+            if self.vs.edge[i] != m.took {
+                if self.vs.edge[i] == m.from {
+                    let mut m = m;
+                    if self.opts.replan_at_missed_event && !m.replanned {
+                        // re-plan now, still on the in-edge: route = [from, took, path(took.to -> goal)] at pos 0
+                        m.replanned = true;
+                        let took_to = g.e_to[m.took as usize];
+                        let path = if took_to == m.goal { Some(Vec::new()) } else { self.router.route(took_to, m.goal, None, None) };
+                        match path {
+                            None => { self.counters.reroute_failed += 1; }
+                            Some(path) => {
+                                let mut edges = Vec::with_capacity(2 + path.len()); edges.push(m.from); edges.push(m.took); edges.extend_from_slice(&path);
+                                let s_on = self.vs.s[i];
+                                self.set_route(i, &edges, 0); self.vs.route_dist[i] = s_on;
+                                self.counters.reroutes += 1;
+                            }
+                        }
+                    }
+                    keep.push((i, m));
+                }
+                continue;
+            }
             self.counters.missed_exits += 1;
             self.emit(crate::sim::EV_MISSED_EXIT, i, -1, f32::NAN, f32::NAN, f32::NAN, f32::NAN);
+            if m.replanned {
+                // route already current (re-planned at the event): only the lane target follows the taken edge
+                if self.vs.target_lane[i] >= 0 { self.vs.target_lane[i] = self.vs.lane[i]; }
+                continue;
+            }
             let took_to = g.e_to[m.took as usize];
             let path = if took_to == m.goal { Some(Vec::new()) } else { self.router.route(took_to, m.goal, None, None) };
             let Some(path) = path else { self.counters.reroute_failed += 1; continue };

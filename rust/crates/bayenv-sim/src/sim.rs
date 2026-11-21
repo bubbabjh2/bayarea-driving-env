@@ -33,6 +33,11 @@ pub struct SimOpts {
     pub slot_pool: usize,
     /// run the per-car physics of a step on the rayon pool (results identical; worth it above ~1k moving cars)
     pub parallel: bool,
+    /// Model fix (default off = the JS): re-plan a missed turn at the missed-exit event (connector entry) with the
+    /// in-edge as route prefix, as the GPU does (gpuSim.js:567), instead of once the car is on the taken edge. The JS
+    /// re-plans one step late, so at the connector exit the next-box lookup sees the stale route and the late box
+    /// entry is re-projected (headingRel += dh); rust/docs/crash-divergence.md "Cause A".
+    pub replan_at_missed_event: bool,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -45,7 +50,7 @@ impl Default for SimOpts {
             cell_size: 25.0, table_bits: 18, leader_lookahead: 250.0, merge_lookahead: 80.0, lane_end_lookahead: 450.0, control_lookahead: 250.0,
             reroute: true, reroute_sight: 2000.0, squeeze_delay: 900.0, squeeze_speed: 3.0, density_interval: 60.0, path_sight: 0.0,
             deadlock_break: 0.0, spawn_lane_route: 0.0, junction_sight: 0.0, position_mode: true, traffic_mode: TrafficMode::Full, fuel: true,
-            seed: 1.0, wrecks: 0, default_action: Action { steer: Some(0.0), steer_rate: None, gas: 0.0, brake: 0.3 }, fuel_cfg: Default::default(), slot_pool: 0, parallel: false }
+            seed: 1.0, wrecks: 0, default_action: Action { steer: Some(0.0), steer_rate: None, gas: 0.0, brake: 0.3 }, fuel_cfg: Default::default(), slot_pool: 0, parallel: false, replan_at_missed_event: false }
     }
 }
 

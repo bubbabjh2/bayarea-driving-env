@@ -180,14 +180,16 @@ impl Env {
     /// False = legacy mode, the JS GPU kernels bit-for-bit, with their connector-entry bug (all earlier GPU checkpoints).
     /// contact_tangent (gpu, default True): f32-robust friction tangent in the contact impulse (rust/docs/crash-divergence.md).
     /// False = legacy mode, the JS GPU kernels bit-for-bit (aligned rear-end wrecks spin to the kerb).
+    /// replan_at_missed_event (cpu, default False = the JS): re-plan a missed turn at the event, as the GPU does
+    /// (SimOpts::replan_at_missed_event, rust/docs/crash-divergence.md cause A).
     #[new]
     #[pyo3(signature = (data_dir, n_cars=10000, seed=1, backend="gpu", capacity=None, obs="v2", dt=0.05, start_time=None,
         accidents=true, collisions=true, fuel=true, controls=true, junctions=true, steer="position", decide_every=1, keep_events=false,
-        population=None, pop_seed=42.0, streaming=false, return_trips=true, stations=true, refuel_budget_ms=None, crash_share=false, missed_at_out_edge=false, cpu_connector_join=true, contact_tangent=true))]
+        population=None, pop_seed=42.0, streaming=false, return_trips=true, stations=true, refuel_budget_ms=None, crash_share=false, missed_at_out_edge=false, cpu_connector_join=true, contact_tangent=true, replan_at_missed_event=false))]
     #[allow(clippy::too_many_arguments)]
     fn new(py: Python<'_>, data_dir: &str, n_cars: usize, seed: u32, backend: &str, capacity: Option<usize>, obs: &str, dt: f64, start_time: Option<f64>,
            accidents: bool, collisions: bool, fuel: bool, controls: bool, junctions: bool, steer: &str, decide_every: u32, keep_events: bool,
-           population: Option<usize>, pop_seed: f64, streaming: bool, return_trips: bool, stations: bool, refuel_budget_ms: Option<f64>, crash_share: bool, missed_at_out_edge: bool, cpu_connector_join: bool, contact_tangent: bool) -> PyResult<Env> {
+           population: Option<usize>, pop_seed: f64, streaming: bool, return_trips: bool, stations: bool, refuel_budget_ms: Option<f64>, crash_share: bool, missed_at_out_edge: bool, cpu_connector_join: bool, contact_tangent: bool, replan_at_missed_event: bool) -> PyResult<Env> {
         if backend == "cpu" {
             let cobs = match obs { "v2" => CpuObs::V2, "v3" => CpuObs::V3, "flat" => CpuObs::Flat, "none" => CpuObs::None, _ => return Err(PyValueError::new_err("obs must be 'v2', 'v3', 'flat' or 'none'")) };
             // CPU reference sim (crate bayenv-sim): commuter population (population.js, n_cars commuters, seed),
@@ -197,7 +199,7 @@ impl Env {
                 let world = Arc::new(World::load(&data).map_err(|e| format!("world: {e}"))?);
                 let sw = Arc::new(bayenv_sim::world::World::from_bayenv(&world));
                 let pop = Arc::new(bayenv_sim::population::Population::generate_like_env(&sw, "real", n_cars, seed as f64, Some(std::path::Path::new(&data)))?);
-                let mut opts = bayenv_sim::sim::SimOpts::default(); opts.dt = dt; opts.seed = seed as f64; opts.fuel = fuel_on;
+                let mut opts = bayenv_sim::sim::SimOpts::default(); opts.dt = dt; opts.seed = seed as f64; opts.fuel = fuel_on; opts.replan_at_missed_event = replan_at_missed_event;
                 let cfg = bayenv_sim::env::EnvConfig { opts, start_time, static_obstacles: Vec::new(), scenario_obstacles: Vec::new(), obstacles: None };
                 let env = bayenv_sim::env::Env::new(sw, pop, cfg, Box::new(|w| bayenv_sim::harness::router_for(&w)));
                 Ok((world, env))

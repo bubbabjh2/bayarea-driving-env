@@ -69,6 +69,25 @@ so none is provided. The suggested fix belongs in the CPU, in `src/sim` and `bay
 here. Either re-plan at the connector exit, inside `integrate`, before the next-movement lookup, or keep the
 connector's `sOut` as `sArrive` for the first box entry after a re-plan.
 
+### Fix (flagged, default off = the JS): `SimOpts.replan_at_missed_event` (bayenv-sim)
+
+`missed_exits` (bayenv-sim/src/extra.rs) re-plans a missed turn right after the integrate in which it happens, while
+the car is still on the in-edge in the connector: route = [in-edge, took, A*(took.to -> goal)] at route_pos 0 (the
+GPU's `prefix`), so at the connector exit the next-box lookup sees the current route. The MISSED_EXIT event, its
+counter and the lane-target reset still happen when the car reaches `took` (CPU timing). Python:
+`bayenv.Env(..., backend="cpu", replan_at_missed_event=True)`; `compare_backends.py --replan-missed`. Flag off is
+unchanged (trace_check bit-exact on real 2k / 10k, junction-s1, the refuel run and the hook run).
+
+`compare_backends.py data 5000 3000 25200 42 --spawn-default --missed-out-edge` (contact tangent on; GPU with
+`cpu_connector_join` and `contact_tangent`):
+
+| | CPU (JS model) | CPU + replan_at_missed_event | GPU |
+|---|---|---|---|
+| crashed | 76 (70 both, **6 CPU only**) | 70 (70 both, **0 CPU only**) | 71 |
+| contact | 129 rows / 64 agents (11 CPU only) | 113 / 55 (2 CPU only) | 117 / 56 |
+| arrived | 128 (127 both), late_by max 1.75 s | 130 (129 both), late_by max 0.00 s | 129 |
+| missed_exit | 603 | 604 | 602 |
+
 ## B. Aligned rear-end: an f32 rounding "tangent" adds a full friction impulse (GPU bug, flagged fix)
 
 Agents 6748 (rear) and 9682 (front) drive identically on both backends up to step 782 (`|Δs|` ≤ 6e-4 m). At step
