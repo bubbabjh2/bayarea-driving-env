@@ -104,11 +104,18 @@ impl Router for AStar {
 }
 
 /// The shared router (bayenv_world::nav::Router, the route.js makeRouter port) behind the sim's Router trait.
-pub struct NavRouter { r: bayenv_world::nav::router::Router, avoid: Vec<u32>, pen: Vec<(u32, f64)> }
+pub struct NavRouter { r: bayenv_world::nav::router::Router, avoid: Vec<u32>, pen: Vec<(u32, f64)>,
+    /// parallel batch routing (with_pool): the graph and per-thread routers (search state is per router)
+    graph: Option<std::sync::Arc<bayenv_world::graph::SimGraph>>, weight: f64, pool: Vec<std::sync::Mutex<bayenv_world::nav::router::Router>>, pool_size: usize }
 
 impl NavRouter {
     /// makeRouter(graph, { weight }) over the sim's world.
-    pub fn new(w: &World, weight: f64) -> NavRouter {
+    pub fn new(w: &World, weight: f64) -> NavRouter { NavRouter::from_sim_graph(&sim_graph_of(w), weight) }
+}
+
+/// The routing view of a sim World as a bayenv_world SimGraph.
+pub fn sim_graph_of(w: &World) -> bayenv_world::graph::SimGraph {
+    {
         let mut g = bayenv_world::graph::SimGraph { node_count: w.node_count, edge_count: w.edge_count, nx: w.nx.clone(), nz: w.nz.clone(), max_speed: w.max_speed, ..Default::default() };
         g.from = w.e_from.iter().map(|&x| x as u32).collect(); g.to = w.e_to.iter().map(|&x| x as u32).collect();
         g.length = w.e_length.clone(); g.speed_limit = w.e_speed.clone(); g.rank = w.e_rank.iter().map(|&x| x as u8).collect();
@@ -116,13 +123,19 @@ impl NavRouter {
         g.in_start = w.in_start.iter().map(|&x| x as u32).collect(); g.in_edges = w.in_edges.iter().map(|&x| x as u32).collect();
         g.banned_hops = w.banned_hops.iter().map(|(&k, v)| (k as u64, v.iter().map(|&x| x as u32).collect())).collect();
         g.bounds = bayenv_world::graph::Bounds { min_x: w.bounds.0, max_x: w.bounds.1, min_z: w.bounds.2, max_z: w.bounds.3 };
-        NavRouter::from_sim_graph(&g, weight)
+        g
     }
+}
+
+impl NavRouter {
     /// makeRouter(graph, { weight }) directly over the shared graph (no World copy).
     pub fn from_sim_graph(g: &bayenv_world::graph::SimGraph, weight: f64) -> NavRouter {
         let o = bayenv_world::nav::router::RouterOpts { weight, ..Default::default() };
-        NavRouter { r: bayenv_world::nav::router::Router::new(g, &o), avoid: Vec::new(), pen: Vec::new() }
+        NavRouter { r: bayenv_world::nav::router::Router::new(g, &o), avoid: Vec::new(), pen: Vec::new(), graph: None, weight, pool: Vec::new(), pool_size: 0 }
     }
+    /// route_batch runs avoid / penalty queries on up to `threads` routers in parallel (built on first use; each
+    /// holds its own search state, ~ one graph's worth of node arrays). Results equal sequential `route`.
+    pub fn with_pool(mut self, g: std::sync::Arc<bayenv_world::graph::SimGraph>, threads: usize) -> NavRouter { self.graph = Some(g); self.pool_size = threads; self }
 }
 
 impl Router for NavRouter {
@@ -134,5 +147,26 @@ impl Router for NavRouter {
         if let Some(p) = penalty { self.pen.extend(p.iter().map(|(&e, &v)| (e as u32, v))); }
         let q = bayenv_world::nav::router::RouteQuery { avoid: &self.avoid, penalty: &self.pen };
         self.r.route_with(start as usize, goal as usize, &q).map(to_i)
+    }
+    fn route_batch(&mut self, queries: &[(i32, i32)], avoid: Option<&std::collections::HashSet<i32>>, penalty: Option<&std::collections::HashMap<i32, f64>>) -> Vec<Option<Vec<i32>>> {
+        let cached = avoid.is_none() && penalty.is_none();
+        if cached || self.pool_size < 2 || queries.len() < 4 || self.graph.is_none() { return queries.iter().map(|&(s, g)| self.route(s, g, avoid, penalty)).collect(); }
+        if self.pool.is_empty() {
+            let o = bayenv_world::nav::router::RouterOpts { weight: self.weight, ..Default::default() };
+            let g = self.graph.as_ref().unwrap();
+            self.pool = (0..self.pool_size).map(|_| std::sync::Mutex::new(bayenv_world::nav::router::Router::new(g, &o))).collect();
+        }
+        let a: Vec<u32> = avoid.map(|s| s.iter().map(|&x| x as u32).collect()).unwrap_or_default();
+        let p: Vec<(u32, f64)> = penalty.map(|m| m.iter().map(|(&e, &v)| (e as u32, v)).collect()).unwrap_or_default();
+        use rayon::prelude::*;
+        let n = self.pool.len();
+        let chunk = queries.len().div_ceil(n);
+        let mut out: Vec<Option<Vec<i32>>> = vec![None; queries.len()];
+        self.pool.par_iter_mut().zip(out.par_chunks_mut(chunk)).zip(queries.par_chunks(chunk)).for_each(|((r, o), qs)| {
+            let r = r.get_mut().unwrap();
+            let q = bayenv_world::nav::router::RouteQuery { avoid: &a, penalty: &p };
+            for (k, &(s, g)) in qs.iter().enumerate() { o[k] = r.route_with(s as usize, g as usize, &q).map(|v| v.into_iter().map(|x| x as i32).collect()); }
+        });
+        out
     }
 }

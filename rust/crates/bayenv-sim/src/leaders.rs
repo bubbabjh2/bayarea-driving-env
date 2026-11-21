@@ -80,12 +80,14 @@ impl Sim {
         if self.passers.len() > 5000 { self.passers.clear(); }
         // phase 1 (no cross-car writes: lane / cross-edge / zipper leaders, leader2, lane ends, off-lane bodies, scenes),
         // optionally in parallel; phase 2 applies them in slot order and runs the order-dependent perception
+        let t1 = std::time::Instant::now();
         let par = self.opts.parallel && high >= 512;
         let bases: Vec<Option<Base>> = if par {
             use rayon::prelude::*;
             let me = &*self;
             (0..high).into_par_iter().with_min_len(64).map(|i| if me.vs.state[i] == STATE_DRIVING { Some(me.lead_base(i)) } else { None }).collect()
         } else { Vec::new() };
+        if self.profile { self.sub_ns[0] += t1.elapsed().as_nanos() as u64; }
         for i in 0..high {
             if self.vs.state[i] != STATE_DRIVING { continue; }
             let b = if par { bases[i].unwrap() } else { self.lead_base(i) };

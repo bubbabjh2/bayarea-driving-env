@@ -104,6 +104,11 @@ pub struct Density { pub samples: u64, pub peak_mean_density: f64, pub peak_mean
 /// Implemented by bayenv_world::nav (lead); `crate::route_stub` holds a test implementation until then.
 pub trait Router: Send + Sync {
     fn route(&mut self, start: i32, goal: i32, avoid: Option<&std::collections::HashSet<i32>>, penalty: Option<&std::collections::HashMap<i32, f64>>) -> Option<Vec<i32>>;
+    /// Several independent queries with the same constraints; results in query order. Implementations may run them
+    /// in parallel; each result must equal `route` of the same query.
+    fn route_batch(&mut self, queries: &[(i32, i32)], avoid: Option<&std::collections::HashSet<i32>>, penalty: Option<&std::collections::HashMap<i32, f64>>) -> Vec<Option<Vec<i32>>> {
+        queries.iter().map(|&(s, g)| self.route(s, g, avoid, penalty)).collect()
+    }
 }
 
 /// Per-car events since the last `take_events` (Env::step clears them): what reward.js needs.
@@ -166,6 +171,10 @@ pub struct Sim {
     pub brake_every: (f64, f64),
     // perception scratch / per-step maps (JS Maps whose iteration order matters are Vecs)
     pub(crate) spawned_keys: HashSet<i64>,
+    /// first edges whose _entryLane inputs changed during this step's spawn pass
+    pub(crate) spawn_dirty: HashSet<i32>,
+    /// edge of each slot listed in the lane index at its last rebuild (-1 not listed)
+    pub(crate) indexed: Vec<i32>,
     pub(crate) pair_event: HashMap<i64, f64>,
     pub(crate) stuck_labelled: HashMap<usize, f32>,
     pub(crate) conn_cars: crate::fx::ListMap<usize>,
@@ -196,6 +205,8 @@ pub struct Sim {
     pub collided_last: Vec<usize>,
     pub batch_policy: Option<BatchPolicy>,
     pub phase_ns: [u64; 10],
+    /// sub-phase timers (profile): 0 leaders phase 1, 1 integrate phase A, 2 reroute, 3 traffic sample, 4 spawn pre-eval
+    pub sub_ns: [u64; 8],
 }
 
 #[inline(always)] pub(crate) fn f(x: f32) -> f64 { x as f64 }
@@ -235,11 +246,11 @@ impl Sim {
             fitness: vec![0.0; n_c], actual_arrival: vec![-1.0; n_c], late_by: vec![0.0; n_c], early_by: vec![0.0; n_c],
             trips, trip_ptr: 0, pending: Vec::new(), lot: Vec::new(), crashes: Vec::new(), active: Vec::new(), edge_crashes: HashMap::default(), edge_has_crash: vec![0; ne],
             counters: Counters::default(), accum: Accum::default(), live: Live::default(), density: Density::default(), obstacle_rng: None, brake_every: (15.0, 40.0),
-            spawned_keys: HashSet::default(), pair_event: HashMap::default(), stuck_labelled: HashMap::default(), conn_cars: Default::default(), node_conn: Default::default(),
+            spawned_keys: HashSet::default(), spawn_dirty: HashSet::default(), indexed: Vec::new(), pair_event: HashMap::default(), stuck_labelled: HashMap::default(), conn_cars: Default::default(), node_conn: Default::default(),
             passers: Default::default(), conflict_with: HashMap::default(), off_lane: Default::default(), touch: HashSet::default(), barrier_touch: HashSet::default(), barrier_now: HashSet::default(),
             conf_cache: HashMap::default(), mv_into: None, yield_by: None, creep_until: Vec::new(), creep_ignore: Vec::new(), edge_speed: HashMap::default(), traffic_penalty: None,
             last_reroute: HashMap::default(), next_traffic: 0.0, next_reroute: 0.0, next_density: start, edge_count_scratch: vec![0; ne], fwy, fwy_lane_km, seen_j: -1,
-            near_buf: Vec::new(), static_obstacles: Vec::new(), obstacles: Vec::new(), profile: std::env::var("BAYENV_PROFILE").is_ok(), phase_ns: [0; 10], events: StepEvents::default(), event_log: Vec::new(), collided_last: Vec::new(), batch_policy: None,
+            near_buf: Vec::new(), static_obstacles: Vec::new(), obstacles: Vec::new(), profile: std::env::var("BAYENV_PROFILE").is_ok(), phase_ns: [0; 10], sub_ns: [0; 8], events: StepEvents::default(), event_log: Vec::new(), collided_last: Vec::new(), batch_policy: None,
             empty: opts.traffic_mode == TrafficMode::Empty, time: start, dt: opts.dt, step_count: 0, vs, rng, router, g, pop, opts,
         };
         if sim.opts.traffic_mode == TrafficMode::Sparse && sim.opts.wrecks > 0 { sim.place_wrecks(sim.opts.wrecks); }
@@ -275,7 +286,9 @@ impl Sim {
         self.spawn(); lap!(0);
         self.hash.rebuild(&self.vs); lap!(1);
         self.contacts(); lap!(2);
-        self.lanes.rebuild(&self.vs); lap!(3);
+        self.lanes.rebuild(&self.vs);
+        { let vs = &self.vs; self.indexed.clear(); self.indexed.extend((0..vs.high).map(|i| if vs.state[i] == STATE_DRIVING || vs.state[i] == STATE_CRASHED { vs.edge[i] } else { -1 })); }
+        lap!(3);
         self.find_leaders(); lap!(4);
         if self.g.controls.is_some() { self.control_obs(); } lap!(5);
         if let Some(yb) = &mut self.yield_by { yb.iter_mut().for_each(|x| *x = -1); }
@@ -283,8 +296,11 @@ impl Sim {
         self.integrate_all(dt); lap!(7);
         if !self.vs.missed.is_empty() { self.missed_exits(); }
         self.scenes(); lap!(8);
+        let tq = std::time::Instant::now();
         if self.time >= self.next_traffic { self.traffic_sample(); self.next_traffic = self.time + 60.0; }
+        let tr = std::time::Instant::now(); if prof { self.sub_ns[3] += (tr - tq).as_nanos() as u64; }
         if self.opts.reroute && self.time >= self.next_reroute { self.reroute_blocked(); self.next_reroute = self.time + 2.0; }
+        if prof { self.sub_ns[2] += tr.elapsed().as_nanos() as u64; }
         if self.time >= self.next_density { self.sample_density(); self.next_density = self.time + self.opts.density_interval; }
         lap!(9);
     }
@@ -293,17 +309,38 @@ impl Sim {
     fn spawn(&mut self) {
         self.spawned_keys.clear();
         if !self.lot.is_empty() { self.leave_stations(); }
-        if !self.pending.is_empty() {
-            let list = std::mem::take(&mut self.pending);
-            let mut keep = Vec::new();
-            for t in list { if !self.try_spawn(t) { keep.push(t); } }
-            self.pending = keep;
+        // the pending trips, then the trips due now, in JS order (failures stay pending, in that order)
+        let mut batch = std::mem::take(&mut self.pending);
+        let n_pending = batch.len();
+        while self.trip_ptr < self.trips.len() && self.trips[self.trip_ptr].depart <= self.time { batch.push(self.trips[self.trip_ptr]); self.trip_ptr += 1; }
+        if batch.is_empty() { return; }
+        // entry lanes of every trip against the state at the start of the pass (parallel when enabled). A result stays
+        // valid until a spawn earlier in the pass changes what _entryLane reads for that first edge: a spawn on the same
+        // edge (spawnedKeys), or a recycled slot that is still listed in the lane index (its old edge, and the edges
+        // that edge feeds, see _upstreamConflict). Those trips are re-evaluated in order, so the outcome is exact.
+        let tp = std::time::Instant::now();
+        let pre: Vec<i32> = if self.opts.parallel && batch.len() >= 256 {
+            use rayon::prelude::*;
+            let me = &*self;
+            batch.par_iter().with_min_len(64).map(|t| me.trip_entry_lane(t)).collect()
+        } else { batch.iter().map(|t| self.trip_entry_lane(t)).collect() };
+        if self.profile { self.sub_ns[4] += tp.elapsed().as_nanos() as u64; self.sub_ns[5] += n_pending as u64; }
+        self.spawn_dirty.clear();
+        let mut keep = Vec::with_capacity(n_pending);
+        for (k, t) in batch.into_iter().enumerate() {
+            if !self.try_spawn(t, pre[k]) { keep.push(t); }
         }
-        while self.trip_ptr < self.trips.len() && self.trips[self.trip_ptr].depart <= self.time {
-            let t = self.trips[self.trip_ptr];
-            self.trip_ptr += 1;
-            if !self.try_spawn(t) { self.pending.push(t); }
-        }
+        self.pending = keep;
+    }
+
+    /// _entryLane for a trip's first edge (i32::MIN = no route / not evaluated).
+    fn trip_entry_lane(&self, t: &Trip) -> i32 {
+        let k = 2 * t.commuter + t.leg as usize;
+        let (o0, o1) = (self.pop.route_offset[k] as usize, self.pop.route_offset[k + 1] as usize);
+        if o1 == o0 { return i32::MIN; }
+        let route = &self.pop.route_flat[o0..o1];
+        let vt = self.pop.vehicle_type[t.commuter] as usize;
+        self.entry_lane(route[0] as usize, 0, VEHICLE_PARAMS[if vt < 4 { vt } else { 0 }].length, if route.len() > 1 { route[1] } else { -1 })
     }
 
     /// _entryLane(ei, lane0, vlen, next)
@@ -358,7 +395,7 @@ impl Sim {
         Traits { aggression: d[0] as f64, patience: d[1] as f64, reaction_time: d[2] as f64, preferred_headway: d[3] as f64, max_accel: d[4] as f64, max_decel: d[5] as f64 }
     }
 
-    fn try_spawn(&mut self, trip: Trip) -> bool {
+    fn try_spawn(&mut self, trip: Trip, pre: i32) -> bool {
         if self.opts.slot_pool > 0 && self.vs.count >= self.opts.slot_pool { return false; }
         let c = trip.commuter;
         let k = 2 * c + trip.leg as usize;
@@ -372,7 +409,8 @@ impl Sim {
         let route = &pop.route_flat[o0..o1];
         let vt = pop.vehicle_type[c] as usize;
         let vlen = VEHICLE_PARAMS[if vt < 4 { vt } else { 0 }].length;
-        let mut lane = self.entry_lane(route[0] as usize, 0, vlen, if route.len() > 1 { route[1] } else { -1 });
+        let e0 = route[0];
+        let mut lane = if pre != i32::MIN && !self.spawn_dirty.contains(&e0) { pre } else { self.entry_lane(e0 as usize, 0, vlen, if route.len() > 1 { route[1] } else { -1 }) };
         if lane < 0 {
             if self.time - trip.depart < self.opts.spawn_blocked_timeout { return false; }
             lane = 0; self.counters.forced_spawns += 1;
@@ -382,6 +420,14 @@ impl Sim {
         let traits = self.traits_of(c);
         let g = self.gw();
         let slot = self.vs.alloc(&g, AllocArgs { type_idx: pop.vehicle_type[c], traits, route, commuter: c as i32, leg: trip.leg, time: self.time, learner, dt: self.dt, step: self.step_count, lane });
+        self.spawn_dirty.insert(e0);
+        if slot < self.indexed.len() && self.indexed[slot] >= 0 {
+            let g = self.gw();
+            let eo = self.indexed[slot] as usize;
+            self.spawn_dirty.insert(eo as i32);
+            let to = g.e_to[eo] as usize;
+            for q in g.out_start[to]..g.out_start[to + 1] { self.spawn_dirty.insert(g.out_edges[q as usize]); }
+        }
         self.vs.set_reaction_time(slot, traits.reaction_time, self.dt);
         self.vs.route_off[slot] = self.routes.pop_offset(k);
         self.vs.fuel[slot] = jm::min(f(self.vs.tank[slot]), f(self.commuter_fuel[c])) as f32;
@@ -504,6 +550,7 @@ impl Sim {
         let high = self.vs.high;
         let fuel_on = self.opts.fuel;
         // phase A (pure per-car physics + pose), in parallel when enabled: identical results, written back in slot order
+        let ta = std::time::Instant::now();
         let mut pre: Vec<Option<(Car, CarOut, i32, Car)>> = Vec::new();
         let par = self.opts.parallel && high >= 512 && self.vs.missed_t.len() + high <= 100000;
         if par {
@@ -521,6 +568,7 @@ impl Sim {
                 Some((c, out, ret, pc))
             }).collect();
         }
+        if self.profile { self.sub_ns[1] += ta.elapsed().as_nanos() as u64; }
         let (mut driving, mut crashed, mut refueling, mut sum_speed) = (0u64, 0u64, 0u64, 0.0f64);
         let (mut speeding_sec, mut speeding_km, mut total_sec, mut total_km) = (0.0f64, 0.0f64, 0.0f64, 0.0f64);
         let check_every = self.opts.fuel_cfg.check_interval;
