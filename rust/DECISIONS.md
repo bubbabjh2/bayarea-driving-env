@@ -313,8 +313,8 @@ Each entry: date, decision, why, alternatives, numbers, and one line to say it o
   reproduced); one master flag (it hides which fix caused a change in a training curve).
 - **On camera:** "We audited our physics against real cars, then fixed every bug we found, each behind its own
   switch."
-- **Teacher check:** with every car on the training repository's heuristic teacher (2,000 commuters, 3,000 steps
-  of 0.1 s), crashed vehicles were 4 with the JS model and 7 with these defaults, and 52 cars arrived in both runs.
+- **Driver check:** with every car driven by a heuristic driver (IDM car following, steering on the heading
+  error; 2,000 commuters, 3,000 steps of 0.1 s), crashed vehicles were 4 with the JS model and 7 with these defaults, and 52 cars arrived in both runs.
 
 ## 22. Wrecks have mass (`wreck_real_mass`)
 
@@ -343,13 +343,13 @@ Each entry: date, decision, why, alternatives, numbers, and one line to say it o
   peak of 0.96 g. Rollout scan: 78 heading jumps → 0.
 - **Consequence:** drivers must now steer through curves before they reach them. The road polylines have short
   kinks (for example 0.7 rad within 2.5 m), so a driver that only reacts to heading error hits the kerb. The
-  training repository's heuristic teacher is one such driver. With every car on the teacher (2,000 commuters, 3,000
+  heuristic driver used for imitation learning is one such driver. With every car on it (2,000 commuters, 3,000
   steps), crashed vehicles went from 4 (JS model) and 7 (all other fixes) to 706 of 720, and arrivals from 52 to 1.
   The typical crash: a car at 5 m/s meets a lane polyline that turns 0.7 rad within 2.5 m (a radius of about 3.5 m,
   not a real road). It reacts after its reaction time, by which point it has already hit the kerb. Adding a yaw-rate
-  feed-forward from the lane-heading change to the teacher did not help (698 crashed). So the flag ships off.
+  feed-forward from the lane-heading change to that driver did not help (698 crashed). So the flag ships off.
   Next: smooth the lane and connector centrelines to realistic minimum radii by road class, add a lane-heading
-  preview to the observation, then turn the flag on once a look-ahead teacher drives at JS-level crash and arrival
+  preview to the observation, then turn the flag on once a look-ahead driver drives at JS-level crash and arrival
   rates.
 - **Alternatives:** smooth the polylines first (changes the world build and every position); bound the absorbed
   curvature by tyre grip (still free steering below the bound).

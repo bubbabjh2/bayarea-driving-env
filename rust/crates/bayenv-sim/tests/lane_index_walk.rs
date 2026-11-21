@@ -1,5 +1,5 @@
 //! ENV-REQUESTS #15 regression: a lane-index walk after integrate on a car that crossed onto another edge.
-//! State from the dumped hang (bayarea-driving-sim cpu_vec 28 2000 600 --fast-learn, env 17, step 460): slot 361
+//! State from a dumped hang (a 2,000-commuter real-map env, step 460): slot 361
 //! indexed on edge 47450 lanes 1..2 (entries 318, 319), then on edge 20163 (never indexed: its keys' range start is
 //! 0) with the same lanes. The JS `behind(361, 2)` reads key (20163, 2) and entPos[361][1] - 1 = 318 >= 0, so it
 //! returns order[318] = 361 itself, and `while conn[j] >= 0: j = behind(j)` (sim._yieldJ) never ends.
