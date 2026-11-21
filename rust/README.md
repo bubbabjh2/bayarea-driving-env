@@ -10,7 +10,7 @@ oracle, and every port is checked against dumps of it (`tools/oracle/`). Layout 
 |---|---|
 | `bayenv-world` | Road packs (mmap'd), SimGraph, lane geometry, junctions + builder, traffic-control plans, surfaces, grade separations, stations, DEM, node index, A* router, route guidance, V8-exact `jsmath`, bake format |
 | `bayenv-gpu` | wgpu host: world blob, buffers, kernels, `gpuSim.js` step loop (spawn / contacts / lists / junctions / sense / act / integrate), scatter population, events, crash scenes, closures and reroutes, live-traffic sampling, actions, observations, state readback |
-| `bayenv-sim` | CPU sim (port of `src/sim`), in progress on branch `rust-cpu` |
+| `bayenv-sim` | CPU sim (port of `src/sim`) |
 | `bayenv-py` | Python module `bayenv` (PyO3 0.30 + maturin, abi3 ≥ 3.9) |
 
 ## Build
@@ -49,7 +49,9 @@ env.stats(), env.time, env.raw("veh")
   uses seed + i); `act((E, N, 3))`, `step(k)`, `step_observe(actions, k, out=(E, N, obs))`, `crash_flags() -> (E, N)`.
 * `observe(out=arr)` fills a preallocated array (no allocation). Readbacks go through persistent staging buffers and copy
   only the rows in use.
-* `backend="cpu"` raises `NotImplementedError` until `bayenv-sim` is merged.
+* `backend="cpu"`: the CPU reference sim (`bayenv-sim`) behind the same calls. It uses a commuter population of
+  `n_cars` (population.js, `seed`), and cars spawn on their trip schedule, so `n_slots` grows. Available: `act`, `step`,
+  `state`, `crash_flags`, `signals`, `stats`. `observe()` is not exposed for the CPU backend yet.
 * Gymnasium-style wrapper: `crates/bayenv-py/examples/gym_wrapper.py` (one observation and action row per car; the
   environment defines no reward). Benchmark: `crates/bayenv-py/examples/bench.py`.
 
