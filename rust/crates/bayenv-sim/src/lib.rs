@@ -18,3 +18,5 @@ pub mod extra;
 pub mod route_stub;
 pub mod env;
 pub mod harness;
+pub mod population_gen;
+pub mod vec_env;

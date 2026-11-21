@@ -66,15 +66,22 @@ pub fn obstacles_from(v: &Value) -> Vec<StaticObstacle> {
 
 pub fn env_from_dir(dir: &str) -> (Env, Value) {
     let run: Value = serde_json::from_str(&std::fs::read_to_string(format!("{dir}/run.json")).unwrap()).unwrap();
-    let world = Arc::new(World::load(&format!("{dir}/world.pack")));
+    let world = match std::env::var("BAYENV_DATA") {
+        Ok(d) => Arc::new(World::from_bayenv(&bayenv_world::World::load(&d).expect("bayenv_world load"))),
+        Err(_) => Arc::new(World::load(&format!("{dir}/world.pack"))),
+    };
     let pop = Arc::new(Population::load(&format!("{dir}/pop.pack")));
+    (env_from_parts(&run, world, pop), run)
+}
+
+/// Env for a run.json over shared world / population.
+pub fn env_from_parts(run: &Value, world: Arc<World>, pop: Arc<Population>) -> Env {
     let mut opts = sim_opts_from(&run["simOpts"]);
     let da = &run["defaultAction"];
     opts.default_action = Action { steer: da["steer"].as_f64(), steer_rate: da["steerRate"].as_f64(), gas: da["gas"].as_f64().unwrap_or(0.0), brake: da["brake"].as_f64().unwrap_or(0.3) };
     let cfg = EnvConfig { start_time: Some(run["startTime"].as_f64().unwrap()), static_obstacles: obstacles_from(&run["staticObstacles"]),
         scenario_obstacles: obstacles_from(&run["obstacles"]), opts };
-    let env = Env::new(world, pop, cfg, Box::new(|w| router_for(&w)));
-    (env, run)
+    Env::new(world, pop, cfg, Box::new(|w| router_for(&w)))
 }
 
 #[derive(Debug)]
