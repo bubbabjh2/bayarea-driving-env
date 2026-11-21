@@ -91,6 +91,26 @@ rem_pio2, spatial-hash queries, lead_base, lane geometry (offset_point, y_along,
 | not pursued: allocation-free step | 0.35 allocations per car-step (73 per step at 2k, 701 at 20k): < 1 % of step time |
 | not pursued: SIMD fdlibm across cars | possible bit-exactly (lane-wise IEEE ops + V8's FMA pattern) but a large port for at most ~2x on the transcendental part (2 f64 lanes) |
 
+## Training path outside the step kernel (2026-11-21; machine shared, load 6-30: ranges, not point values)
+
+* Startup (examples/load_time): World::load 0.08 s (mmap + verify), sim World conversion 0.13 s, population
+  n = 2,000 0.16 s / 20,000 1.12 s, Env::new 0.02 s. Python VecEnv(cpu) 14 x 2k setup 1.4 s, 14 x 20k ~12 s
+  (14 populations).
+* v2 encoding (the CPU VecEnv senses every driving car after every step; examples/encode_prof): 370 ns per agent at
+  real 2k (33 % of the sim's 1.1 us per agent-step), 1.0-1.3 us at real 20k (~50 %). Of that, yield_required (the
+  obs control.yieldRequired, a junction conflict scan) is ~35 %: 81 % of the cars reach the conflict loop, 5.4
+  conflicts each.
+* Python VecEnv(cpu, v2) 14 x 2k: step(1) ~1.4 ms, step_observe ~1.5 ms (actions + observation copy ~0.1-0.2 ms),
+  observe ~0.05 ms; 14 x 20k: step(1) ~20 ms, observe ~0.25 ms.
+
+| training-path change | result |
+|---|---|
+| CPU v2 observation rows kept for driving cars only (no full n_slots x 70 zero-fill + copy per step; no double zeroing in VecEnv.observe) | neutral within noise (identical Python results: sha256 of obs + events) |
+| rejected: many-env step in three pool passes (every env's step_begin, the physics of all envs as one flat list of 64-car chunks, every env's step_end) to keep efficiency cores from setting the batch time | 2-3x slower (14 x 2k 7.8-9.0 -> 2.0-3.4 M agent-steps/s): three barriers and the phase-A results moving between passes cost more than the imbalance |
+| rejected: Python VecEnv encoding all envs on the shared pool after all envs stepped (nested parallel encode_batch) | ~8 % slower (min of 3 alternating runs: step_observe 1.46 -> 1.60 ms) |
+| rejected: bitset pre-check before the connector-car map lookups (yield / box / converge) | neutral (encode 367 / 409 vs 352 / 414 ns per agent) |
+| not pursued: P-core / E-core pinning | macOS offers QoS classes, not core pinning; 14 busy threads on 10 P + 4 E cores keep 4 on E cores whatever the QoS |
+
 ## Optimizations (each re-checked with the differential traces; all are exact)
 
 | change | effect |
