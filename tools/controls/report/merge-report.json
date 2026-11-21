@@ -1802,539 +1802,271 @@
   },
   {
    "source": "oakland-signals",
-   "id": 87,
-   "lonlat": [
-    -122.305841,
-    37.817593
-   ]
+   "id": 87
   },
   {
    "source": "oakland-signals",
-   "id": 97,
-   "lonlat": [
-    -122.245801,
-    37.815444
-   ]
+   "id": 97
   },
   {
    "source": "oakland-signals",
-   "id": 120,
-   "lonlat": [
-    -122.231449,
-    37.776899
-   ]
+   "id": 120
   },
   {
    "source": "oakland-signals",
-   "id": 80,
-   "lonlat": [
-    -122.267892,
-    37.837293
-   ]
+   "id": 80
   },
   {
    "source": "oakland-signals",
-   "id": 150,
-   "lonlat": [
-    -122.222472,
-    37.850538
-   ]
+   "id": 150
   },
   {
    "source": "oakland-signals",
-   "id": 196,
-   "lonlat": [
-    -122.259699,
-    37.822741
-   ]
+   "id": 196
   },
   {
    "source": "oakland-signals",
-   "id": 154,
-   "lonlat": [
-    -122.232415,
-    37.851387
-   ]
+   "id": 154
   },
   {
    "source": "oakland-signals",
-   "id": 157,
-   "lonlat": [
-    -122.263088,
-    37.795001
-   ]
+   "id": 157
   },
   {
    "source": "oakland-signals",
-   "id": 240,
-   "lonlat": [
-    -122.273291,
-    37.803431
-   ]
+   "id": 240
   },
   {
    "source": "oakland-signals",
-   "id": 250,
-   "lonlat": [
-    -122.149507,
-    37.764382
-   ]
+   "id": 250
   },
   {
    "source": "oakland-signals",
-   "id": 290,
-   "lonlat": [
-    -122.272438,
-    37.804811
-   ]
+   "id": 290
   },
   {
    "source": "oakland-signals",
-   "id": 214,
-   "lonlat": [
-    -122.309995,
-    37.813651
-   ]
+   "id": 214
   },
   {
    "source": "oakland-signals",
-   "id": 226,
-   "lonlat": [
-    -122.245314,
-    37.858051
-   ]
+   "id": 226
   },
   {
    "source": "oakland-signals",
-   "id": 236,
-   "lonlat": [
-    -122.204947,
-    37.807974
-   ]
+   "id": 236
   },
   {
    "source": "oakland-signals",
-   "id": 346,
-   "lonlat": [
-    -122.202377,
-    37.80939
-   ]
+   "id": 346
   },
   {
    "source": "oakland-signals",
-   "id": 364,
-   "lonlat": [
-    -122.312713,
-    37.810671
-   ]
+   "id": 364
   },
   {
    "source": "oakland-signals",
-   "id": 366,
-   "lonlat": [
-    -122.274041,
-    37.804589
-   ]
+   "id": 366
   },
   {
    "source": "oakland-signals",
-   "id": 330,
-   "lonlat": [
-    -122.273176,
-    37.805964
-   ]
+   "id": 330
   },
   {
    "source": "oakland-signals",
-   "id": 305,
-   "lonlat": [
-    -122.271764,
-    37.800988
-   ]
+   "id": 305
   },
   {
    "source": "oakland-signals",
-   "id": 383,
-   "lonlat": [
-    -122.259366,
-    37.823276
-   ]
+   "id": 383
   },
   {
    "source": "oakland-signals",
-   "id": 606,
-   "lonlat": [
-    -122.244619,
-    37.810571
-   ]
+   "id": 606
   },
   {
    "source": "oakland-signals",
-   "id": 534,
-   "lonlat": [
-    -122.27522,
-    37.805053
-   ]
+   "id": 534
   },
   {
    "source": "oakland-signals",
-   "id": 553,
-   "lonlat": [
-    -122.262502,
-    37.836438
-   ]
+   "id": 553
   },
   {
    "source": "oakland-signals",
-   "id": 628,
-   "lonlat": [
-    -122.196249,
-    37.748293
-   ]
+   "id": 628
   },
   {
    "source": "oakland-signals",
-   "id": 682,
-   "lonlat": [
-    -122.247238,
-    37.812612
-   ]
+   "id": 682
   },
   {
    "source": "oakland-signals",
-   "id": 233,
-   "lonlat": [
-    -122.213611,
-    37.712992
-   ]
+   "id": 233
   },
   {
    "source": "oakland-signals",
-   "id": 703,
-   "lonlat": [
-    -122.224021,
-    37.768157
-   ]
+   "id": 703
   },
   {
    "source": "oakland-signals",
-   "id": 718,
-   "lonlat": [
-    -122.206204,
-    37.751142
-   ]
+   "id": 718
   },
   {
    "source": "oakland-signals",
-   "id": 725,
-   "lonlat": [
-    -122.203146,
-    37.823804
-   ]
+   "id": 725
   },
   {
    "source": "oakland-signals",
-   "id": 422,
-   "lonlat": [
-    -122.262696,
-    37.822228
-   ]
+   "id": 422
   },
   {
    "source": "oakland-signals",
-   "id": 721,
-   "lonlat": [
-    -122.261932,
-    37.817248
-   ]
+   "id": 721
   },
   {
    "source": "oakland-signals",
-   "id": 329,
-   "lonlat": [
-    -122.199086,
-    37.740168
-   ]
+   "id": 329
   },
   {
    "source": "oakland-signals",
-   "id": 401,
-   "lonlat": [
-    -122.296238,
-    37.798164
-   ]
+   "id": 401
   },
   {
    "source": "oakland-signals",
-   "id": 105,
-   "lonlat": [
-    -122.24193,
-    37.857459
-   ]
+   "id": 105
   },
   {
    "source": "oakland-signals",
-   "id": 1065,
-   "lonlat": [
-    -122.203928,
-    37.808487
-   ]
+   "id": 1065
   },
   {
    "source": "ssf-signals",
-   "id": 34,
-   "lonlat": [
-    -122.397616,
-    37.658713
-   ]
+   "id": 34
   },
   {
    "source": "ssf-signals",
-   "id": 37,
-   "lonlat": [
-    -122.39948,
-    37.657641
-   ]
+   "id": 37
   },
   {
    "source": "ssf-signals",
-   "id": 40,
-   "lonlat": [
-    -122.38287,
-    37.654458
-   ]
+   "id": 40
   },
   {
    "source": "ssf-signals",
-   "id": 42,
-   "lonlat": [
-    -122.396466,
-    37.659866
-   ]
+   "id": 42
   },
   {
    "source": "ssf-signals",
-   "id": 60,
-   "lonlat": [
-    -122.421838,
-    37.645786
-   ]
+   "id": 60
   },
   {
    "source": "ssf-signals",
-   "id": 73,
-   "lonlat": [
-    -122.468116,
-    37.676852
-   ]
+   "id": 73
   },
   {
    "source": "ssf-signals",
-   "id": 81,
-   "lonlat": [
-    -122.419091,
-    37.6388
-   ]
+   "id": 81
   },
   {
    "source": "ssf-signals",
-   "id": 85,
-   "lonlat": [
-    -122.415251,
-    37.636544
-   ]
+   "id": 85
   },
   {
    "source": "ssf-signals",
-   "id": 96,
-   "lonlat": [
-    -122.399506,
-    37.636056
-   ]
+   "id": 96
   },
   {
    "source": "ssf-signals",
-   "id": 116,
-   "lonlat": [
-    -122.396448,
-    37.653972
-   ]
+   "id": 116
   },
   {
    "source": "ssf-signals",
-   "id": 117,
-   "lonlat": [
-    -122.453727,
-    37.644549
-   ]
+   "id": 117
   },
   {
    "source": "ssf-signals",
-   "id": 121,
-   "lonlat": [
-    -122.396903,
-    37.666384
-   ]
+   "id": 121
   },
   {
    "source": "ssf-signals",
-   "id": 122,
-   "lonlat": [
-    -122.390319,
-    37.662495
-   ]
+   "id": 122
   },
   {
    "source": "ssf-signals",
-   "id": 123,
-   "lonlat": [
-    -122.466038,
-    37.672607
-   ]
+   "id": 123
   },
   {
    "source": "emeryville-signals",
-   "id": 11,
-   "lonlat": [
-    -122.2931,
-    37.83217
-   ]
+   "id": 11
   },
   {
    "source": "emeryville-signals",
-   "id": 12,
-   "lonlat": [
-    -122.292926,
-    37.830487
-   ]
+   "id": 12
   },
   {
    "source": "emeryville-signals",
-   "id": 27,
-   "lonlat": [
-    -122.295261,
-    37.842137
-   ]
+   "id": 27
   },
   {
    "source": "mv-signals",
-   "id": 49,
-   "lonlat": [
-    -122.091575,
-    37.419981
-   ]
+   "id": 49
   },
   {
    "source": "mv-signals",
-   "id": 103,
-   "lonlat": [
-    -122.076206,
-    37.410819
-   ]
+   "id": 103
   },
   {
    "source": "mv-signals",
-   "id": 122,
-   "lonlat": [
-    -122.07895,
-    37.393821
-   ]
+   "id": 122
   },
   {
    "source": "mv-signals",
-   "id": 129,
-   "lonlat": [
-    -122.079748,
-    37.39256
-   ]
+   "id": 129
   },
   {
    "source": "mv-signals",
-   "id": 178,
-   "lonlat": [
-    -122.067335,
-    37.407619
-   ]
+   "id": 178
   },
   {
    "source": "mv-signals",
-   "id": 318,
-   "lonlat": [
-    -122.086976,
-    37.37088
-   ]
+   "id": 318
   },
   {
    "source": "mv-signals",
-   "id": 319,
-   "lonlat": [
-    -122.093442,
-    37.373371
-   ]
+   "id": 319
   },
   {
    "source": "mv-signals",
-   "id": 398,
-   "lonlat": [
-    -122.072386,
-    37.389387
-   ]
+   "id": 398
   },
   {
    "source": "mv-signals",
-   "id": 470,
-   "lonlat": [
-    -122.06399,
-    37.375792
-   ]
+   "id": 470
   },
   {
    "source": "cupertino-signal-heads",
-   "id": 45,
-   "lonlat": [
-    -122.017333,
-    37.322953
-   ]
+   "id": 45
   },
   {
    "source": "cupertino-signal-heads",
-   "id": 812,
-   "lonlat": [
-    -122.027036,
-    37.323004
-   ]
+   "id": 812
   },
   {
    "source": "cupertino-signal-heads",
-   "id": 859,
-   "lonlat": [
-    -122.005849,
-    37.328527
-   ]
+   "id": 859
   },
   {
    "source": "cupertino-signal-heads",
-   "id": 868,
-   "lonlat": [
-    -122.011728,
-    37.325573
-   ]
+   "id": 868
   },
   {
    "source": "cupertino-signal-heads",
-   "id": 921,
-   "lonlat": [
-    -122.008884,
-    37.324714
-   ]
+   "id": 921
   },
   {
    "source": "cupertino-signal-heads",
-   "id": 938,
-   "lonlat": [
-    -122.009886,
-    37.325221
-   ]
+   "id": 938
   }
  ],
  "knownMissing": [
