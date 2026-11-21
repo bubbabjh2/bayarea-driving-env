@@ -77,11 +77,11 @@ pop.place_obstacles(count=40, seed=3); pop.place_wrecks(10); pop.reset_day()
   population of `n_cars` (population.js, `seed`), and cars spawn on their trip schedule, so `n_slots` grows; rows are slots.
   `bayenv.VecEnv(..., backend="cpu")` steps its envs in parallel (rayon). It pads rows to the largest env, and `env_slots()`
   gives the per-env counts.
-* CPU vs GPU events: `rust/tools/compare_backends.py` (same population / start / dt, k = 1, constant actions, matched
-  by agent). On 5,000 commuters, 1,200 steps: spawns 834/834 identical steps; arrivals and crashes agree within tens
-  of steps for the agents both report. One difference comes from the JS oracles themselves: the GPU kernels report a
-  barrier (kerb) scrape as a CONTACT row on every step it lasts (1,388 vs 12 on the CPU), while the CPU sim reports it
-  once.
+* CPU vs GPU events: `rust/tools/compare_backends.py` gives both backends the same population, start time and dt,
+  uses k = 1 and constant actions, and matches rows by agent. Both backends report a barrier (kerb) scrape once, when
+  it starts: the GPU's `barrier` kernel tracks F_WALL / F_WALL_PREV, and the CPU tracks `_barrierTouch`. Expected
+  aggregate differences are differences between the JS CPU and JS GPU models, not port bugs: each Rust backend is
+  bit-exact to its JS original (CPU) or within float tolerance (GPU). See `docs/cpu-vs-gpu.md`.
 * Gymnasium-style wrapper: `crates/bayenv-py/examples/gym_wrapper.py` (one observation and action row per car; the
   environment defines no reward). Benchmark: `crates/bayenv-py/examples/bench.py`.
 
