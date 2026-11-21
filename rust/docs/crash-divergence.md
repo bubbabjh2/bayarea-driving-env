@@ -69,7 +69,7 @@ so none is provided. The suggested fix belongs in the CPU, in `src/sim` and `bay
 here. Either re-plan at the connector exit, inside `integrate`, before the next-movement lookup, or keep the
 connector's `sOut` as `sArrive` for the first box entry after a re-plan.
 
-### Fix (flagged, default off = the JS): `SimOpts.replan_at_missed_event` (bayenv-sim)
+### Fix (default on): `SimOpts.replan_at_missed_event` (bayenv-sim)
 
 `missed_exits` (bayenv-sim/src/extra.rs) re-plans a missed turn right after the integrate in which it happens, while
 the car is still on the in-edge in the connector: route = [in-edge, took, A*(took.to -> goal)] at route_pos 0 (the
@@ -77,6 +77,10 @@ GPU's `prefix`), so at the connector exit the next-box lookup sees the current r
 counter and the lane-target reset still happen when the car reaches `took` (CPU timing). Python:
 `bayenv.Env(..., backend="cpu", replan_at_missed_event=True)`; `compare_backends.py --replan-missed`. Flag off is
 unchanged (trace_check bit-exact on real 2k / 10k, junction-s1, the refuel run and the hook run).
+
+Default **on** (same policy as the GPU model fixes; `cpu_vs_gpu` asserts it). `false` is the JS CPU model and is what
+every JS-oracle check uses (`SimOpts::js()`, `harness::sim_opts_from`: trace_check, v2_check, the JS-port tests).
+Checkpoints trained on the JS CPU sim, or on bayenv-sim before this default, saw the late re-plan and its kerb drift.
 
 `compare_backends.py data 5000 3000 25200 42 --spawn-default --missed-out-edge` (contact tangent on; GPU with
 `cpu_connector_join` and `contact_tangent`):

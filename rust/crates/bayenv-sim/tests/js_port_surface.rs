@@ -107,7 +107,7 @@ fn sim_all_asphalt_map_identical_to_no_map_all_grass_changes_dynamics() {
         let mut w: World = common::load_world("synth").unwrap();
         if let Some(c) = code { for e in 0..w.edge_count { w.e_surf[e] = c; w.e_gnd_r[e] = c; w.e_gnd_l[e] = c; } w.surfaces = true; }
         let w = Arc::new(w);
-        let opts = SimOpts { dt: 0.1, seed: 3.0, default_action: Action { steer: Some(0.04), steer_rate: None, gas: 0.6, brake: 0.0 }, ..SimOpts::default() };
+        let opts = SimOpts { dt: 0.1, seed: 3.0, default_action: Action { steer: Some(0.04), steer_rate: None, gas: 0.6, brake: 0.0 }, ..SimOpts::js() };
         let mut env = common::env_with(w.clone(), pop.clone(), opts, 7.5 * 3600.0);
         for _ in 0..900 { env.step(1); }
         let v = &env.sim.vs;

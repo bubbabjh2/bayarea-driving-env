@@ -68,7 +68,7 @@ pop.place_obstacles(count=40, seed=3); pop.place_wrecks(10); pop.reset_day()
   `import_snapshot(path)` (a CPU-sim `exportState` snapshot).
 * Constructor options: `backend="gpu"`, `capacity` (default `n_cars` rounded up to 1024; results are identical for any
   capacity ≥ `n_cars`), `obs="v2" | "v3" | "none"`, `dt`, `start_time`, `accidents`, `collisions`, `fuel`, `controls`,
-  `junctions`, `steer="position" | "rate"`, `decide_every`, `keep_events`, `cpu_connector_join` (default `True`), `contact_tangent` (default `True`).
+  `junctions`, `steer="position" | "rate"`, `decide_every`, `keep_events`, `cpu_connector_join` (default `True`), `contact_tangent` (default `True`), `replan_at_missed_event` (CPU, default `True`).
 * **GPU model fix (default since the kerb investigation):** `cpu_connector_join=True` makes junction connector entry
   match the CPU sim. `False` is the legacy mode, the JS GPU kernels bit-for-bit, including their connector-entry bug.
   **Legacy GPU runs and all earlier GPU checkpoints were trained with the bug:** steer-0 cars drift into the kerb after
@@ -76,6 +76,13 @@ pop.place_obstacles(count=40, seed=3); pop.place_wrecks(10); pop.reset_day()
   investigation) gives the contact impulse an f32-robust friction tangent. With `False`, the JS kernels' tangent is
   rounding noise in an aligned rear-end, and the wrecks spin to the kerb (`docs/crash-divergence.md`). The JS-oracle checks (`host_oracle` test, `oracle_run`,
   `parity_run`, `parity_check`, `opt_check`, hence `compare_gpu.sh` / `compare_parity.sh`) run with both `false`.
+* **CPU model fix (default since the crash-divergence investigation):** `replan_at_missed_event=True`
+  (`SimOpts.replan_at_missed_event`, backend="cpu") re-plans a missed turn at the event, while the car is still on the
+  in-edge, as the GPU does. `False` is the JS CPU sim's model: the re-plan comes one step late, the next junction box is
+  entered late and re-projected (`headingRel += dh`), and steer-0 cars drift into the kerb (`docs/crash-divergence.md`
+  cause A). **Earlier checkpoints trained on the JS CPU sim (and on bayenv-sim before this default) saw that behaviour.**
+  The JS-oracle checks (`trace_check`, `v2_check`, the obs / events / population traces and the JS-port tests, all via
+  `SimOpts::js()` / `harness::sim_opts_from`) run with it `false`.
 * `step_observe(actions, k=1, out=arr)`: actions upload, k steps and the observation copy in one submit and one wait
   (the fused RL step). `step(k)` returns right after the submit; the readback and events are processed by the next
   call (same results, the Python side overlaps with the GPU). `sync()` waits explicitly.

@@ -22,7 +22,7 @@ fn field(name: &str) -> usize { OBS_FIELDS.iter().position(|f| *f == name).unwra
 fn training_env_empty_and_external_modes_observations_signals_fitness() {
     let g = need!(common::shared_world("synth"));
     let pop = Arc::new(generate_population(&g, &PopConfig::env_synthetic(60, 5.0), None).unwrap().pop);
-    let opts = SimOpts { dt: 0.1, seed: 5.0, traffic_mode: TrafficMode::Empty, ..SimOpts::default() };
+    let opts = SimOpts { dt: 0.1, seed: 5.0, traffic_mode: TrafficMode::Empty, ..SimOpts::js() };
     let mut env = common::env_with(g.clone(), pop.clone(), opts, 6.0 * 3600.0);
     let end = env.sim.time + 3600.0;
     while env.sim.time < end { env.step(1); }
@@ -31,7 +31,7 @@ fn training_env_empty_and_external_modes_observations_signals_fitness() {
     assert_eq!(env.sim.fitness.len(), 60);
 
     let pop = Arc::new(generate_population(&g, &PopConfig::env_synthetic(20, 6.0), None).unwrap().pop);
-    let opts = SimOpts { dt: 0.1, seed: 6.0, traffic_mode: TrafficMode::Full, ..SimOpts::default() };
+    let opts = SimOpts { dt: 0.1, seed: 6.0, traffic_mode: TrafficMode::Full, ..SimOpts::js() };
     let mut ext = bayenv_sim::env::Env::new(g.clone(), pop.clone(),
         bayenv_sim::env::EnvConfig { opts, start_time: None, static_obstacles: vec![], scenario_obstacles: vec![], obstacles: None },
         Box::new(|w| bayenv_sim::harness::router_for(&w)));
@@ -71,7 +71,7 @@ fn vehicle_store_export_covers_slots_up_to_high() {
     let g = need!(common::shared_world("synth"));
     let mut cfg = PopConfig::env_synthetic(80, 1.0); cfg.return_trips = false;
     let pop = Arc::new(generate_population(&g, &cfg, None).unwrap().pop);
-    let mut env = common::env_with(g.clone(), pop, SimOpts { dt: 0.1, ..SimOpts::default() }, 7.5 * 3600.0);
+    let mut env = common::env_with(g.clone(), pop, SimOpts { dt: 0.1, ..SimOpts::js() }, 7.5 * 3600.0);
     for _ in 0..600 { env.step(1); }
     let vs = &env.sim.vs;
     let fields = vs.fields();
@@ -113,7 +113,7 @@ fn traffic_controls_signal_plan_cycles_and_stop_lines_are_perceived() {
     // a simulated hour around it: cars on the signalised approaches perceive the control (type, state, distance)
     let mut cfg = PopConfig::env_synthetic(300, 1.0); cfg.return_trips = false;
     let pop = Arc::new(generate_population(&g, &cfg, None).unwrap().pop);
-    let mut env = common::env_with(g.clone(), pop, SimOpts { dt: 0.1, ..SimOpts::default() }, 7.0 * 3600.0);
+    let mut env = common::env_with(g.clone(), pop, SimOpts { dt: 0.1, ..SimOpts::js() }, 7.0 * 3600.0);
     let mut perceived = 0u64;
     while env.sim.time < 8.0 * 3600.0 {
         env.step(1);

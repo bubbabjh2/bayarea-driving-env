@@ -12,7 +12,7 @@ use bayenv_sim::world::World;
 use std::sync::Arc;
 
 fn empty_sim(g: &Arc<World>) -> Sim {
-    let opts = SimOpts { dt: 0.05, start_time: 7.0 * 3600.0, fuel: false, ..SimOpts::default() };
+    let opts = SimOpts { dt: 0.05, start_time: 7.0 * 3600.0, fuel: false, ..SimOpts::js() };
     Sim::new(g.clone(), Arc::new(Population::default()), opts, bayenv_sim::harness::router_for(g))
 }
 fn place(sim: &mut Sim, edge: usize, s: f64, lane: i32, speed: f64) -> usize {
