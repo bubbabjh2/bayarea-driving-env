@@ -36,6 +36,14 @@ What this means:
 * **Remaining differences** are f32 vs f64 arithmetic and the order of contact resolution. Missed exits are also
   reported at a different point: the GPU at the connector join, the CPU in `_missedExits`. Contacts amplify these.
   With the default GPU model, a single car matches the CPU to 1e-3 m over 3,000 steps.
+* **Crashes on one backend only.** Over 3,000 steps with `--spawn-default`, 9 agents crash on the CPU only and 2 on
+  the GPU only. There are two deterministic causes, described in `crash-divergence.md`.
+  (A) After a missed turn, the CPU re-plans one step later than the GPU. It then joins the next junction box
+  re-projected, with a heading error of about 0.2 rad. This is a CPU artefact, and no GPU flag is provided.
+  `missed_at_out_edge` changes only when the GPU reports the missed exit, not its route.
+  (B) A **JS-GPU bug:** in an aligned rear-end, the f32 friction tangent of the contact impulse is rounding noise
+  (`collidefns.wgsl:60`), and the wrecks spin to the kerb. `GpuOptions.contact_tangent` /
+  `Env(..., contact_tangent=True)` (default off) fixes it. Crashed agents in common go from 67 to 70 (CPU 76, GPU 71).
 * **For training,** the default GPU model is the CPU model. Compare policies trained on legacy GPU runs only with
   `cpu_connector_join=False`, or retrain or fine-tune them on the default model.
 
@@ -62,7 +70,11 @@ one JSON object per step for the `window` steps before the agent's crash step an
 | ctl_type, ctl_state, ctl_dist | next traffic control: -1 none / 0 signal / 1 stop / 2 give way / 3 ramp meter / 4 crossing; 0 green / 1 yellow / 2 red / 3 sign / 4 dark; m to its stop line |
 | flags, state, conn | vehicle flags (bit5 DISABLED, bit1 COLLIDED, ...), 1 driving / 2 crashed, junction connector (-1 none) |
 
-Non-finite floats are written as null. The GPU half should write `gpu-<agent>.jsonl` with the same keys and steps.
+Non-finite floats are written as null. The GPU half, `rust/tools/gpu_divergence.py data --agents a,b,c`, writes
+`gpu-<agent>.jsonl` with the same keys and steps. The GPU `state()` has the same columns. With `--backend cpu`,
+`--from` / `--to` and `--prefix`, the tool traces any agent on either backend. Results are in
+`crash-divergence.md`.
+
 ## Missed-exit timing
 
 The JS GPU kernel (`integrate.wgsl`, the `EV_MISSED` emit inside the junction-connector choice) reports a missed exit

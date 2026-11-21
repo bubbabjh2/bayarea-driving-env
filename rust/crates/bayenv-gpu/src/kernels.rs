@@ -48,6 +48,7 @@ pub const HOST_SOURCES: &[(&str, &str)] = &[
     ("patches", include_str!("../kernels/patches.wgsl")),
     ("obs_f16", include_str!("../kernels/obs_f16.wgsl")),
     ("cpu_connector_join", include_str!("../kernels/cpu_connector_join.wgsl")),
+    ("contact_tangent", include_str!("../kernels/contact_tangent.wgsl")),
 ];
 
 /// Lane-list-order variant of a per-car kernel (kernels/sorted.wgsl): the entry `entry` of `src` becomes the
@@ -179,8 +180,10 @@ pub fn patch_text(src: &str, file: &str) -> String {
     out
 }
 /// Model patches selected by GpuOptions (default off: the JS kernels unchanged) for the kernel file `file`.
-pub fn model_patches(src: String, file: &str, cpu_connector_join: bool) -> String {
-    if cpu_connector_join && file == "integrate" { patch_text(&src, "cpu_connector_join") } else { src }
+/// `file` "contacts" also covers kernels/resolve_fused.wgsl (contacts.wgsl + collidefns.wgsl included unchanged).
+pub fn model_patches(src: String, file: &str, cpu_connector_join: bool, contact_tangent: bool) -> String {
+    let src = if cpu_connector_join && file == "integrate" { patch_text(&src, "cpu_connector_join") } else { src };
+    if contact_tangent && file == "contacts" { patch_text(&src, "contact_tangent") } else { src }
 }
 /// Apply kernels/patches.wgsl to a resolved kernel source: each patched function present in `src` is replaced
 /// (panics when its text differs from the original the patch was written for).
@@ -205,9 +208,19 @@ mod tests {
     #[test]
     fn cpu_connector_join_applies() {
         let src = super::load("integrate");
-        assert_eq!(super::model_patches(src.clone(), "integrate", false), src);   // flag off: the JS kernel unchanged
-        let p = super::model_patches(src.clone(), "integrate", true);
+        assert_eq!(super::model_patches(src.clone(), "integrate", false, false), src);   // flag off: the JS kernel unchanged
+        let p = super::model_patches(src.clone(), "integrate", true, false);
         assert!(p.contains("if (sArr > sIn + 0.3 && P.hasLG != 0u)") && !p.contains("if (s > sIn + 0.3 && P.hasLG != 0u)"));
-        assert_eq!(super::model_patches(super::load("contacts"), "contacts", true), super::load("contacts"));
+        assert_eq!(super::model_patches(super::load("contacts"), "contacts", true, false), super::load("contacts"));
+    }
+    #[test]
+    fn contact_tangent_applies() {
+        let src = super::load("contacts");
+        assert_eq!(super::model_patches(src.clone(), "contacts", false, false), src);
+        assert_eq!(super::model_patches(super::load("integrate"), "integrate", false, true), super::load("integrate"));
+        let p = super::model_patches(src.clone(), "contacts", false, true);
+        assert!(p.contains("let tn = tx * c.nx + tz * c.nz;") && !p.contains("if (tl > 1e-6) {"));
+        let f = super::resolve_includes(super::host_raw("resolve_fused"));
+        assert!(super::model_patches(f, "contacts", false, true).contains("let tn = tx * c.nx + tz * c.nz;"));
     }
 }

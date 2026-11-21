@@ -1,10 +1,12 @@
 """CPU vs GPU events on the same scenario, k = 1 (rust/README.md "CPU vs GPU events").
 
-    python rust/tools/compare_backends.py data [n_commuters=5000] [steps=3000] [start=25200] [seed=42] [--legacy-gpu] [--spawn-default] [--missed-out-edge]
+    python rust/tools/compare_backends.py data [n_commuters=5000] [steps=3000] [start=25200] [seed=42] [--legacy-gpu] [--spawn-default] [--missed-out-edge] [--contact-tangent]
 
 --legacy-gpu: GPU with cpu_connector_join=False, the JS GPU kernels bit-for-bit including their junction connector-entry
 bug (rust/docs/kerb-investigation.md; the model of every GPU run before the fix became the default).
 --missed-out-edge: GPU missed exits through a junction connector are reported on the taken out-edge (CPU timing).
+--contact-tangent: GPU model patch GpuOptions.contact_tangent (f32-robust friction tangent in the contact impulse,
+rust/docs/crash-divergence.md); default off.
 --spawn-default: GPU rows of slots that are not driving get the CPU sim's default action [0, 0, 0.3]. The CPU applies
 an action only to cars driving when act() is called, so a car spawning during a step brakes (default action) on its
 first decision; the GPU holds the slot's row (gas 0.3). This shifts the CPU trajectories by ~2 steps (harness only).
@@ -17,8 +19,8 @@ import sys, collections
 import numpy as np
 import bayenv
 
-cj = "--legacy-gpu" not in sys.argv; sd = "--spawn-default" in sys.argv; mo = "--missed-out-edge" in sys.argv
-sys.argv = [a for a in sys.argv if a not in ("--legacy-gpu", "--spawn-default", "--missed-out-edge")]
+cj = "--legacy-gpu" not in sys.argv; sd = "--spawn-default" in sys.argv; mo = "--missed-out-edge" in sys.argv; ct = "--contact-tangent" in sys.argv
+sys.argv = [a for a in sys.argv if a not in ("--legacy-gpu", "--spawn-default", "--missed-out-edge", "--contact-tangent")]
 data = sys.argv[1] if len(sys.argv) > 1 else "data"
 n = int(sys.argv[2]) if len(sys.argv) > 2 else 5000
 steps = int(sys.argv[3]) if len(sys.argv) > 3 else 3000
@@ -28,7 +30,7 @@ KIND = {1: "arrived", 2: "crashed", 3: "contact", 4: "stranded", 5: "cleared", 6
 
 def run(backend):
     if backend == "cpu": env = bayenv.Env(data, n_cars=n, seed=seed, backend="cpu", start_time=start, obs="none")
-    else: env = bayenv.Env(data, n_cars=n, seed=seed, population=n, pop_seed=float(seed), start_time=start, obs="none", cpu_connector_join=cj, missed_at_out_edge=mo)
+    else: env = bayenv.Env(data, n_cars=n, seed=seed, population=n, pop_seed=float(seed), start_time=start, obs="none", cpu_connector_join=cj, missed_at_out_edge=mo, contact_tangent=ct)
     rows = collections.defaultdict(list); late = {}
     for t in range(steps):
         m = env.n_slots if backend == "cpu" else env.capacity
@@ -42,7 +44,7 @@ def run(backend):
     return rows, late, env.stats()
 
 cpu, cl, cs = run("cpu"); gpu, gl, gs = run("gpu")
-print(f"{n} commuters, {steps} steps from t={start:.0f}, k=1, gpu cpu_connector_join={cj}, spawn_default={sd}")
+print(f"{n} commuters, {steps} steps from t={start:.0f}, k=1, gpu cpu_connector_join={cj}, contact_tangent={ct}, spawn_default={sd}")
 for k, name in KIND.items():
     c = {key: v for key, v in cpu.items() if key[1] == k}; g = {key: v for key, v in gpu.items() if key[1] == k}
     if not c and not g: continue

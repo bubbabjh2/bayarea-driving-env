@@ -72,6 +72,9 @@ pub struct GpuOptions {
     /// rust/docs/kerb-investigation.md). false = legacy mode, bit-identical with the JS GPU kernels (which have the
     /// connector-entry bug; every GPU run / checkpoint before this default was trained with it). JS: off
     pub cpu_connector_join: bool,
+    /// MODEL change (not bit-identical, default off): f32-robust friction tangent in the contact impulse
+    /// (kernels/contact_tangent.wgsl; rust/docs/crash-divergence.md). JS: off
+    pub contact_tangent: bool,
     /// lane / hash-cell starts with kernels/scan4k.wgsl (4096 per workgroup, the count clears folded into the
     /// scan: 12 -> 6 dispatches; identical starts). JS: off
     pub fast_scan: bool,
@@ -98,7 +101,7 @@ impl Features {
 impl GpuOptions {
     /// Set a host optimisation flag by name (indirect_resolve, fused_resolve, sorted_order, profile).
     pub fn set_flag(&mut self, name: &str, on: bool) -> Result<(), String> {
-        match name { "indirect_resolve" => self.indirect_resolve = on, "fused_resolve" => self.fused_resolve = on, "sorted_order" => self.sorted_order = on, "fast_scan" => self.fast_scan = on, "fast_search" => self.fast_search = on, "zero_init_workgroup" => self.zero_init_workgroup = on, "cpu_connector_join" => self.cpu_connector_join = on,
+        match name { "indirect_resolve" => self.indirect_resolve = on, "fused_resolve" => self.fused_resolve = on, "sorted_order" => self.sorted_order = on, "fast_scan" => self.fast_scan = on, "fast_search" => self.fast_search = on, "zero_init_workgroup" => self.zero_init_workgroup = on, "cpu_connector_join" => self.cpu_connector_join = on, "contact_tangent" => self.contact_tangent = on,
             "profile" => self.profile = on, _ => return Err(format!("unknown GpuOptions flag {name}")) }
         Ok(())
     }
@@ -117,7 +120,7 @@ impl Default for GpuOptions {
     fn default() -> Self {
         GpuOptions { capacity: 131072, dt: 0.05, start_time: 5.0 * 3600.0, seed: 1, obs: ObsMode::V2, steer_rate: false, decide_every: 1, features: Features::default(),
             controls: true, junctions: true, table_bits: 18, contact_cap: 131072, ev_cap: 16384, spawn_queue: 16384, op_cap: 16384, max_blocks: 4096, route_slack: 1 << 22,
-            resolve_rounds: 12, progress_weight: 1.0, jerk_weight: 0.5, jerk_reward: false, grade_obs: true, squeeze_delay: 15.0 * 60.0, deadlock_break: 0, reroute: true, keep_events: false, record_events: true, record_share: false, missed_at_out_edge: false, indirect_resolve: true, fused_resolve: true, sorted_order: true, fast_scan: true, fast_search: true, cpu_connector_join: true, zero_init_workgroup: false, profile: false, return_trips: true, refuel_budget_ms: 4.0 }
+            resolve_rounds: 12, progress_weight: 1.0, jerk_weight: 0.5, jerk_reward: false, grade_obs: true, squeeze_delay: 15.0 * 60.0, deadlock_break: 0, reroute: true, keep_events: false, record_events: true, record_share: false, missed_at_out_edge: false, indirect_resolve: true, fused_resolve: true, sorted_order: true, fast_scan: true, fast_search: true, cpu_connector_join: true, contact_tangent: false, zero_init_workgroup: false, profile: false, return_trips: true, refuel_budget_ms: 4.0 }
     }
 }
 
@@ -390,8 +393,8 @@ impl GpuSim {
         // compile in parallel (naga + Metal pipeline creation), results in spec order
         let gpu = &self.gpu; let obs = self.opts.obs; let cap = self.cap;
         let out: Vec<Result<Kernel, String>> = std::thread::scope(|s| {
-            let zi = self.opts.zero_init_workgroup; let fsr = self.fast_search_ok; let cj = self.opts.cpu_connector_join;
-            let hs: Vec<_> = specs.iter().map(|sp| s.spawn(move || { let src = kernels::model_patches(kernels::source(sp, obs, cap), sp.file, cj); gpu.kernel_with(sp.label, &if fsr { kernels::patch(&src) } else { src }, sp.entry, zi) })).collect();
+            let zi = self.opts.zero_init_workgroup; let fsr = self.fast_search_ok; let cj = self.opts.cpu_connector_join; let ct = self.opts.contact_tangent;
+            let hs: Vec<_> = specs.iter().map(|sp| s.spawn(move || { let src = kernels::model_patches(kernels::source(sp, obs, cap), sp.file, cj, ct); gpu.kernel_with(sp.label, &if fsr { kernels::patch(&src) } else { src }, sp.entry, zi) })).collect();
             hs.into_iter().map(|h| h.join().unwrap()).collect()
         });
         for (sp, k) in specs.iter().zip(out) { self.k.insert(sp.label, k?); }
@@ -406,7 +409,7 @@ impl GpuSim {
                 if !only.as_ref().map_or(on, |o| o.split(',').any(|x| x == l)) { continue; }
                 if !self.k.contains_key(l) { continue; }
                 let spec = kernels::KernelSpec { label: sl, file: self.kernel_file(file), entry, defines: true };
-                let src = kernels::sorted_source(&self.patched(kernels::model_patches(kernels::source(&spec, self.opts.obs, self.cap), spec.file, self.opts.cpu_connector_join)), entry, sorted_wg(l, wg));
+                let src = kernels::sorted_source(&self.patched(kernels::model_patches(kernels::source(&spec, self.opts.obs, self.cap), spec.file, self.opts.cpu_connector_join, self.opts.contact_tangent)), entry, sorted_wg(l, wg));
                 self.k.insert(sl, self.gpu.kernel_with(sl, &src, &format!("{entry}_sorted"), self.opts.zero_init_workgroup)?);
             }
         }
@@ -414,7 +417,7 @@ impl GpuSim {
             for (l, e) in [("scan4k.first", "scanFirst"), ("scan4k.inPlace", "scanInPlace"), ("scan4k.add", "addSums")] { self.k.insert(l, self.gpu.kernel_with(l, kernels::host_raw("scan4k"), e, false)?); }
         }
         if self.opts.fused_resolve {
-            let src = defines::prefix(self.opts.obs, self.cap) + &format!("const RF_ROUNDS: u32 = {}u;\n", self.opts.resolve_rounds) + &self.patched(kernels::resolve_includes(kernels::host_raw("resolve_fused")));
+            let src = defines::prefix(self.opts.obs, self.cap) + &format!("const RF_ROUNDS: u32 = {}u;\n", self.opts.resolve_rounds) + &self.patched(kernels::model_patches(kernels::resolve_includes(kernels::host_raw("resolve_fused")), "contacts", false, self.opts.contact_tangent));
             self.k.insert("contacts.resolveFused", self.gpu.kernel_with("contacts.resolveFused", &src, "resolveFused", self.opts.zero_init_workgroup)?);
         }
         Ok(())

@@ -166,7 +166,7 @@ impl Env {
     /// Env(data_dir, n_cars=10000, seed=1, backend="gpu" | "cpu", capacity=None, obs="v2", dt=0.05, start_time=None (gpu 05:00, cpu first departure - 60 s),
     ///     accidents=True, collisions=True, fuel=True, controls=True, junctions=True, steer="position", decide_every=1,
     ///     keep_events=False, population=None, pop_seed=42, streaming=False, return_trips=True, stations=True,
-    ///     refuel_budget_ms=None, cpu_connector_join=True)
+    ///     refuel_budget_ms=None, cpu_connector_join=True, contact_tangent=False)
     /// Loads the world (~0.1 s warm), builds the GPU buffers and scatters `n_cars` cars at rest on random routes
     /// (seeded; the JS GPUSim.scatter placement). Actions start at [0, 0, 0] for every slot.
     /// population=N (gpu): instead of the scatter, N commuters (src/sim/population.js, seed pop_seed, generated natively,
@@ -178,14 +178,16 @@ impl Env {
     /// deterministic; the JS default is 4 ms).
     /// cpu_connector_join (gpu, default True): junction connector entry as in the CPU sim (rust/docs/kerb-investigation.md).
     /// False = legacy mode, the JS GPU kernels bit-for-bit, with their connector-entry bug (all earlier GPU checkpoints).
+    /// contact_tangent (gpu, default False): model patch, f32-robust friction tangent in the contact impulse
+    /// (rust/docs/crash-divergence.md).
     #[new]
     #[pyo3(signature = (data_dir, n_cars=10000, seed=1, backend="gpu", capacity=None, obs="v2", dt=0.05, start_time=None,
         accidents=true, collisions=true, fuel=true, controls=true, junctions=true, steer="position", decide_every=1, keep_events=false,
-        population=None, pop_seed=42.0, streaming=false, return_trips=true, stations=true, refuel_budget_ms=None, crash_share=false, missed_at_out_edge=false, cpu_connector_join=true))]
+        population=None, pop_seed=42.0, streaming=false, return_trips=true, stations=true, refuel_budget_ms=None, crash_share=false, missed_at_out_edge=false, cpu_connector_join=true, contact_tangent=false))]
     #[allow(clippy::too_many_arguments)]
     fn new(py: Python<'_>, data_dir: &str, n_cars: usize, seed: u32, backend: &str, capacity: Option<usize>, obs: &str, dt: f64, start_time: Option<f64>,
            accidents: bool, collisions: bool, fuel: bool, controls: bool, junctions: bool, steer: &str, decide_every: u32, keep_events: bool,
-           population: Option<usize>, pop_seed: f64, streaming: bool, return_trips: bool, stations: bool, refuel_budget_ms: Option<f64>, crash_share: bool, missed_at_out_edge: bool, cpu_connector_join: bool) -> PyResult<Env> {
+           population: Option<usize>, pop_seed: f64, streaming: bool, return_trips: bool, stations: bool, refuel_budget_ms: Option<f64>, crash_share: bool, missed_at_out_edge: bool, cpu_connector_join: bool, contact_tangent: bool) -> PyResult<Env> {
         if backend == "cpu" {
             let cobs = match obs { "v2" => CpuObs::V2, "v3" => CpuObs::V3, "flat" => CpuObs::Flat, "none" => CpuObs::None, _ => return Err(PyValueError::new_err("obs must be 'v2', 'v3', 'flat' or 'none'")) };
             // CPU reference sim (crate bayenv-sim): commuter population (population.js, n_cars commuters, seed),
@@ -217,7 +219,7 @@ impl Env {
         let res: Result<(Arc<World>, GpuSim, usize), String> = py.detach(move || {
             let world = Arc::new(World::load_with(&data, &LoadOptions::default()).map_err(|e| format!("world: {e}"))?);
             let mut o = GpuOptions { capacity: cap, dt, start_time: start_time.unwrap_or(18000.0), seed, obs: obs_mode, steer_rate, decide_every, controls, junctions, keep_events, record_share: crash_share, missed_at_out_edge,
-                return_trips, refuel_budget_ms: refuel_budget_ms.unwrap_or(f64::INFINITY), cpu_connector_join, ..Default::default() };
+                return_trips, refuel_budget_ms: refuel_budget_ms.unwrap_or(f64::INFINITY), cpu_connector_join, contact_tangent, ..Default::default() };
             o.features.accidents = accidents; o.features.collisions = collisions; o.features.fuel = fuel;
             let mut sim = bayenv_gpu::env::create(world.clone(), o)?;
             match population {
@@ -398,7 +400,23 @@ impl Env {
         d.set_item("collided", PyArray1::from_vec(py, (0..n).map(|i| cf[2 * i + 1] != 0).collect::<Vec<bool>>()))?;
         d.set_item("collided_steps", PyArray1::from_vec(py, (0..n).map(|i| cf[2 * i]).collect::<Vec<u32>>()))?;
         d.set_item("lane", PyArray1::from_vec(py, col_u(veh::LANES).iter().map(|&w| (w & 255) as u8).collect::<Vec<u8>>()))?;
+        // CPU state() parity (rust/docs/cpu-vs-gpu.md "Crash divergence dumps"): footprint lanes, leader / gap, junction
+        // connector (vConn = taper - 1 with junctions, common.wgsl), next control (ctl words 1 type, 2 light, 5 dist;
+        // controls.wgsl), agent = trip id of the slot (2 * commuter + leg)
+        d.set_item("lane_lo", PyArray1::from_vec(py, col_u(veh::LANES).iter().map(|&w| ((w >> 8) & 255) as f32).collect::<Vec<f32>>()))?;
+        d.set_item("lane_hi", PyArray1::from_vec(py, col_u(veh::LANES).iter().map(|&w| ((w >> 16) & 255) as f32).collect::<Vec<f32>>()))?;
         d.set_item("leader", PyArray1::from_vec(py, col_u(veh::LEADER).iter().map(|&w| w as i32).collect::<Vec<i32>>()))?;
+        d.set_item("gap", PyArray1::from_vec(py, col_f(veh::GAP)))?;
+        let hj = sim.has_junctions();
+        d.set_item("conn", PyArray1::from_vec(py, col_f(veh::TAPER).iter().map(|&t| if hj { t - 1.0 } else { -1.0 }).collect::<Vec<f32>>()))?;
+        let mut ctlw = vec![0u32; n * L::CTL_WORDS]; if n > 0 { sim.read_into("ctl", 0, bytemuck::cast_slice_mut(&mut ctlw)); }
+        d.set_item("ctl_type", PyArray1::from_vec(py, (0..n).map(|i| ctlw[i * L::CTL_WORDS + 1] as i32 as f32).collect::<Vec<f32>>()))?;
+        d.set_item("ctl_state", PyArray1::from_vec(py, (0..n).map(|i| ctlw[i * L::CTL_WORDS + 2] as f32).collect::<Vec<f32>>()))?;
+        d.set_item("ctl_dist", PyArray1::from_vec(py, (0..n).map(|i| f32::from_bits(ctlw[i * L::CTL_WORDS + 5])).collect::<Vec<f32>>()))?;
+        let trip: Vec<i32> = (0..n).map(|i| sim.slot_trip.get(i).copied().unwrap_or(-1)).collect();
+        d.set_item("commuter", PyArray1::from_vec(py, trip.iter().map(|&t| if t >= 0 { t >> 1 } else { -1 }).collect::<Vec<i32>>()))?;
+        d.set_item("leg", PyArray1::from_vec(py, trip.iter().map(|&t| if t >= 0 { (t & 1) as f32 } else { -1.0 }).collect::<Vec<f32>>()))?;
+        d.set_item("agent", PyArray1::from_vec(py, trip))?;
         // speed limit (m/s) of each car's current edge (reward.js normalises route progress by it)
         let g = &self.world.graph;
         d.set_item("speed_limit", PyArray1::from_vec(py, col_u(veh::EDGE).iter().zip(&st).map(|(&e, &s)| if s != 0 && (e as usize) < g.edge_count { g.speed_limit[e as usize] as f32 } else { f32::NAN }).collect::<Vec<f32>>()))?;
@@ -605,10 +623,10 @@ impl VecEnv {
 #[pymethods]
 impl VecEnv {
     #[new]
-    #[pyo3(signature = (data_dir, n_envs, n_cars=1000, seed=1, capacity=None, obs="v2", dt=0.05, start_time=None, accidents=true, collisions=true, fuel=true, backend="gpu", cpu_connector_join=true))]
+    #[pyo3(signature = (data_dir, n_envs, n_cars=1000, seed=1, capacity=None, obs="v2", dt=0.05, start_time=None, accidents=true, collisions=true, fuel=true, backend="gpu", cpu_connector_join=true, contact_tangent=false))]
     #[allow(clippy::too_many_arguments)]
     fn new(py: Python<'_>, data_dir: &str, n_envs: usize, n_cars: usize, seed: u32, capacity: Option<usize>, obs: &str, dt: f64, start_time: Option<f64>,
-           accidents: bool, collisions: bool, fuel: bool, backend: &str, cpu_connector_join: bool) -> PyResult<VecEnv> {
+           accidents: bool, collisions: bool, fuel: bool, backend: &str, cpu_connector_join: bool, contact_tangent: bool) -> PyResult<VecEnv> {
         if backend == "cpu" {
             let cobs = match obs { "v2" => CpuObs::V2, "v3" => CpuObs::V3, "flat" => CpuObs::Flat, "none" => CpuObs::None, _ => return Err(PyValueError::new_err("obs must be 'v2', 'v3', 'flat' or 'none'")) };
             let data = data_dir.to_string();
@@ -628,7 +646,7 @@ impl VecEnv {
         let data = data_dir.to_string();
         let res: Result<(Vec<GpuSim>, usize), String> = py.detach(move || {
             let world = Arc::new(World::load(&data).map_err(|e| format!("world: {e}"))?);
-            let mut o = GpuOptions { capacity: cap, dt, start_time, obs: obs_mode, cpu_connector_join, ..Default::default() };
+            let mut o = GpuOptions { capacity: cap, dt, start_time, obs: obs_mode, cpu_connector_join, contact_tangent, ..Default::default() };
             o.features.accidents = accidents; o.features.collisions = collisions; o.features.fuel = fuel;
             let mut sims = bayenv_gpu::env::create_many(world, &o, n_envs)?;
             let mut placed = usize::MAX;
