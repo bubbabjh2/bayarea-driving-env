@@ -7,5 +7,6 @@ pub mod defines;
 pub mod gpu;
 pub mod kernels;
 pub mod layout;
+pub mod pack;
 pub mod oracle;
 pub mod sim;
