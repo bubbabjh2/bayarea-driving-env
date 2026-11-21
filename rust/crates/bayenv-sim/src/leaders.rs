@@ -47,6 +47,9 @@ pub fn lane_end_ahead(g: &World, route: &[i32], rp: usize, s: f64, lane: i32, lo
     out
 }
 
+#[derive(Clone, Copy, Debug)]
+pub(crate) struct Base { pub leader: i32, pub gap: f32, pub leader2: Option<(i32, f32)>, pub cw: Option<usize>, pub le_dist: f32, pub le_side: i8, pub merge_cap: Option<f32> }
+
 impl Sim {
     #[inline]
     pub(crate) fn blocking(&self, mut a: i32, lane: i32) -> i32 {
@@ -58,10 +61,11 @@ impl Sim {
     pub(crate) fn find_leaders(&mut self) {
         let g = self.gw();
         let high = self.vs.high;
-        let look = self.opts.leader_lookahead;
-        let zip_look = self.opts.merge_lookahead;
         if self.empty {
-            for i in 0..high { if self.vs.state[i] == STATE_DRIVING { self.vs.leader[i] = -1; self.vs.gap[i] = 1e9; self.lane_end(i); self.scene_leader(i); } }
+            for i in 0..high { if self.vs.state[i] == STATE_DRIVING {
+                let mut b = Base { leader: -1, gap: 1e9, leader2: None, cw: None, le_dist: 1e9, le_side: 0, merge_cap: None };
+                self.lane_end_pure(i, &mut b); self.scene_pure(i, &mut b); self.apply_base(i, &b);
+            } }
             return;
         }
         if g.j.is_some() { self.index_connectors(); }
@@ -74,9 +78,54 @@ impl Sim {
         self.passers.reset_lists();
         for i in 0..high { if self.vs.pass_wreck[i] >= 0 && self.vs.state[i] == STATE_DRIVING { self.passers.push(self.vs.edge[i], i); } }
         if self.passers.len() > 5000 { self.passers.clear(); }
+        // phase 1 (no cross-car writes: lane / cross-edge / zipper leaders, leader2, lane ends, off-lane bodies, scenes),
+        // optionally in parallel; phase 2 applies them in slot order and runs the order-dependent perception
+        let par = self.opts.parallel && high >= 512;
+        let bases: Vec<Option<Base>> = if par {
+            use rayon::prelude::*;
+            let me = &*self;
+            (0..high).into_par_iter().with_min_len(64).map(|i| if me.vs.state[i] == STATE_DRIVING { Some(me.lead_base(i)) } else { None }).collect()
+        } else { Vec::new() };
         for i in 0..high {
             if self.vs.state[i] != STATE_DRIVING { continue; }
-            let mut leader = -1i32;
+            let b = if par { bases[i].unwrap() } else { self.lead_base(i) };
+            self.apply_base(i, &b);
+            let e = self.vs.edge[i] as usize;
+            let pw = self.vs.pass_wreck[i];
+            let _ = pw;
+            if g.j.is_some() { self.junction(i); if self.vs.conn[i] < 0 { self.node_bodies(i, e); } }
+            if self.vs.conn[i] < 0 { self.converge_bodies(i, e); }
+            if g.e_rev[e] >= 0 { self.opposing(i, e); }
+            if self.opts.path_sight >= 1.0 { self.path_bodies(i); }
+            let vs = &mut self.vs;
+            let ll = vs.leader[i];
+            if ll >= 0 && vs.state[ll as usize] == STATE_CRASHED && vs.edge[ll as usize] == vs.edge[i] {
+                let lu = ll as usize;
+                let hi_ = vs.half_extent(i); let h_l = vs.half_extent(lu);
+                let ov = jm::min(f(vs.lat[i]) + hi_, f(vs.lat[lu]) + h_l) - jm::max(f(vs.lat[i]) - hi_, f(vs.lat[lu]) - h_l);
+                if ov > 0.0 { vs.gap[i] = r32(f(vs.gap[i]) - jm::min(MERGE_ROOM, 2.0 + 4.0 * (ov + 0.3))); }
+            }
+        }
+        self.courtesy();
+        if self.opts.deadlock_break >= 1.0 { self.break_deadlocks(); }
+    }
+
+    fn apply_base(&mut self, i: usize, b: &Base) {
+        if let Some(j) = b.cw { self.conflict_with.insert(i, j); }
+        let vs = &mut self.vs;
+        vs.leader[i] = b.leader; vs.gap[i] = b.gap;
+        if let Some((l2, g2)) = b.leader2 { vs.leader2[i] = l2; vs.gap2[i] = g2; }
+        vs.lane_end_dist[i] = b.le_dist; vs.lane_end_side[i] = b.le_side;
+        if let Some(m) = b.merge_cap { vs.merge_cap[i] = m; }
+    }
+
+    /// Phase-1 perception of slot i (reads only state that the leaders loop does not change).
+    fn lead_base(&self, i: usize) -> Base {
+        let g = self.gw();
+        let look = self.opts.leader_lookahead;
+        let zip_look = self.opts.merge_lookahead;
+        let i = i;
+        let mut leader = -1i32;
             let mut gap = 1e9f64;
             let vs = &self.vs;
             let lanes = &self.lanes;
@@ -164,35 +213,18 @@ impl Sim {
                     }
                 }
             }
-            // conflictWith writes happen in order (a later write wins); only the last zipper one matters here
-            if let Some(j) = cw_set { self.conflict_with.insert(i, j); }
-            let vs = &mut self.vs;
-            vs.leader[i] = leader; vs.gap[i] = r32(gap);
-            vs.leader2[i] = -1; vs.gap2[i] = 1e9;
-            if leader >= 0 { let lu = leader as usize; if vs.edge[lu] == vs.edge[i] && vs.lane_hi[lu] >= vs.lane_lo[lu] {
-                let ll = vs.lane[lu] as i32;
-                let l2 = self.blocking(self.lanes.ahead(&self.vs, lu, ll), ll);
-                let vs = &mut self.vs;
-                if l2 >= 0 && l2 as usize != i { vs.leader2[i] = l2; vs.gap2[i] = r32(f(vs.s[l2 as usize]) - f(vs.s[i]) - hl - 0.5 * f(vs.length[l2 as usize])); }
-            } }
-            self.lane_end(i);
-            self.off_lane_bodies(i);
-            if pw < 0 { self.scene_leader(i); }
-            if g.j.is_some() { self.junction(i); if self.vs.conn[i] < 0 { self.node_bodies(i, e); } }
-            if self.vs.conn[i] < 0 { self.converge_bodies(i, e); }
-            if g.e_rev[e] >= 0 { self.opposing(i, e); }
-            if self.opts.path_sight >= 1.0 { self.path_bodies(i); }
-            let vs = &mut self.vs;
-            let ll = vs.leader[i];
-            if ll >= 0 && vs.state[ll as usize] == STATE_CRASHED && vs.edge[ll as usize] == vs.edge[i] {
-                let lu = ll as usize;
-                let hi_ = vs.half_extent(i); let h_l = vs.half_extent(lu);
-                let ov = jm::min(f(vs.lat[i]) + hi_, f(vs.lat[lu]) + h_l) - jm::max(f(vs.lat[i]) - hi_, f(vs.lat[lu]) - h_l);
-                if ov > 0.0 { vs.gap[i] = r32(f(vs.gap[i]) - jm::min(MERGE_ROOM, 2.0 + 4.0 * (ov + 0.3))); }
-            }
-        }
-        self.courtesy();
-        if self.opts.deadlock_break >= 1.0 { self.break_deadlocks(); }
+        let vs = &self.vs;
+        let mut l2v = (-1i32, 1e9f32);
+        if leader >= 0 { let lu = leader as usize; if vs.edge[lu] == vs.edge[i] && vs.lane_hi[lu] >= vs.lane_lo[lu] {
+            let ll = vs.lane[lu] as i32;
+            let l2 = self.blocking(self.lanes.ahead(vs, lu, ll), ll);
+            if l2 >= 0 && l2 as usize != i { l2v = (l2, r32(f(vs.s[l2 as usize]) - f(vs.s[i]) - hl - 0.5 * f(vs.length[l2 as usize]))); }
+        } }
+        let mut b = Base { leader, gap: r32(gap), leader2: Some(l2v), cw: cw_set, le_dist: 1e9, le_side: 0, merge_cap: None };
+        self.lane_end_pure(i, &mut b);
+        self.off_lane_pure(i, &mut b);
+        if pw < 0 { self.scene_pure(i, &mut b); }
+        b
     }
 
     fn courtesy(&mut self) {
@@ -257,11 +289,11 @@ impl Sim {
         }
     }
 
-    pub(crate) fn lane_end(&mut self, i: usize) {
+    pub(crate) fn lane_end_pure(&self, i: usize, b: &mut Base) {
         let g = self.gw();
-        let vs = &mut self.vs;
+        let vs = &self.vs;
         let rp = vs.route_pos[i] as usize;
-        vs.lane_end_dist[i] = 1e9; vs.lane_end_side[i] = 0;
+        b.le_dist = 1e9; b.le_side = 0;
         let e = vs.edge[i] as usize;
         let w = g.lane_w(e, f(vs.s[i]));
         let lat = f(vs.lat[i]);
@@ -276,28 +308,28 @@ impl Sim {
             let en = j.info(m, 2) as usize;
             let ol = jm::min((g.e_lanes[en] - 1) as f64, jm::max(0.0, g.map_lane(e, en, vs.lane[i] as i32) as f64)) as i32;
             let o = lane_end_ahead(&g, &vs.routes[i], rp + 1, j.s_out(m), ol, self.opts.lane_end_lookahead, stop_index);
-            vs.merge_cap[i] = r32(o.merge_cap);
+            b.merge_cap = Some(r32(o.merge_cap));
             if o.side == 0 { return; }
-            vs.lane_end_dist[i] = r32(rest + o.dist); vs.lane_end_side[i] = o.side as i8;
+            b.le_dist = r32(rest + o.dist); b.le_side = o.side as i8;
             return;
         }
         if vs.taper[i] > 0.0 && (lat < 0.0 || lat > g.e_lanes[e] as f64 * w) { d_end = f(vs.taper[i]) - f(vs.s[i]); side = if lat < 0.0 { 1 } else { -1 }; }
         else {
             let o = lane_end_ahead(&g, &vs.routes[i], rp, f(vs.s[i]), vs.lane[i] as i32, self.opts.lane_end_lookahead, stop_index);
-            vs.merge_cap[i] = r32(o.merge_cap);
+            b.merge_cap = Some(r32(o.merge_cap));
             if o.side != 0 { side = o.side; d_end = if g.lg.is_some() { o.dist } else { o.dist + TAPER }; }
         }
         if d_end < 0.0 { return; }
-        vs.lane_end_dist[i] = r32(d_end); vs.lane_end_side[i] = side as i8;
+        b.le_dist = r32(d_end); b.le_side = side as i8;
         let sidef = side as f64;
         let merging = (vs.target_lane[i] >= 0 && vs.target_lane[i] != vs.lane[i] && vs.flags[i] & FLAG_BRAIN == 0) || f(vs.heading_rel[i]) * sidef > 0.04;
         let at_node = d_end; // prevEndNode: + LANE_END_TAPER (0) with lane geometry, + 0 otherwise
         let into = if side > 0 { vs.lane_hi[i] > vs.lane[i] } else { vs.lane_lo[i] < vs.lane[i] };
         let gg = (if merging { if into && g.lg.is_some() { d_end + 30.0 } else { at_node } } else { d_end - MERGE_ROOM }) - 0.5 * f(vs.length[i]) - 1.0;
-        if gg < f(vs.gap[i]) { vs.gap[i] = r32(gg); vs.leader[i] = -2; }
+        if gg < f(b.gap) { b.gap = r32(gg); b.leader = -2; }
     }
 
-    fn off_lane_bodies(&mut self, i: usize) {
+    fn off_lane_pure(&self, i: usize, b: &mut Base) {
         let g = &*self.g;
         let vs = &self.vs;
         let e = vs.edge[i];
@@ -307,22 +339,22 @@ impl Sim {
         if lat - he > 0.05 && lat + he < g.e_lanes[e as usize] as f64 * w - 0.05 { return; }
         let Some(list) = self.off_lane.get(&e) else { return };
         let mut best: Option<(f64, i32)> = None;
-        let mut cur = f(vs.gap[i]);
+        let mut cur = f(b.gap);
         for &j in list {
             if j == i || vs.s[j] <= vs.s[i] { continue; }
             if jm::abs(f(vs.lat[j]) - lat) > he + vs.half_extent(j) + 0.3 { continue; }
             let gg = f(vs.s[j]) - f(vs.s[i]) - f(vs.hl[i]) - f(vs.hl[j]);
             if gg < cur { cur = f(r32(gg)); best = Some((gg, j as i32)); }
         }
-        if let Some((gg, j)) = best { self.vs.gap[i] = r32(gg); self.vs.leader[i] = j; }
+        if let Some((gg, j)) = best { b.gap = r32(gg); b.leader = j; }
     }
 
-    pub(crate) fn scene_leader(&mut self, i: usize) {
+    pub(crate) fn scene_pure(&self, i: usize, b: &mut Base) {
         let e = self.vs.edge[i];
         if self.edge_has_crash[e as usize] == 0 { return; }
         let Some(recs) = self.edge_crashes.get(&e) else { return };
         let vs = &self.vs;
-        let mut cur = f(vs.gap[i]);
+        let mut cur = f(b.gap);
         let mut best: Option<(f64, i32)> = None;
         for &ri in recs {
             let r = &self.crashes[ri];
@@ -334,7 +366,7 @@ impl Sim {
             let gg = r.s - f(vs.s[i]) - 0.5 * f(vs.length[i]) - 3.0;
             if gg < cur { cur = f(r32(gg)); best = Some((gg, r.vehicles[0] as i32)); }
         }
-        if let Some((gg, j)) = best { self.vs.gap[i] = r32(gg); self.vs.leader[i] = j; }
+        if let Some((gg, j)) = best { b.gap = r32(gg); b.leader = j; }
     }
 
     fn opposing(&mut self, i: usize, e: usize) {
