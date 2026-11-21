@@ -22,7 +22,11 @@
     "build:surfaces": "node tools/surfaces/build.mjs",
     "build:world-derived": "bash tools/osm/build_world.sh derive",
     "build:osm": "bash tools/osm/build_world.sh osm",
-    "verify:world": "node tools/osm/verify.mjs"
+    "verify:world": "node tools/osm/verify.mjs",
+    "build:tiles": "[ -f data/roads-local.json ] || npm run unpack; [ -f data/junctions.bin ] || npm run build:junctions; [ -f data/lines.bin ] || npm run build:lines; node --max-old-space-size=14000 tools/tiles/build_tiles.mjs",
+    "build:landscape": "([ -f data/roads.json ] && [ -f data/roads-local.json ]) || npm run unpack; node tools/landscape/build_all.mjs",
+    "build:render": "npm run build:tiles && npm run build:landscape",
+    "serve": "python3 tools/serve.py 8000 ."
   },
   "engines": {
     "node": ">=22"

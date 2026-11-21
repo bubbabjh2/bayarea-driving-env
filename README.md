@@ -139,6 +139,31 @@ is the reference, with every factor 1. Full brake from 100 km/h, sedan: asphalt 
 45.6 m, gravel 56.7 m, steel grate 61.7 m, grass 66.4 m. The wet columns of the table are documentation only:
 friction does not change with weather. Embedded rails (cable car, streetcar) are not modelled.
 
+## Viewing the world
+
+```
+npm run build:tiles       # streamed road tiles -> data/tiles/ (~230 MB, ~30 s; builds junctions/lines first if missing)
+npm run build:landscape   # terrain, land cover, buildings, trees, bridge structures -> data/landscape/ (~110 MB, ~5 min)
+npm run serve             # http://127.0.0.1:8000/world.html
+```
+
+Both outputs are gitignored and rebuilt from committed data. `build:landscape` downloads OSM land cover (Overpass,
+attic date pinned), DataSF building footprints and street trees on first run (`tools/landscape/raw-lock.json` holds the
+sha256 of the snapshot used); it uses the 10 m ground from `npm run build:elevation` if present, else the committed 20 m
+compact grid. `world.html` works without the landscape (procedural ground, `?landscape=basic`).
+
+What renders (`src/look/README.md`, `src/stream/README.md`): roads streamed in a 7-level quadtree with LOD cross-fades;
+pavement by surface (`data/surfaces.bin`: asphalt with wear and patches, concrete slabs, pavers, gravel, dirt, steel
+grate, wood), elevated decks in concrete; lane lines, edge and centre lines, stop bars, yield lines and crosswalks
+from the same line set the sim uses; curbs, sidewalks, verges and driveways on city streets; signal heads, ramp meters
+and STOP/YIELD signs driven by the sim's controller; terrain from USGS 3DEP; OSM land cover; water with a depth
+gradient; San Francisco buildings; trees; bridge piers, girders and a Golden Gate model; sky and sun for 05:30-10:00.
+All textures are procedural (NOTICE). three.js r160 is vendored in `vendor/three-0.160.0/`.
+
+Camera: drag to orbit, right-drag to pan, wheel to zoom, W/A/S/D/Q/E to fly, keys 1-9 for presets, T for a tour.
+URL: `?view=Bay%20Bridge`, `?cam=lat,lon,height,distance,azimuth[,lookAtHeight]`, `?look=off|perf`,
+`?sim=gpu&n=100000` (WebGPU sim cars, one constant action for every car; replace with your own via `sim.setActions`).
+
 ## Rebuilding the world
 
 Everything committed under `data/` can be regenerated and checked against pinned hashes:
@@ -157,3 +182,35 @@ Everything committed under `data/` can be regenerated and checked against pinned
   (no attic date reproduces it; a rebuild differs by ~±2–4 % of edges), so the committed flat snapshot
   `data/src/flat/` is the canonical input and everything downstream of it is reproducible.
 * **Synthetic scenarios:** `npm run build:scenarios`.
+
+## Limitations for full perception
+
+What the rendered world does not contain, and what would add it:
+
+* Signal heads, poles, mast arms and signs have one generic shape, not surveyed → survey or per-agency design standards per intersection.
+* One signal head per approach, no per-lane heads; the only arrow is the protected-left lamp column → per-lane heads and arrow sections from turn-lane data.
+* Signal timing is synthetic (fixed-time plans, `timing: "synthetic"`): the visible light state and phase are plausible, not real → agency timing sheets or observed phase data.
+* Traffic controls are OSM-only outside San Francisco and San Jose, with known gaps (see "Traffic controls") → authoritative inventories for the other cities and Caltrans.
+* Buildings exist only in San Francisco (DataSF); elsewhere buildings are a roof tint in the land-cover texture → OSM or county footprints with heights (`tools/landscape/fetch_osm.mjs buildings` supports it per area).
+* Trees are low-poly clay shapes (DataSF street trees, OSM tree nodes, seeded scatter) → species-specific models.
+* No street furniture (street lights, hydrants, poles other than signals, fences, barriers, guard rails, sound walls) → OSM furniture/barrier tags and Caltrans asset data.
+* No parked cars, pedestrians or cyclists (parking lanes and sidewalks are geometry only) → parked-vehicle placement and pedestrian/cyclist agents.
+* Sign text is only STOP and YIELD; no speed-limit, street-name, freeway guide or warning signs → sign inventory (OSM `traffic_sign`, Caltrans) and a sign renderer.
+* Markings are lane lines, edge/centre lines, stop bars, yield lines and crosswalks only; no arrows, text, bike lanes, gore chevrons or parking stalls → marking data (OSM `turn:lanes`, bike-lane tags) and decal geometry.
+* Cars are one two-box clay mesh in four type colours, with body tint for braking/crash; no lights, turn signals or model variety → per-type meshes with lamp emitters driven by the sim state.
+* Textures are procedural and tile at 8 m / 32 m; land cover is 6.45 m/px; one asphalt style per tier → photographic or scanned material sets and decals.
+* LOD changes are dithered cross-fades over 350 ms; buildings dissolve at 2.4-3.2 km, trees beyond ~1.7 km; coarse levels simplify roads to strips/lines → a fixed high-detail radius or higher tile budget for camera work.
+* Lighting covers 05:30-10:00 with clear/golden/overcast skies; no shadow maps (only terrain shadows on the golden preset), no night, no headlights → a full-day sun model, shadow maps and night lighting.
+* Without `npm run build:elevation`, the terrain comes from the committed 20 m compact grid (RMS 0.57 m, max 45.8 m vs the 10 m ground), so the ground can sit off the roads on steep slopes → run the full elevation build.
+* Geometry residuals remain: one 3.7 m lane jump (US-101, node 45147), ~0.6 km of ramp lane centres inside a mainline and ~0.8 km of overlaps with non-joined carriageways (`src/geom/README.md`), lines hidden where drawn carriageways overlap → further carriageway fixes in `src/geom`.
+* No sensor models: no lens distortion, noise, motion blur, rolling shutter or auto-exposure; rendering is a clean pinhole camera → a post-process sensor pass.
+
+## Weather
+
+The environment does not model weather:
+
+* Rain, wet roads, standing water / puddles and hydroplaning: friction does not change with weather; the wet columns of the surface table (`src/sim/surface.js`, `docs/SURFACES.md`) are documented, not wired → a weather state that selects the wet columns per wheel, plus water-film depth for hydroplaning.
+* Snow and ice: not modelled → snow/ice friction entries and a surface-state field.
+* Fog: only a fixed height-scaled distance haze; no fog that limits visibility → a visibility parameter for render and perception range.
+* Low sun and glare: the sun position is drawn, but no glare, bloom or lens flare → a glare/bloom pass tied to sun angle.
+* Visually there are no wet, rain or snow materials, no rain or snow particles, no reflections on wet pavement → wet/snow material variants and particle effects.

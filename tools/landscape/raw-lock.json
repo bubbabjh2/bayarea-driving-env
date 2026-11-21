@@ -1,0 +1,30 @@
+{
+ "about": "sha256 of the raw render-asset downloads in data/landscape/raw/ used for the published build (fetched 2026-10-25). tools/landscape/build_all.mjs reports any mismatch; OSM land cover is queried at the attic date below so a re-fetch should reproduce it, DataSF exports are live datasets and may drift.",
+ "osmAtticDate": "2026-10-25T01:32:18Z",
+ "files": {
+  "osm-landcover/0_0.json": "a7821682a05873cfcebc7278755cf3fcbe96745bd51f9ca7259419fd457c4c3e",
+  "osm-landcover/0_1.json": "b536b47302d38decda823b7fa07a2afe0005c32383cc28ef149b9383a301948e",
+  "osm-landcover/0_2.json": "889e75b2c5705212abbadbe0a188ac7a55b67fd97173221f6dc8bf0d857a856e",
+  "osm-landcover/1_0.json": "bb236f03b1031074ef73037d939f5c18fc3d1bec8cb2c9d1fd58579a19bbb59d",
+  "osm-landcover/1_1.json": "8b24b0ada321604e4163fd8e1bf6f1412e552277fd40a228dbbe307138f73b34",
+  "osm-landcover/1_2.json": "d384f23ee6e77500e92cbbc48cbea04dd40a9907d696d0783d7e1761d764c55a",
+  "osm-landcover/2_0_0_0_0.json": "d22de3a2f36ae02165d677cc1831e80db16d344cf823bd71066edd6dffa91522",
+  "osm-landcover/2_0_0_0_1.json": "3f4d592a716db1ef63c7bd94f5e2dbaff8bb0e68ea85a1504b47a8893bf82708",
+  "osm-landcover/2_0_0.json": "06a89ba2d923a0cdb0f6c1af83799268576b331a8f6160f554490e49c1b8e556",
+  "osm-landcover/2_0.json": "11b3f18ba71d77cdea7f78cdd60a86c1362807742809d9d3abffeb3369694513",
+  "osm-landcover/2_1_0_0.json": "027773848fadbaa5cb57e202866e628ae9064c476054cd8ef08f0e7a09920f41",
+  "osm-landcover/2_1_0_1.json": "25e6a64cb741f73a2dcc6aff7ad44357d3785e8b44f080b58929a9f38654897b",
+  "osm-landcover/2_1_0_2.json": "cd52949cc3707bbc7e9e16ebe90e2e06fe4bed587281710dcf0c9cd1ec55b02a",
+  "osm-landcover/2_1_0_3.json": "54472a53eb39bd36406ed7a4224d6fc600586244639a753031865ce5db4fb948",
+  "osm-landcover/2_1_1.json": "02db58fd5813b4c15e8793437d8f28587ae7d4b0ca89d1130ae02a305da42107",
+  "osm-landcover/2_1_2.json": "2f06a6a35b9f06c9920ad418bd667be10b42eb12fbf19f561528cf4b1c44a997",
+  "osm-landcover/2_1_3.json": "51bde212cff679be324136b60a9436191b52ce1bf7c941d49b75e282362d3529",
+  "osm-landcover/2_2.json": "0503bc5725d5bf868b37f36120906fed9a90947841abb07e6c3ef65aeb4b6d02",
+  "sf-buildings/page_0.json": "90719a301c7a6f3a6d690aaeb606b290ae25601493108e40f6e60f37c09b56f5",
+  "sf-buildings/page_1.json": "2bbeb4e58f8042aab5ff34089e0b827c57a316dc881b511446a0e4da1641086a",
+  "sf-buildings/page_2.json": "08ce75c0daf3726ae135284f8390a4d8d98a2ed847edb9af03499304fdfedb7c",
+  "sf-buildings/page_3.json": "acde027647c7c84643425f004ad8abe193b42063479d3011ac62ffa14e5c78d2",
+  "sf-buildings/page_4.json": "78ce73c90e8916c490d8a1a6c1dd656008daaf9cb7c4f65d6f9c98e606d56c3d",
+  "sf-trees/trees.json": "71afd46ed570ab3df09ddb3106b34c3eb95d7b3583fdb3b9cc8e8657596c1072"
+ }
+}
