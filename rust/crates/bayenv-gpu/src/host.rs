@@ -160,79 +160,99 @@ impl OdLru {
     fn edges(&self) -> usize { self.map.values().map(|e| e.0.as_ref().map_or(0, |r| r.len())).sum() }
 }
 
-/// Shared state of the prefetch workers: the OD cache, the ODs being routed, worker routers.
+/// Shared state of the prefetch workers: ODs in flight and routed-but-not-departed (`ready`, with the number of
+/// departures still to take them: the JS `done` map, keyed by OD), the optional OD cache, worker routers.
 struct RouteShared { od: std::sync::Mutex<RouteState>, ready: std::sync::Condvar, routers: std::sync::Mutex<Vec<bayenv_world::nav::Router>>, world: Arc<World> }
-struct RouteState { cache: OdLru, inflight: HashSet<u64>, computed: u64, worker_ns: u64 }
+struct RouteState { cache: OdLru, cache_on: bool, inflight: HashMap<u64, u32>, done: HashMap<u64, (Option<Arc<Vec<i32>>>, u32)>, computed: u64, worker_ns: u64 }
+type Route = Option<Arc<Vec<i32>>>;
 
 /// Streaming route statistics (`RouteProvider` + prefetch pool).
 #[derive(Clone, Copy, Debug, Default)]
 pub struct RouteStats {
-    /// departures that asked for a route; served from the OD cache (incl. prefetched routes); computed on the sim thread
+    /// departures that asked for a route; served from a prefetch (`done`) or the OD cache; computed on the sim thread
     pub lookups: u64, pub hits: u64, pub misses: u64,
+    /// served from the OD cache (subset of hits)
+    pub cache_hits: u64,
     /// routes computed by the prefetch workers; departures that found their route still being computed and waited
     pub prefetched: u64, pub waited: u64,
-    /// wall time the sim thread spent routing (misses) / waiting for workers; worker CPU time routing (ns)
+    /// wall time the sim thread spent routing (misses) / waiting for workers; worker time routing (ns)
     pub route_ns: u64, pub wait_ns: u64, pub worker_ns: u64,
-    pub cache_len: usize, pub cache_edges: usize,
+    /// sim-thread time in prefetch / get bookkeeping incl. lock waits (ns)
+    pub lock_ns: u64,
+    pub cache_len: usize, pub cache_edges: usize, pub done_len: usize,
 }
 
 fn od_key(from: i32, to: i32) -> u64 { (from as u32 as u64) << 32 | to as u32 as u64 }
-fn astar(r: &mut bayenv_world::nav::Router, from: i32, to: i32) -> Option<Arc<Vec<i32>>> {
+fn astar(r: &mut bayenv_world::nav::Router, from: i32, to: i32) -> Route {
     r.route(from as usize, to as usize).map(|v| Arc::new(v.into_iter().map(|x| x as i32).collect::<Vec<i32>>()))
 }
 fn stream_router(w: &World) -> bayenv_world::nav::Router {
     bayenv_world::nav::Router::new(&w.graph, &bayenv_world::nav::RouterOpts { weight: 1.25, cache_max: 0, ..Default::default() })
 }
 
-/// `RouteProvider` (stream.js): A* (weight 1.25) with an OD LRU cache, plus the prefetch design of `RouteWorkers`
+/// `RouteProvider` (stream.js): A* (weight 1.25), optional OD LRU cache, plus the prefetch design of `RouteWorkers`
 /// (src/gpu/streamPack.js): `prefetch` queues departures ahead of time on a pool of worker threads (one A* router
-/// each, preallocated search state), results land in the shared OD cache. `get` is deterministic: a route that is
-/// still being computed is waited for (never the JS `waitingRoute` delay), one that was not prefetched is computed on
-/// the calling thread, so every commuter gets the same route at the same step as with `threads = 0` (serial).
+/// each, preallocated search state); a finished route waits in `done` until its departures take it. `get` is
+/// deterministic: a route still being computed is waited for (never the JS `waitingRoute` delay), one that was not
+/// prefetched is computed on the calling thread, so every commuter gets the same route at the same step as with
+/// `threads = 0` (serial). The cache never changes a route (A* is deterministic), only how often A* runs.
 pub struct RouteProvider {
     router: bayenv_world::nav::Router, shared: Arc<RouteShared>, pool: Option<rayon::ThreadPool>,
     batch: Vec<(u64, i32, i32)>, pub stats: RouteStats,
 }
 impl RouteProvider {
     const BATCH: usize = 16;
-    /// threads = 0: serial (route at departure); n: n prefetch workers.
-    pub fn new(w: &Arc<World>, threads: usize) -> RouteProvider { Self::with_cache(w, threads, 200000) }
-    pub fn with_cache(w: &Arc<World>, threads: usize, cache_size: usize) -> RouteProvider {
+    /// threads = 0: serial (route at departure); n: n prefetch workers. cache_size 0: no OD cache.
+    pub fn new(w: &Arc<World>, threads: usize, cache_size: usize) -> RouteProvider {
         let pool = (threads > 0).then(|| rayon::ThreadPoolBuilder::new().num_threads(threads).thread_name(|i| format!("bayenv-route-{i}")).build().expect("route pool"));
         RouteProvider { router: stream_router(w), pool, batch: Vec::new(), stats: RouteStats::default(),
-            shared: Arc::new(RouteShared { od: std::sync::Mutex::new(RouteState { cache: OdLru::new(cache_size), inflight: HashSet::new(), computed: 0, worker_ns: 0 }),
+            shared: Arc::new(RouteShared { od: std::sync::Mutex::new(RouteState { cache: OdLru::new(cache_size), cache_on: cache_size > 0, inflight: HashMap::new(), done: HashMap::new(), computed: 0, worker_ns: 0 }),
                 ready: std::sync::Condvar::new(), routers: std::sync::Mutex::new(Vec::new()), world: w.clone() }) }
     }
     pub fn threads(&self) -> usize { self.pool.as_ref().map_or(0, |p| p.current_num_threads()) }
-    /// The route of (from, to): cache, else wait for a prefetch in flight, else A* here.
-    pub fn get(&mut self, from: i32, to: i32) -> Option<Arc<Vec<i32>>> {
+    pub fn cache_size(&self) -> usize { let st = self.shared.od.lock().unwrap(); if st.cache_on { st.cache.cap } else { 0 } }
+    fn take_done(st: &mut RouteState, key: u64) -> Option<Route> {
+        let e = st.done.get_mut(&key)?; let r = e.0.clone();
+        e.1 = e.1.saturating_sub(1); if e.1 == 0 { st.done.remove(&key); }
+        Some(r)
+    }
+    /// The route of (from, to): a finished prefetch, else wait for one in flight, else the cache, else A* here.
+    pub fn get(&mut self, from: i32, to: i32) -> Route {
         let key = od_key(from, to); self.stats.lookups += 1;
+        let t_lock = std::time::Instant::now();
         {
             let mut st = self.shared.od.lock().unwrap();
-            if let Some(r) = st.cache.get(key) { self.stats.hits += 1; return r; }
-            if st.inflight.contains(&key) {
+            if st.inflight.contains_key(&key) {
                 let t0 = std::time::Instant::now();
-                while st.inflight.contains(&key) { st = self.shared.ready.wait(st).unwrap(); }
+                while st.inflight.contains_key(&key) { st = self.shared.ready.wait(st).unwrap(); }
                 self.stats.wait_ns += t0.elapsed().as_nanos() as u64; self.stats.waited += 1;
-                if let Some(r) = st.cache.get(key) { self.stats.hits += 1; return r; }
             }
+            if let Some(r) = Self::take_done(&mut st, key) { self.stats.hits += 1; self.stats.lock_ns += t_lock.elapsed().as_nanos() as u64; return r; }
+            if st.cache_on { if let Some(r) = st.cache.get(key) { self.stats.hits += 1; self.stats.cache_hits += 1; self.stats.lock_ns += t_lock.elapsed().as_nanos() as u64; return r; } }
         }
+        self.stats.lock_ns += t_lock.elapsed().as_nanos() as u64;
         self.stats.misses += 1;
         let t0 = std::time::Instant::now();
         let r = astar(&mut self.router, from, to);
         self.stats.route_ns += t0.elapsed().as_nanos() as u64;
-        self.shared.od.lock().unwrap().cache.insert(key, r.clone());
+        let mut st = self.shared.od.lock().unwrap();
+        if st.cache_on { st.cache.insert(key, r.clone()); }
         r
     }
-    /// Queue (from, to) for the workers (no-op when serial, cached or already in flight).
+    /// Queue (from, to) for the workers (no-op when serial; joins a route in flight or finished for the same OD).
     pub fn prefetch(&mut self, from: i32, to: i32) {
         if self.pool.is_none() { return; }
         let key = od_key(from, to);
+        let t_lock = std::time::Instant::now();
         {
             let mut st = self.shared.od.lock().unwrap();
-            if st.cache.contains(key) || !st.inflight.insert(key) { return; }
+            let st = &mut *st;
+            if let Some(w) = st.inflight.get_mut(&key) { *w += 1; }
+            else if let Some(e) = st.done.get_mut(&key) { e.1 += 1; }
+            else if st.cache_on && st.cache.contains(key) {}
+            else { st.inflight.insert(key, 1); self.batch.push((key, from, to)); }
         }
-        self.batch.push((key, from, to));
+        self.stats.lock_ns += t_lock.elapsed().as_nanos() as u64;
         if self.batch.len() >= Self::BATCH { self.flush(); }
     }
     pub fn flush(&mut self) {
@@ -247,7 +267,10 @@ impl RouteProvider {
                 let route = astar(&mut r, from, to);
                 let ns = t0.elapsed().as_nanos() as u64;
                 let mut st = sh.od.lock().unwrap();
-                st.cache.insert(key, route); st.inflight.remove(&key); st.computed += 1; st.worker_ns += ns;
+                let want = st.inflight.remove(&key).unwrap_or(0);
+                if st.cache_on { st.cache.insert(key, route.clone()); }
+                if want > 0 { st.done.insert(key, (route, want)); }
+                st.computed += 1; st.worker_ns += ns;
                 drop(st); sh.ready.notify_all();
             }
             sh.routers.lock().unwrap().push(r);
@@ -259,9 +282,11 @@ impl RouteProvider {
         let mut st = self.shared.od.lock().unwrap();
         while !st.inflight.is_empty() { st = self.shared.ready.wait(st).unwrap(); }
     }
+    /// Drop finished prefetches nobody will take (resetDay: the departures are queued again).
+    pub fn clear_done(&mut self) { self.shared.od.lock().unwrap().done.clear(); }
     pub fn stats(&self) -> RouteStats {
         let st = self.shared.od.lock().unwrap();
-        RouteStats { prefetched: st.computed, worker_ns: st.worker_ns, cache_len: st.cache.len(), cache_edges: st.cache.edges(), ..self.stats }
+        RouteStats { prefetched: st.computed, worker_ns: st.worker_ns, cache_len: st.cache.len(), cache_edges: st.cache.edges(), done_len: st.done.len(), ..self.stats }
     }
 }
 
@@ -425,8 +450,9 @@ impl GpuSim {
     /// `setStreaming(table, { stations, deltas })`: commuters stream in at departure, routes from a RouteProvider.
     pub fn set_streaming(&mut self, table: Arc<CommuterTable>, stations: bool, deltas: Option<Arc<Vec<f32>>>) {
         self.x.stream_deltas = deltas;
-        let threads = self.opts.route_threads;
-        if self.x.provider.as_ref().is_none_or(|p| p.threads() != threads) { self.x.provider = Some(RouteProvider::new(&self.world, threads)); }
+        let (threads, cache) = (self.opts.route_threads, self.opts.route_cache);
+        if self.x.provider.as_ref().is_none_or(|p| p.threads() != threads || p.cache_size() != cache) { self.x.provider = Some(RouteProvider::new(&self.world, threads, cache)); }
+        else if let Some(p) = self.x.provider.as_mut() { p.clear_done(); }
         let n = table.n;
         self.resize_agents(n);
         self.x.trips.clear(); self.x.trip_ptr = 0;
@@ -874,6 +900,7 @@ impl GpuSim {
         self.edge_speed_ema.clear(); self.edge_speed_order.clear(); self.traffic_penalty.clear(); self.penalty_order.clear(); self.pending_penalty = None; self.next_traffic = -1e9;
         if let Some(t) = self.x.table.clone() {
             self.x.table_ptr = t.index_at(start - 3600.0); self.x.pending_stream.clear(); self.x.prefetch_ptr = self.x.table_ptr;
+            if let Some(p) = self.x.provider.as_mut() { p.drain(); p.clear_done(); }
             self.x.fuel_left.iter_mut().for_each(|x| *x = -1.0); self.x.outcome.iter_mut().for_each(|x| *x = 0);
             self.x.arena = Some(Arena { free: HashMap::new(), slot: vec![-1; self.cap], cls: vec![0; self.cap] }); self.route_words = 1;
         } else if self.x.pop.is_some() {
@@ -916,6 +943,17 @@ impl GpuSim {
     pub fn queue_high(&self) -> usize { self.queue_high }
     pub fn free_len(&self) -> usize { self.free.len() }
     pub fn queue_free_list(&self) -> &[u32] { &self.queue_free }
+    /// Diagnostics: (from node, goal node, plain) of the queued reroutes (plain = missed exit or no closures / traffic
+    /// penalties: the query `Router::route` can cache; otherwise it depends on the current avoid / penalty sets).
+    /// Also (slot, queue time bits) to identify entries across calls.
+    pub fn reroute_ods(&self) -> Vec<(u32, u32, bool, u32, u64)> {
+        let g = &self.world.graph;
+        self.reroute_queue.iter().filter_map(|r| {
+            let route = self.route_of(r.slot); if route.is_empty() || self.slot_trip[r.slot as usize] != r.trip { return None; }
+            let goal = g.to[(route[route.len() - 1] & 0xFFFFF) as usize]; let from = g.to[r.edge as usize];
+            Some((from as u32, goal as u32, r.missed || (self.closed_edges.is_empty() && self.traffic_penalty.is_empty()), r.slot, r.t.to_bits()))
+        }).collect()
+    }
     pub fn route_of_slot(&self, slot: u32) -> Vec<u32> { self.route_of(slot).to_vec() }
     pub fn edge_head(&self) -> &[u32] { &self.edge_head }
     pub fn scene_rows(&self) -> Vec<(u32, u32, f64, i32, f64, &'static str)> { self.active.iter().map(|&i| { let r = &self.crashes[i]; (r.edge, r.lane_mask, r.s, r.block, r.squeeze_at, r.cause) }).collect() }

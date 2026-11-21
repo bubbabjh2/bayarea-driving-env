@@ -93,6 +93,8 @@ pub struct GpuOptions {
     pub route_threads: usize,
     /// streaming: prefetch horizon in sim seconds (JS setStreaming routeAhead = 300)
     pub route_ahead: f64,
+    /// streaming: OD route cache entries (JS RouteProvider cacheSize 200000; 0 = no cache). Never changes a route
+    pub route_cache: usize,
 }
 #[derive(Clone, Copy, Debug)]
 pub struct Features { pub lane_changes: bool, pub accidents: bool, pub fuel: bool, pub collisions: bool, pub yield_: bool, pub policy: bool, pub zip_fix: bool, pub empty: bool }
@@ -127,7 +129,7 @@ impl Default for GpuOptions {
         GpuOptions { capacity: 131072, dt: 0.05, start_time: 5.0 * 3600.0, seed: 1, obs: ObsMode::V2, steer_rate: false, decide_every: 1, features: Features::default(),
             controls: true, junctions: true, table_bits: 18, contact_cap: 131072, ev_cap: 16384, spawn_queue: 16384, op_cap: 16384, max_blocks: 4096, route_slack: 1 << 22,
             resolve_rounds: 12, progress_weight: 1.0, jerk_weight: 0.5, jerk_reward: false, grade_obs: true, squeeze_delay: 15.0 * 60.0, deadlock_break: 0, reroute: true, keep_events: false, record_events: true, record_share: false, missed_at_out_edge: false, indirect_resolve: true, fused_resolve: true, sorted_order: true, fast_scan: true, fast_search: true, cpu_connector_join: true, contact_tangent: true, zero_init_workgroup: false, profile: false, return_trips: true, refuel_budget_ms: 4.0,
-            route_threads: std::thread::available_parallelism().map_or(1, |n| n.get()), route_ahead: 300.0 }
+            route_threads: std::thread::available_parallelism().map_or(1, |n| n.get()), route_ahead: 300.0, route_cache: 0 }
     }
 }
 
