@@ -233,6 +233,7 @@ pub struct GpuSim {
     out_staging: Option<wgpu::Buffer>,
     /// per-slot event records (opts.record_events)
     pub rec: crate::events::EventLog,
+    rec_mark: usize,
     /// a submitted batch whose readback / events are processed lazily (`run_steps_async`, `sync`)
     pending: Option<Pending>,
     io_host: Vec<u32>,
@@ -349,7 +350,7 @@ impl GpuSim {
             refuel_queue: Vec::new(), reroute_queue: Default::default(), last_reroute: HashMap::new(), lot: 0, new_pose: false, crashes: Vec::new(), active: Vec::new(),
             counters: Counters::default(), gpu_stats: [0; 64], events: Vec::new(), closed_key: None, closed_n: 0, closed_edges: Vec::new(),
             edge_speed_ema: HashMap::new(), edge_speed_order: Vec::new(), traffic_penalty: HashMap::new(), penalty_order: Vec::new(), pending_penalty: None, next_traffic: -1e9,
-            router: None, packer: None, out_staging: None, rec: Default::default(), pending: None, staging, io_host: vec![0; io_words], profiler: None, js_stages: false, fast_search_ok: false, x: Default::default(), blob, gpu, opts,
+            router: None, packer: None, out_staging: None, rec: Default::default(), rec_mark: 0, pending: None, staging, io_host: vec![0; io_words], profiler: None, js_stages: false, fast_search_ok: false, x: Default::default(), blob, gpu, opts,
         };
         if !use_j { sim.blob.j_m = None; }
         if sim.opts.fast_search { sim.fast_search_ok = sim.polylines_monotone(); if !sim.fast_search_ok { eprintln!("bayenv-gpu: fast_search off (an edge / connector polyline has decreasing cumulative distance)"); } }
@@ -381,6 +382,8 @@ impl GpuSim {
         });
         for (sp, k) in specs.iter().zip(out) { self.k.insert(sp.label, k?); }
         self.k.insert("contactArgs", self.gpu.kernel("contactArgs", kernels::host_raw("contact_args"), "main")?);
+        { let code = crate::defines::prefix(self.opts.obs, self.cap) + &kernels::load("common") + "\n" + kernels::host_raw("step_mark");
+          self.k.insert("stepMark", self.gpu.kernel("stepMark", &code, "stepMark")?); }
         if self.opts.sorted_order {
             self.k.insert("listArgs", self.gpu.kernel("listArgs", kernels::host_raw("list_args"), "main")?);
             let only = std::env::var("BAYENV_SORTED").ok();   // diagnostics: comma list of kernels to sort
@@ -550,6 +553,7 @@ impl GpuSim {
             d.push(Dispatch { stage, kernel: k, bg: if k == $k { $bg.to_string() } else { k.to_string() }, x })
         } } }
         push!("build.tick", "build.tick", 1);
+        if self.opts.record_events && !js { push!("stepMark", "stepMark", 1); }
         if first && op_count > 0 { stage = "ops"; push!("ops", "ops", g(op_count, 64)); }
         let fresh = first && self.new_pose;
         if self.queue_high > 0 || self.lot > 0 || fresh {
@@ -708,9 +712,8 @@ impl GpuSim {
         self.sync();
         let t_end = self.time + n as f64 * self.dt;
         self.enqueue_spawns(t_end);
-        let rec0 = self.rec.len();
+        self.rec_mark = self.rec.len();
         self.scenes();
-        if self.opts.record_events { self.rec.sort_from(rec0); }
         self.pumps();
         self.process_refuels();
         let mut sampled = false;
@@ -840,7 +843,6 @@ impl GpuSim {
         let m = n.min(cap); let base = io::EVDATA;
         for k in 0..m { let t = io[base + 4 * k];
             if t & 255 == ev::WRECK { self.wrecks.insert(io[base + 4 * k + 1], Wreck { lo: (t >> 8) & 15, hi: (t >> 12) & 15, ty: (t >> 16) & 255, edge: io[base + 4 * k + 2], s: f32::from_bits(io[base + 4 * k + 3]) as f64 }); } }
-        let rec0 = self.rec.len();
         if self.opts.record_events { self.record_batch(&io[base..base + 4 * m]); }
         for k in 0..m {
             let o = base + 4 * k; let t = io[o] & 255; let slot = io[o + 1]; let a = io[o + 2]; let b = io[o + 3];
@@ -875,7 +877,7 @@ impl GpuSim {
                 _ => {}
             }
         }
-        if self.opts.record_events { self.rec.sort_from(rec0); }   // canonical (slot, kind) order per batch
+        if self.opts.record_events { let m0 = self.rec_mark.min(self.rec.len()); self.rec.sort_from(m0); self.rec_mark = self.rec.len(); }   // canonical (step, slot, kind) order
         self.io_host = io;
     }
 
@@ -883,7 +885,7 @@ impl GpuSim {
     /// gathered readback of the involved slots' veh / par records for progress, exact arrival time and lateness.
     fn record_batch(&mut self, evs: &[u32]) {
         use crate::events::kind as K;
-        let first = self.rec.len(); let t_now = self.time;
+        let first = self.rec.len(); let t_now = self.time; let mut st: u64 = self.step; let mut t_step = t_now;
         let mut new_crash: HashSet<u32> = HashSet::new();
         let mut tripx: HashMap<u32, (f32, f32)> = HashMap::new();
         let mut share: HashMap<u32, f32> = HashMap::new();
@@ -891,10 +893,11 @@ impl GpuSim {
         for e in evs.chunks_exact(4) {
             let (t, slot, a, b) = (e[0] & 255, e[1], e[2], e[3]);
             match t {
+                254 => { st = a as u64; t_step = self.time - (self.step.saturating_sub(st)) as f64 * self.dt; }   // step marker (kernels/step_mark.wgsl): the following events are of step a
                 ev::TRIPX => { tripx.insert(slot, (f32::from_bits(a), f32::from_bits(b))); }
                 ev::CRASHPEN => { share.insert(slot, ((b >> 16) & 255) as f32 / 255.0); }
                 ev::ARRIVE => {
-                    self.rec.push(t_now, K::ARRIVED, slot, agent(&self.slot_trip, slot), -1, f32::NAN, f32::NAN, f32::NAN);
+                    self.rec.push(st, t_step, K::ARRIVED, slot, agent(&self.slot_trip, slot), -1, f32::NAN, f32::NAN, f32::NAN);
                     if let Some(&(m, d)) = tripx.get(&slot) { let i = self.rec.len() - 1; self.rec.trip_m[i] = m; self.rec.trip_s[i] = d; }
                 }
                 ev::CRASH | ev::CONTACT => {
@@ -903,13 +906,13 @@ impl GpuSim {
                     let pair: Vec<(u32, u32, f32, f32)> = if a != NONE { vec![(slot, a, di, dj), (a, slot, dj, di)] } else { vec![(slot, NONE, di, f32::NAN)] };
                     for (me, other, d, od) in pair {
                         let k = if t == ev::CRASH && fresh(self, me, &new_crash) { new_crash.insert(me); K::CRASHED } else { K::CONTACT };
-                        self.rec.push(t_now, k, me, agent(&self.slot_trip, me), if other == NONE { -1 } else { other as i64 }, d, od, share.remove(&me).unwrap_or(f32::NAN));
+                        self.rec.push(st, t_step, k, me, agent(&self.slot_trip, me), if other == NONE { -1 } else { other as i64 }, d, od, share.remove(&me).unwrap_or(f32::NAN));
                     }
                 }
-                ev::STRANDED => self.rec.push(t_now, K::STRANDED, slot, agent(&self.slot_trip, slot), -1, f32::NAN, f32::NAN, f32::NAN),
-                ev::SPAWN => self.rec.push(t_now, K::SPAWNED, slot, agent(&self.slot_trip, slot), -1, f32::NAN, f32::NAN, f32::NAN),
-                ev::MISSED => self.rec.push(t_now, K::MISSED_EXIT, slot, agent(&self.slot_trip, slot), -1, f32::NAN, f32::NAN, f32::NAN),
-                ev::CTLVIOL => self.rec.push(t_now, K::VIOLATION, slot, agent(&self.slot_trip, slot), -1, f32::NAN, f32::NAN, f32::NAN),
+                ev::STRANDED => self.rec.push(st, t_step, K::STRANDED, slot, agent(&self.slot_trip, slot), -1, f32::NAN, f32::NAN, f32::NAN),
+                ev::SPAWN => self.rec.push(st, t_step, K::SPAWNED, slot, agent(&self.slot_trip, slot), -1, f32::NAN, f32::NAN, f32::NAN),
+                ev::MISSED => self.rec.push(st, t_step, K::MISSED_EXIT, slot, agent(&self.slot_trip, slot), -1, f32::NAN, f32::NAN, f32::NAN),
+                ev::CTLVIOL => self.rec.push(st, t_step, K::VIOLATION, slot, agent(&self.slot_trip, slot), -1, f32::NAN, f32::NAN, f32::NAN),
                 _ => {}
             }
         }
@@ -962,7 +965,7 @@ impl GpuSim {
             if tr & 1 == 0 && self.x.outcome[id] == 0 { self.x.outcome[id] = match outcome { "arrived" => 1, "crash" => 2, "stranded" => 3, "stuck" => 4, _ => 0 }; }
         }
         if self.opts.record_events && (outcome == "towed" || outcome == "cleared") {
-            self.rec.push(self.time, crate::events::kind::CLEARED, slot, tr as i64, -1, f32::NAN, f32::NAN, f32::NAN);
+            self.rec.push(self.step + 1, self.time, crate::events::kind::CLEARED, slot, tr as i64, -1, f32::NAN, f32::NAN, f32::NAN);
         }
         self.slot_trip[slot as usize] = -2;
         self.arena_free(slot);

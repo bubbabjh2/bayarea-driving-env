@@ -39,6 +39,7 @@ pub fn load(name: &str) -> String { resolve_includes(raw(name)) }
 /// Kernels of this crate (`crates/bayenv-gpu/kernels/`): modified copies / helpers, see the header of each file.
 pub const HOST_SOURCES: &[(&str, &str)] = &[
     ("contact_args", include_str!("../kernels/contact_args.wgsl")),
+    ("step_mark", include_str!("../kernels/step_mark.wgsl")),
     ("resolve_fused", include_str!("../kernels/resolve_fused.wgsl")),
     ("sorted", include_str!("../kernels/sorted.wgsl")),
     ("list_args", include_str!("../kernels/list_args.wgsl")),
