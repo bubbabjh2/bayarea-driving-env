@@ -1,7 +1,7 @@
 //! nav::Router (4-ary heap + goal-bound skipping + tie fallback, SCC no-path check, batch, shared OD cache) vs
 //! the pre-optimisation router (nav::router_ref, itself checked against the JS by nav_oracle.rs): identical paths
 //! and "no path" results on random queries. `ROUTER_EQ_N=<OD pairs>` (default 600; each pair gives 6 queries:
-//! plain w 1.25, plain w 1, avoid, penalty, avoid + penalty, penalty with non-finite / NaN / negative values).
+//! plain w 1.25, plain w 1, avoid, penalty, avoid + penalty, penalty with +inf / NaN values).
 //! Skips when the data are absent.
 use bayenv_world::nav::router_ref::RefRouter;
 use bayenv_world::nav::{RouteQuery, Router, RouterOpts};
@@ -55,7 +55,7 @@ fn router_equals_reference() {
                 if let Some(&e) = base.first() { pen.push((e, 3.0)); }
                 let mut pen_odd = pen.clone();
                 if let Some(&e) = base.get(base.len() / 2) { pen_odd.push((e, f64::INFINITY)); }
-                pen_odd.push(((r() % e_n) as u32, f64::NAN)); pen_odd.push(((r() % e_n) as u32, -0.1)); // negative, but every edge keeps a positive cost (jp >= 0.2 s): no negative cycles
+                pen_odd.push(((r() % e_n) as u32, f64::NAN));
                 let av_small: Vec<u32> = avoid.iter().step_by(2).copied().collect();
                 let qs = [(false, avoid.clone(), vec![]), (false, vec![], pen.clone()), (false, av_small, pen.clone()), (false, vec![], pen_odd)];
                 v.push((Q { s, g: gl, w1: false, avoid: vec![], pen: vec![] }, plain));
@@ -168,4 +168,29 @@ fn ties_fall_back_and_match_reference() {
     }
     eprintln!("ties: {cnt} queries ({none} no path), {fb} fast-path tie fallbacks");
     assert!(fb > 100, "the grid should produce ties");
+}
+
+/// A negative penalty is clamped to 0 (the JS would loop forever on this negative-cost cycle): the query returns
+/// promptly with the route of the same query without that penalty. Debug builds assert instead.
+#[test]
+#[cfg_attr(debug_assertions, should_panic(expected = "negative route penalty"))]
+fn negative_penalty_cycle_returns() {
+    // 0 <-> 1 <-> 2 line, both directions, 10 m at 10 m/s
+    let n = 3;
+    let mut g = SimGraph { node_count: n, nx: vec![0.0, 10.0, 20.0], nz: vec![0.0; 3], max_speed: 10.0, ..Default::default() };
+    let edges = [(0u32, 1u32), (1, 0), (1, 2), (2, 1)];
+    g.edge_count = edges.len();
+    for &(a, b) in &edges { g.from.push(a); g.to.push(b); g.length.push(10.0); g.speed_limit.push(10.0); g.rank.push(0); }
+    g.out_start = vec![0, 1, 3, 4]; g.out_edges = vec![0, 1, 2, 3];
+    g.in_start = vec![0, 1, 3, 4]; g.in_edges = vec![1, 0, 3, 2];
+    g.bounds = Bounds { min_x: 0.0, max_x: 20.0, min_z: 0.0, max_z: 0.0 };
+    let o = RouterOpts { weight: 1.25, cache_max: 0, ..Default::default() };
+    let mut r = Router::new(&g, &o);
+    let pen = [(0u32, -100.0), (1, -100.0), (3, f64::NEG_INFINITY)]; // cycle 0 -> 1 -> 0 costs -196 s
+    let t = Instant::now();
+    let got = r.route_with(0, 2, &RouteQuery { avoid: &[], penalty: &pen });
+    assert!(t.elapsed().as_secs_f64() < 1.0);
+    assert_eq!(got, Some(vec![0, 2]));
+    let qs = [(0usize, 2usize, RouteQuery { avoid: &[], penalty: &pen }); 8];
+    assert!(r.route_batch(&qs).iter().all(|p| p.as_deref() == Some(&[0u32, 2][..])));
 }

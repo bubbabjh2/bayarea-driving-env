@@ -84,6 +84,8 @@ r2.route(start, goal); r2.route_with(start, goal, &q); r2.route_into(start, goal
   * layout only (cannot change results): Morton node numbering, CSR out-edges carrying the head node's coordinates
     and out-edge span (heap entries carry the span, the pushed node's out-edges are prefetched), `gen << 1 | closed`
     stamps, junction penalty by rank from a 256-entry table (same expression as the JS).
+* Penalty guard: a negative penalty (incl. -inf) is clamped to 0 (`debug_assert!` in debug builds) in every entry
+  point, since the JS can loop forever on a negative-cost cycle; NaN = none and +inf behave as in the JS (they terminate).
 * Not used, because they change the result: bidirectional search, contraction hierarchies, ALT / landmark
   heuristics, decrease-key with a different tie rule. The JS route is not "the" shortest path but the output of
   one weighted-A* expansion order (w > 1: suboptimal, reopenings, lazy deletion); any search that expands other nodes or in
@@ -94,7 +96,7 @@ r2.route(start, goal); r2.route_with(start, goal, &q); r2.route_into(start, goal
   path" only where plain-graph reachability already does (handled by the SCC test).
 * Tests: `tests/nav_oracle.rs` (JS dumps: 5250 queries), `tests/router_equiv.rs` (vs the pre-optimisation router
   `nav::router_ref`, feature `router-ref`: random OD pairs x 6 variants incl. no-path, avoid, penalty, both,
-  NaN / inf / negative penalties, single + batch + cached, exact-only chunks; `ROUTER_EQ_N=17000` = 102k queries;
+  NaN / inf penalties, single + batch + cached, exact-only chunks; `ROUTER_EQ_N=17000` = 102k queries;
   plus a tie-heavy synthetic grid with banned hops). Bench: `cargo run --release -p bayenv-world --example router_bench -- ../data oracle/nav/nav.json`.
 
 ## Data formats
