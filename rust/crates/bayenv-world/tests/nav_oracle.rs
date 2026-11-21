@@ -8,7 +8,7 @@ use std::time::Instant;
 fn setup() -> Option<(World, serde_json::Value)> {
     let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../..");
     let f = root.join("rust/oracle/nav/nav.json");
-    if !f.exists() || !root.join("data/roads.meta.json").exists() { eprintln!("skip: no oracle {}", f.display()); return None; }
+    if !f.exists() || !root.join("data/roads.meta.json").exists() { bayenv_world::oracle::skip("nav_oracle", &format!("no {} or no data/roads.meta.json", f.display())); return None; }
     let w = World::load(root.join("data")).expect("world");
     let v: serde_json::Value = serde_json::from_slice(&std::fs::read(f).unwrap()).unwrap();
     Some((w, v))

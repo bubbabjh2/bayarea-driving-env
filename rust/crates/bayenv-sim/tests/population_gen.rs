@@ -43,7 +43,9 @@ pub fn compare(r: &Population, j: &Population) -> usize {
 
 #[test]
 fn population_matches_js() {
-    let Ok(root) = std::env::var("BAYENV_POP_DIR") else { eprintln!("skip: BAYENV_POP_DIR unset"); return; };
+    // BAYENV_POP_DIR, else rust/oracle/sim/pop (make_oracle.sh)
+    let root = std::env::var("BAYENV_POP_DIR").unwrap_or_else(|_| bayenv_world::oracle::oracle_root().join("sim/pop").to_string_lossy().to_string());
+    if bayenv_world::oracle::dirs_with(std::path::Path::new(&root), "pop.pack").is_empty() { bayenv_world::oracle::skip("population_gen", &format!("no */pop.pack under {root} (BAYENV_POP_DIR)")); return; }
     let only = std::env::var("BAYENV_POP_ONLY").ok();
     let mut dirs: Vec<_> = std::fs::read_dir(&root).unwrap().filter_map(|e| e.ok()).map(|e| e.path())
         .filter(|p| p.join("pop.pack").exists() && p.join("world.pack").exists()).collect();

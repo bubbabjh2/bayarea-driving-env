@@ -20,12 +20,12 @@ fn counts(log: &bayenv_world::events::EventLog, c: &mut [usize; 10], barrier: &m
 #[test]
 fn cpu_and_gpu_agree_in_aggregate() {
     let data = Path::new("../../../data");
-    let world = match bayenv_world::World::load(data) { Ok(w) => Arc::new(w), Err(e) => { eprintln!("skip: world: {e}"); return } };
+    let world = match bayenv_world::World::load(data) { Ok(w) => Arc::new(w), Err(e) => { bayenv_world::oracle::skip("cpu_vs_gpu", &format!("world: {e}")); return } };
     let cap = (N + 1023) / 1024 * 1024;
     let mut o = GpuOptions { capacity: cap, start_time: START, seed: 42, obs: ObsMode::None, refuel_budget_ms: f64::INFINITY, ..Default::default() };
     assert!(o.cpu_connector_join && o.contact_tangent, "the CPU connector entry and the f32 contact tangent are the default GPU model");
     o.features.accidents = true;
-    let mut gpu = match bayenv_gpu::env::create(world.clone(), o) { Ok(s) => s, Err(e) => { eprintln!("skip: {e}"); return } };
+    let mut gpu = match bayenv_gpu::env::create(world.clone(), o) { Ok(s) => s, Err(e) => { eprintln!("cpu_vs_gpu: no GPU ({e}): not run"); return } };
     gpu.set_population(Arc::new(GpuPopulation::generate(&world, N, 42.0, true).unwrap()), true);
     let sw = Arc::new(bayenv_sim::world::World::from_bayenv(&world));
     let pop = Arc::new(bayenv_sim::population::Population::generate_like_env(&sw, "real", N, 42.0, Some(data)).unwrap());

@@ -64,3 +64,22 @@ pub fn import_lanes(data: &Path, oracle: &Path, bake: &Path) -> std::io::Result<
     };
     crate::world::write_lanes_bake(bake, crate::world::lanes_bake_key(data)?, &lg)
 }
+
+/// `rust/oracle` of this checkout (gitignored; `rust/tools/make_oracle.sh` generates it from the JS with node).
+pub fn oracle_root() -> std::path::PathBuf { Path::new(env!("CARGO_MANIFEST_DIR")).join("../../oracle") }
+
+/// An oracle-dependent test that cannot run: prints `SKIPPED <test>: <reason>` straight to the terminal (stderr,
+/// bypassing the test harness's output capture, so it shows without --nocapture) and returns, or panics when
+/// `BAYENV_REQUIRE_ORACLE=1` (a skipped JS-equivalence check must not count as a pass there).
+pub fn skip(test: &str, reason: &str) {
+    use std::io::Write;
+    let msg = format!("SKIPPED {test}: {reason} (generate the JS oracle with rust/tools/make_oracle.sh)\n");
+    let _ = std::io::stderr().write_all(msg.as_bytes());
+    if std::env::var("BAYENV_REQUIRE_ORACLE").as_deref() == Ok("1") { panic!("BAYENV_REQUIRE_ORACLE=1: {}", msg.trim_end()); }
+}
+
+/// Subdirectories of `dir` holding `file` (sorted); empty if `dir` is missing.
+pub fn dirs_with(dir: &Path, file: &str) -> Vec<std::path::PathBuf> {
+    let mut v: Vec<_> = std::fs::read_dir(dir).map(|r| r.filter_map(|e| e.ok()).map(|e| e.path()).filter(|p| p.join(file).exists()).collect()).unwrap_or_default();
+    v.sort(); v
+}

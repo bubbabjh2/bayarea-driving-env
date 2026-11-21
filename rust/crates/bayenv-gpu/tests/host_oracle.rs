@@ -7,7 +7,7 @@ use std::{path::Path, sync::Arc};
 #[test]
 fn host_matches_js_setup() {
     let (data, odir) = (Path::new("../../../data"), Path::new("../../oracle/gpu10k"));
-    let Ok(o) = OracleDump::open(odir) else { eprintln!("skip: no oracle dump at {}", odir.display()); return };
+    let Ok(o) = OracleDump::open(odir) else { bayenv_world::oracle::skip("host_oracle", &format!("no oracle dump at {}", odir.display())); return };
     for s in kernels::specs(true, false) {
         let f = odir.join("kernels").join(format!("{}.wgsl", s.label));
         if let Ok(js) = std::fs::read_to_string(&f) { assert_eq!(js, kernels::source(&s, ObsMode::V2, o.meta["cap"].as_u64().unwrap() as usize), "kernel source {}", s.label); }
@@ -16,7 +16,7 @@ fn host_matches_js_setup() {
     let cap = o.meta["cap"].as_u64().unwrap() as usize;
     let mut opts = GpuOptions { capacity: cap, cpu_connector_join: false, contact_tangent: false, ..Default::default() };   // the JS kernels (legacy model)
     opts.features.accidents = true; opts.start_time = o.meta["time"].as_f64().unwrap() - o.meta["k"].as_f64().unwrap() * opts.dt;
-    let mut sim = match bayenv_gpu::env::create(world, opts) { Ok(s) => s, Err(e) => { eprintln!("skip: {e}"); return } };
+    let mut sim = match bayenv_gpu::env::create(world, opts) { Ok(s) => s, Err(e) => { eprintln!("host_oracle: no GPU ({e}): not run"); return } };
     let jp: &[u32] = bytemuck::cast_slice(o.buffer("params").unwrap());
     assert_eq!(jp, &sim.params_words()[..], "params");
     assert_eq!(bytemuck::cast_slice::<u8, u32>(o.buffer("world").unwrap()), &sim.read_words("world")[..], "world blob");

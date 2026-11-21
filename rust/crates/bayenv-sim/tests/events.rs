@@ -3,7 +3,9 @@
 use bayenv_sim::harness::{env_from_dir, Policy};
 #[test]
 fn event_counts_match_counters() {
-    let Ok(dir) = std::env::var("BAYENV_EVENTS_TRACE") else { eprintln!("SKIP: BAYENV_EVENTS_TRACE unset"); return };
+    // BAYENV_EVENTS_TRACE, else rust/oracle/sim/traces/real2k (make_oracle.sh)
+    let dir = std::env::var("BAYENV_EVENTS_TRACE").unwrap_or_else(|_| bayenv_world::oracle::oracle_root().join("sim/traces/real2k").to_string_lossy().to_string());
+    if !std::path::Path::new(&dir).join("run.json").exists() { bayenv_world::oracle::skip("events", &format!("no trace at {dir} (BAYENV_EVENTS_TRACE)")); return; }
     let (mut env, run) = env_from_dir(&dir);
     let mut pol = Policy::new(run["policy"].as_str().unwrap(), run["seed"].as_f64().unwrap());
     let _ = env.take_records();

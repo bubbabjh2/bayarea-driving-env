@@ -16,7 +16,7 @@ struct Q { s: usize, g: usize, w1: bool, avoid: Vec<u32>, pen: Vec<(u32, f64)> }
 #[test]
 fn router_equals_reference() {
     let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../..");
-    if !root.join("data/roads.meta.json").exists() { eprintln!("skip: no data"); return; }
+    if !root.join("data/roads.meta.json").exists() { bayenv_world::oracle::skip("router_equiv", "no data/roads.meta.json"); return; }
     let w = World::load(root.join("data")).expect("world");
     let g = &w.graph;
     let n_od: usize = std::env::var("ROUTER_EQ_N").ok().and_then(|v| v.parse().ok()).unwrap_or(600);
