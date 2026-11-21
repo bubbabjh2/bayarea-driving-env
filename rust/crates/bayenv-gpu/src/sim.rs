@@ -708,7 +708,9 @@ impl GpuSim {
         self.sync();
         let t_end = self.time + n as f64 * self.dt;
         self.enqueue_spawns(t_end);
+        let rec0 = self.rec.len();
         self.scenes();
+        if self.opts.record_events { self.rec.sort_from(rec0); }
         self.pumps();
         self.process_refuels();
         let mut sampled = false;
@@ -838,6 +840,7 @@ impl GpuSim {
         let m = n.min(cap); let base = io::EVDATA;
         for k in 0..m { let t = io[base + 4 * k];
             if t & 255 == ev::WRECK { self.wrecks.insert(io[base + 4 * k + 1], Wreck { lo: (t >> 8) & 15, hi: (t >> 12) & 15, ty: (t >> 16) & 255, edge: io[base + 4 * k + 2], s: f32::from_bits(io[base + 4 * k + 3]) as f64 }); } }
+        let rec0 = self.rec.len();
         if self.opts.record_events { self.record_batch(&io[base..base + 4 * m]); }
         for k in 0..m {
             let o = base + 4 * k; let t = io[o] & 255; let slot = io[o + 1]; let a = io[o + 2]; let b = io[o + 3];
@@ -872,6 +875,7 @@ impl GpuSim {
                 _ => {}
             }
         }
+        if self.opts.record_events { self.rec.sort_from(rec0); }   // canonical (slot, kind) order per batch
         self.io_host = io;
     }
 
