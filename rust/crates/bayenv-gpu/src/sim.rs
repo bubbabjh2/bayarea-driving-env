@@ -65,8 +65,9 @@ pub struct GpuOptions {
     /// binary instead of linear polyline segment searches (kernels/patches.wgsl; identical when the cumulative
     /// distances are non-decreasing, checked at creation). JS: off
     pub fast_search: bool,
-    /// MODEL change (not bit-identical, default off): junction connector entry as in the CPU sim
-    /// (kernels/cpu_connector_join.wgsl; rust/docs/kerb-investigation.md). JS: off
+    /// MODEL fix (default ON): junction connector entry as in the CPU sim (kernels/cpu_connector_join.wgsl;
+    /// rust/docs/kerb-investigation.md). false = legacy mode, bit-identical with the JS GPU kernels (which have the
+    /// connector-entry bug; every GPU run / checkpoint before this default was trained with it). JS: off
     pub cpu_connector_join: bool,
     /// lane / hash-cell starts with kernels/scan4k.wgsl (4096 per workgroup, the count clears folded into the
     /// scan: 12 -> 6 dispatches; identical starts). JS: off
@@ -113,7 +114,7 @@ impl Default for GpuOptions {
     fn default() -> Self {
         GpuOptions { capacity: 131072, dt: 0.05, start_time: 5.0 * 3600.0, seed: 1, obs: ObsMode::V2, steer_rate: false, decide_every: 1, features: Features::default(),
             controls: true, junctions: true, table_bits: 18, contact_cap: 131072, ev_cap: 16384, spawn_queue: 16384, op_cap: 16384, max_blocks: 4096, route_slack: 1 << 22,
-            resolve_rounds: 12, progress_weight: 1.0, jerk_weight: 0.5, jerk_reward: false, grade_obs: true, squeeze_delay: 15.0 * 60.0, deadlock_break: 0, reroute: true, keep_events: false, record_events: true, record_share: false, indirect_resolve: true, fused_resolve: true, sorted_order: true, fast_scan: true, fast_search: true, cpu_connector_join: false, zero_init_workgroup: false, profile: false, return_trips: true, refuel_budget_ms: 4.0 }
+            resolve_rounds: 12, progress_weight: 1.0, jerk_weight: 0.5, jerk_reward: false, grade_obs: true, squeeze_delay: 15.0 * 60.0, deadlock_break: 0, reroute: true, keep_events: false, record_events: true, record_share: false, indirect_resolve: true, fused_resolve: true, sorted_order: true, fast_scan: true, fast_search: true, cpu_connector_join: true, zero_init_workgroup: false, profile: false, return_trips: true, refuel_budget_ms: 4.0 }
     }
 }
 
