@@ -54,11 +54,11 @@ impl Env {
     #[new]
     #[pyo3(signature = (data_dir, n_cars=10000, seed=1, backend="gpu", capacity=None, obs="v2", dt=0.05, start_time=None,
         accidents=true, collisions=true, fuel=true, controls=true, junctions=true, steer="position", decide_every=1, keep_events=false,
-        population=None, pop_seed=42.0, streaming=false, return_trips=true, stations=true, refuel_budget_ms=None))]
+        population=None, pop_seed=42.0, streaming=false, return_trips=true, stations=true, refuel_budget_ms=None, crash_share=false))]
     #[allow(clippy::too_many_arguments)]
     fn new(py: Python<'_>, data_dir: &str, n_cars: usize, seed: u32, backend: &str, capacity: Option<usize>, obs: &str, dt: f64, start_time: Option<f64>,
            accidents: bool, collisions: bool, fuel: bool, controls: bool, junctions: bool, steer: &str, decide_every: u32, keep_events: bool,
-           population: Option<usize>, pop_seed: f64, streaming: bool, return_trips: bool, stations: bool, refuel_budget_ms: Option<f64>) -> PyResult<Env> {
+           population: Option<usize>, pop_seed: f64, streaming: bool, return_trips: bool, stations: bool, refuel_budget_ms: Option<f64>, crash_share: bool) -> PyResult<Env> {
         let obs_mode = match obs { "v2" => ObsMode::V2, "v3" => ObsMode::V3, "none" => ObsMode::None, _ => return Err(PyValueError::new_err("obs must be 'v2', 'v3' or 'none'")) };
         if backend == "cpu" {
             // CPU reference sim (crate bayenv-sim): commuter population (population.js, n_cars commuters, seed),
@@ -88,7 +88,7 @@ impl Env {
         let steer_rate = match steer { "position" => false, "rate" => true, _ => return Err(PyValueError::new_err("steer must be 'position' or 'rate'")) };
         let res: Result<(Arc<World>, GpuSim, usize), String> = py.detach(move || {
             let world = Arc::new(World::load_with(&data, &LoadOptions::default()).map_err(|e| format!("world: {e}"))?);
-            let mut o = GpuOptions { capacity: cap, dt, start_time: start_time.unwrap_or(18000.0), seed, obs: obs_mode, steer_rate, decide_every, controls, junctions, keep_events,
+            let mut o = GpuOptions { capacity: cap, dt, start_time: start_time.unwrap_or(18000.0), seed, obs: obs_mode, steer_rate, decide_every, controls, junctions, keep_events, record_share: crash_share,
                 return_trips, refuel_budget_ms: refuel_budget_ms.unwrap_or(f64::INFINITY), ..Default::default() };
             o.features.accidents = accidents; o.features.collisions = collisions; o.features.fuel = fuel;
             let mut sim = bayenv_gpu::env::create(world.clone(), o)?;
@@ -207,7 +207,7 @@ impl Env {
         let col_f = |k: usize| -> Vec<f32> { (0..n).map(|i| f32::from_bits(vehw[i * L::VEH_WORDS + k])).collect() };
         for (name, k) in [("edge", veh::EDGE), ("state", veh::STATE), ("flags", veh::FLAGS), ("route_pos", veh::ROUTE_POS)] { d.set_item(name, PyArray1::from_vec(py, col_u(k)))?; }
         for (name, k) in [("s", veh::S), ("speed", veh::SPEED), ("accel", veh::ACCEL), ("lat", veh::LAT), ("heading_rel", veh::HEADING_REL), ("steer", veh::STEER_ANGLE),
-            ("odometer", veh::ODOMETER), ("fuel", veh::FUEL), ("gas", veh::GAS), ("brake", veh::BRAKE), ("yaw_rate", veh::YAW_RATE), ("v_lat", veh::V_LAT)] {
+            ("odometer", veh::ODOMETER), ("progress_m", veh::ROUTE_DIST), ("fuel", veh::FUEL), ("gas", veh::GAS), ("brake", veh::BRAKE), ("yaw_rate", veh::YAW_RATE), ("v_lat", veh::V_LAT)] {
             d.set_item(name, PyArray1::from_vec(py, col_f(k)))?;
         }
         let st = col_u(veh::STATE); let fl = col_u(veh::FLAGS);
@@ -281,8 +281,20 @@ impl Env {
         Ok(d)
     }
 
-    /// Host event log (needs keep_events=True), drained: list of (time, kind, slot, a, b).
-    fn events(&mut self) -> Vec<(f64, &'static str, i64, f64, f64)> {
+    /// Per-slot events since the last call, as a dict of equal-length numpy arrays (one row per event and car):
+    /// time (s; arrivals: exact arrival time, others: end of the step batch), kind (1 arrived, 2 crashed = this car
+    /// disabled, 3 contact, 4 stranded, 5 cleared, 6 spawned, 7 missed exit, 8 signal / stop violation), slot,
+    /// agent (trip id 2 * commuter + leg, -1 none), other (partner slot, -1 barrier / none), dv_kmh, other_dv_kmh,
+    /// share (fault share, needs crash_share=True), late_by (arrived, populations: arrival - workStart s),
+    /// progress_m (route metres at the event), trip_m / trip_s (arrived). Missing values are NaN.
+    fn events<'py>(&mut self, py: Python<'py>) -> PyResult<Bound<'py, PyDict>> {
+        if cpu_only(self).is_some() { return Err(PyNotImplementedError::new_err("events() on backend='cpu': pending (same shape)")); }
+        let r = gpu_mut(self).take_records();
+        events_dict(py, &r, None)
+    }
+
+    /// Host log of scene / outcome events (needs keep_events=True), drained: list of (time, kind, slot, a, b).
+    fn event_log(&mut self) -> Vec<(f64, &'static str, i64, f64, f64)> {
         if cpu_only(self).is_some() { return Vec::new(); }
         if let Backend::Gpu(sim) = &mut self.backend { py_sync(sim); }
         gpu_mut(self).events.drain(..).map(|e| (e.time, e.kind, e.slot, e.a, e.b)).collect()
@@ -436,7 +448,30 @@ impl VecEnv {
             for j in 0..n { out[i * n + j] = w[j * L::VEH_WORDS + veh::STATE] == vstate::CRASHED || w[j * L::VEH_WORDS + veh::FLAGS] & flag::DISABLED != 0; } });
         Ok(numpy::PyArray1::from_vec(py, out).reshape([e, n])?)
     }
+    /// Per-slot events of every env since the last call (Env.events() columns + `env`).
+    fn events<'py>(&mut self, py: Python<'py>) -> PyResult<Bound<'py, PyDict>> {
+        let mut all = bayenv_gpu::events::EventLog::default(); let mut envs = Vec::new();
+        for (i, s) in self.sims.iter_mut().enumerate() {
+            let r = s.take_records(); envs.extend(std::iter::repeat(i as i32).take(r.len()));
+            all.time.extend(r.time); all.kind.extend(r.kind); all.slot.extend(r.slot); all.agent.extend(r.agent); all.other.extend(r.other);
+            all.dv_kmh.extend(r.dv_kmh); all.other_dv_kmh.extend(r.other_dv_kmh); all.share.extend(r.share); all.late_by.extend(r.late_by);
+            all.progress_m.extend(r.progress_m); all.trip_m.extend(r.trip_m); all.trip_s.extend(r.trip_s);
+        }
+        events_dict(py, &all, Some(envs))
+    }
     fn __repr__(&self) -> String { format!("bayenv.VecEnv(n_envs={}, n_slots={}, obs_size={})", self.sims.len(), self.rows, self.obs_size) }
+}
+
+fn events_dict<'py>(py: Python<'py>, r: &bayenv_gpu::events::EventLog, env: Option<Vec<i32>>) -> PyResult<Bound<'py, PyDict>> {
+    let d = PyDict::new(py);
+    d.set_item("time", PyArray1::from_vec(py, r.time.clone()))?; d.set_item("kind", PyArray1::from_vec(py, r.kind.clone()))?;
+    d.set_item("slot", PyArray1::from_vec(py, r.slot.clone()))?; d.set_item("agent", PyArray1::from_vec(py, r.agent.clone()))?;
+    d.set_item("other", PyArray1::from_vec(py, r.other.clone()))?;
+    for (k, v) in [("dv_kmh", &r.dv_kmh), ("other_dv_kmh", &r.other_dv_kmh), ("share", &r.share), ("late_by", &r.late_by), ("progress_m", &r.progress_m), ("trip_m", &r.trip_m), ("trip_s", &r.trip_s)] {
+        d.set_item(k, PyArray1::from_vec(py, v.clone()))?;
+    }
+    if let Some(e) = env { d.set_item("env", PyArray1::from_vec(py, e))?; }
+    Ok(d)
 }
 
 /// World summary without creating a sim: dict of counts.

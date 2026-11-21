@@ -5,6 +5,7 @@
 //! events, scenes). See rust/README.md.
 pub mod defines;
 pub mod env;
+pub use bayenv_world::events;
 pub mod gpu;
 pub mod kernels;
 pub mod layout;
