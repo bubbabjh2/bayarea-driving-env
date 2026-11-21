@@ -476,6 +476,12 @@ impl NearestNode {
         for i in 0..nn { let c = cell_of(nx[i], nz[i]); items[fill[c] as usize] = i as u32; fill[c] += 1; }
         NearestNode { min_x, min_z, cols, rows, start, items }
     }
+    /// grid cell (cx, cz) of a node position (makeNearestNode's clamped cellOf)
+    pub fn cell_xz(&self, x: f64, z: f64) -> (i64, i64) {
+        let cx = jm::min((self.cols - 1) as f64, jm::max(0.0, jm::floor((x - self.min_x) / CELL)));
+        let cz = jm::min((self.rows - 1) as f64, jm::max(0.0, jm::floor((z - self.min_z) / CELL)));
+        (cx as i64, cz as i64)
+    }
     /// nearestNode(x, z, filter): -1 if none.
     pub fn nearest<G: PopGraph + ?Sized>(&self, w: &G, x: f64, z: f64, filter: impl Fn(usize) -> bool) -> i32 {
         if w.node_count() == 0 { return -1; }
@@ -506,6 +512,81 @@ impl NearestNode {
             }
         }
         best
+    }
+}
+
+/// Exact accelerator for `NearestNode::nearest` with a fixed node filter (the workplace pool): a kd-tree over
+/// the passing nodes returns the minimum squared distance (same `dx * dx + dz * dz` as the ring search); the ring
+/// search returns that global minimum too (its stop rule `sqrt(best) <= (r - 1) * CELL` only skips rings whose nodes
+/// are at least that far), and among exact ties it keeps the first visited: smallest (ring, cz, cx, node index).
+/// Queries whose cell lies outside the grid (where the ring limit could stop early) use the ring search itself.
+pub struct PoolIndex {
+    /// kd nodes in implicit order (subtree [lo, hi) has its root at lo + (hi - lo) / 2): (x, z, node)
+    pts: Vec<(f64, f64, u32)>,
+    /// bounding box (min x, max x, min z, max z) of the subtree rooted at each implicit index
+    bbox: Vec<[f64; 4]>,
+    pub pool: Vec<u8>,
+}
+
+impl PoolIndex {
+    pub fn new<G: PopGraph + ?Sized>(g: &G, pool: &[u8]) -> PoolIndex {
+        let (nx, nz) = (g.nx(), g.nz());
+        let mut pts: Vec<(f64, f64, u32)> = (0..g.node_count()).filter(|&k| pool[k] == 1).map(|k| (nx[k], nz[k], k as u32)).collect();
+        fn build(p: &mut [(f64, f64, u32)], depth: usize) {
+            if p.len() <= 1 { return; }
+            let m = p.len() / 2;
+            if depth % 2 == 0 { p.select_nth_unstable_by(m, |a, b| a.0.total_cmp(&b.0)); } else { p.select_nth_unstable_by(m, |a, b| a.1.total_cmp(&b.1)); }
+            let (l, r) = p.split_at_mut(m);
+            build(l, depth + 1); build(&mut r[1..], depth + 1);
+        }
+        build(&mut pts, 0);
+        let mut bbox = vec![[0.0; 4]; pts.len()];
+        fn boxes(p: &[(f64, f64, u32)], bb: &mut [[f64; 4]], lo: usize, hi: usize) -> [f64; 4] {
+            let mut b = [f64::INFINITY, -f64::INFINITY, f64::INFINITY, -f64::INFINITY];
+            if lo >= hi { return b; }
+            let m = lo + (hi - lo) / 2;
+            for c in [boxes(p, bb, lo, m), boxes(p, bb, m + 1, hi)] { b[0] = b[0].min(c[0]); b[1] = b[1].max(c[1]); b[2] = b[2].min(c[2]); b[3] = b[3].max(c[3]); }
+            let (x, z, _) = p[m];
+            b[0] = b[0].min(x); b[1] = b[1].max(x); b[2] = b[2].min(z); b[3] = b[3].max(z);
+            bb[m] = b; b
+        }
+        boxes(&pts, &mut bbox, 0, pts.len());
+        PoolIndex { pts, bbox, pool: pool.to_vec() }
+    }
+
+    fn search(&self, lo: usize, hi: usize, depth: usize, x: f64, z: f64, best_d: &mut f64, ties: &mut Vec<u32>) {
+        if lo >= hi { return; }
+        let m = lo + (hi - lo) / 2;
+        // subtree box: every node in it has |coord - q| >= the box gap (fp subtraction and sums are monotone),
+        // so its d >= gx * gx + gz * gz; prune only when strictly farther than the best (ties are kept)
+        let b = &self.bbox[m];
+        let gx = if x < b[0] { b[0] - x } else if x > b[1] { x - b[1] } else { 0.0 };
+        let gz = if z < b[2] { b[2] - z } else if z > b[3] { z - b[3] } else { 0.0 };
+        if gx * gx + gz * gz > *best_d { return; }
+        let (px, pz, k) = self.pts[m];
+        let (dx, dz) = (px - x, pz - z);
+        let d = dx * dx + dz * dz;
+        if d < *best_d { *best_d = d; ties.clear(); ties.push(k); } else if d == *best_d { ties.push(k); }
+        let pd = if depth % 2 == 0 { dx } else { dz };
+        let (near, far) = if pd > 0.0 { ((lo, m), (m + 1, hi)) } else { ((m + 1, hi), (lo, m)) };
+        self.search(near.0, near.1, depth + 1, x, z, best_d, ties);
+        self.search(far.0, far.1, depth + 1, x, z, best_d, ties);
+    }
+
+    /// == `nn.nearest(g, x, z, |k| pool[k] == 1)`. The ring search visits every ring up to max(cols, rows) + 1 around
+    /// the (unclamped) query cell, so the kd answer is used whenever its ring is within that limit.
+    pub fn nearest<G: PopGraph + ?Sized>(&self, nn: &NearestNode, g: &G, x: f64, z: f64) -> i32 {
+        let cx0 = jm::floor((x - nn.min_x) / CELL); let cz0 = jm::floor((z - nn.min_z) / CELL);
+        if !(cx0.abs() < 1e15 && cz0.abs() < 1e15) || self.pts.is_empty() { return nn.nearest(g, x, z, |k| self.pool[k] == 1); }
+        let mut ties = Vec::new(); let mut best_d = f64::INFINITY;
+        self.search(0, self.pts.len(), 0, x, z, &mut best_d, &mut ties);
+        if !(best_d < f64::INFINITY) { return nn.nearest(g, x, z, |k| self.pool[k] == 1); }
+        let (cx0, cz0) = (cx0 as i64, cz0 as i64);
+        let (nx, nz) = (g.nx(), g.nz());
+        let key = |k: u32| { let (cx, cz) = nn.cell_xz(nx[k as usize], nz[k as usize]); ((cx - cx0).abs().max((cz - cz0).abs()), cz, cx, k) };
+        let k = if ties.len() == 1 { ties[0] } else { ties.into_iter().min_by_key(|&k| key(k)).unwrap() };
+        if key(k).0 > nn.cols.max(nn.rows) + 1 { return nn.nearest(g, x, z, |k| self.pool[k] == 1); }
+        k as i32
     }
 }
 
@@ -552,6 +633,10 @@ pub struct Context {
     pub region: Option<RegionFilter>,
     pub scc: Vec<u8>, pub all: Vec<i32>, pub homes: Vec<i32>, pub axis: Axis,
     pub type_cum: Vec<f64>, pub type_cum_realism: Vec<f64>, pub base: [f32; DELTA_SIZE], pub nearest: NearestNode, pub seed_str: String,
+    /// exact fast path for nearest(.., in_pool)
+    pub pool_index: PoolIndex,
+    /// BAYENV_POP_RING=1: the plain ring search (A/B)
+    pub slow_nearest: bool,
 }
 
 impl Context {
@@ -576,11 +661,13 @@ impl Context {
         if all.len() < 2 { return Err("graph has too few routable nodes".into()); }
         // inScc: SCC node inside the region (the workplace snap filter)
         let in_pool = match &region { None => scc.clone(), Some(f) => (0..g.node_count()).map(|k| (scc[k] == 1 && f.contains(nx[k], nz[k])) as u8).collect() };
+        let pool_index = PoolIndex::new(g, &in_pool);
         Ok(Context {
             in_pool, region,
             homes: if homes.is_empty() { all.clone() } else { homes }, all, scc, axis,
             type_cum: prefix_sums(&TYPE_WEIGHTS), type_cum_realism: prefix_sums(&REALISM_TYPE_WEIGHTS),
-            base: make_genome(cfg.base_delta.as_deref(), cfg.delta_norm_cap), nearest: NearestNode::new(g), seed_str: js_num_str(cfg.seed),
+            base: make_genome(cfg.base_delta.as_deref(), cfg.delta_norm_cap), nearest: NearestNode::new(g), seed_str: js_num_str(cfg.seed), pool_index,
+            slow_nearest: std::env::var("BAYENV_POP_RING").map(|v| v == "1").unwrap_or(false),
         })
     }
 }
@@ -625,7 +712,7 @@ pub fn generate_commuter<G: PopGraph + ?Sized>(g: &G, cfg: &PopConfig, ctx: &Con
                 cx = hx + s * d * u.x + jit * v.x; cz = hz + s * d * u.z + jit * v.z;
                 if rng.random() < (if realism { REALISM_P_CROSS } else { cfg.long_p_cross }) { let k = 2.0 * ((cx - mid.x) * v.x + (cz - mid.z) * v.z); cx -= k * v.x; cz -= k * v.z; }
             }
-            let w = ctx.nearest.nearest(g, cx, cz, in_scc);
+            let w = if ctx.slow_nearest { ctx.nearest.nearest(g, cx, cz, in_scc) } else { ctx.pool_index.nearest(&ctx.nearest, g, cx, cz) };
             if w < 0 || w == home { continue; }
             if jm::hypot(nx[w as usize] - cx, nz[w as usize] - cz) > jm::max(1000.0, d / 4.0) { continue; }
             let r = match router.route(home, w, None, None) { Some(r) if !r.is_empty() => r, _ => continue };
@@ -734,14 +821,17 @@ pub fn generate_population_with<G: PopGraph + Sync + ?Sized, R: Router + Send, F
 /// generatePopulation with the default router (bayenv_world::nav via route_stub::NavRouter, weight = cfg.astarWeight).
 pub fn generate_population(g: &Arc<World>, cfg: &PopConfig, threads: Option<usize>) -> Result<Generated, String> {
     let w = cfg.astar_weight;
-    generate_population_with(&**g, cfg, || crate::route_stub::NavRouter::new(g, w), threads)
+    // one search graph + OD cache shared by all workers (a cached route equals a fresh one); per-worker search state
+    let base = crate::route_stub::NavRouter::new(g, w);
+    generate_population_with(&**g, cfg, || base.fork(), threads)
 }
 
 /// generatePopulation directly on the shared graph (bayenv_world::World::graph): same output as
 /// [`generate_population`] on the sim World built from it, without the World copy.
 pub fn generate_population_sim_graph(g: &SimGraph, cfg: &PopConfig, threads: Option<usize>) -> Result<Generated, String> {
     let w = cfg.astar_weight;
-    generate_population_with(g, cfg, || crate::route_stub::NavRouter::from_sim_graph(g, w), threads)
+    let base = crate::route_stub::NavRouter::from_sim_graph(g, w);
+    generate_population_with(g, cfg, || base.fork(), threads)
 }
 
 /// scenarioPopulation options (src/scenarios/load.js).

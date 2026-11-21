@@ -135,6 +135,8 @@ impl NavRouter {
     }
     /// route_batch runs avoid / penalty queries on up to `threads` routers in parallel (built on first use; each
     /// holds its own search state, ~ one graph's worth of node arrays). Results equal sequential `route`.
+    /// Another router on the same search graph and OD cache (own search state): cheap, for one per worker thread.
+    pub fn fork(&self) -> NavRouter { NavRouter { r: self.r.fork(), avoid: Vec::new(), pen: Vec::new(), graph: self.graph.clone(), weight: self.weight, pool_size: self.pool_size } }
     pub fn with_pool(mut self, g: std::sync::Arc<bayenv_world::graph::SimGraph>, threads: usize) -> NavRouter { self.graph = Some(g); self.pool_size = threads; self }
 }
 
