@@ -1,0 +1,86 @@
+{
+ "format": "bay-scenario/1",
+ "name": "hill-s1",
+ "family": "hill",
+ "seed": 1,
+ "params": {
+  "grade": 0.03376771081937477,
+  "length": 1156,
+  "lanes": 1,
+  "curve": true,
+  "rate": 14,
+  "win": 600
+ },
+ "notes": [
+  "crest + bend behind it, max grade 3.4 %, height 12.4 m"
+ ],
+ "bbox": {
+  "minX": -1456,
+  "maxX": 1456,
+  "minZ": 0,
+  "maxZ": 447.4550806592613
+ },
+ "nodeCount": 83,
+ "edgeCount": 8,
+ "mainEdgeCount": 8,
+ "nodeNames": {
+  "start": 0,
+  "end": 73
+ },
+ "trips": [
+  {
+   "count": 140,
+   "depart": [
+    25200,
+    25800
+   ],
+   "via": [],
+   "from": 0,
+   "to": 73
+  },
+  {
+   "count": 140,
+   "depart": [
+    25200,
+    25800
+   ],
+   "via": [],
+   "from": 73,
+   "to": 0
+  }
+ ],
+ "obstacles": [],
+ "tiles": [
+  {
+   "name": "hill-s1",
+   "family": "hill",
+   "seed": 1,
+   "params": {
+    "grade": 0.03376771081937477,
+    "length": 1156,
+    "lanes": 1,
+    "curve": true,
+    "rate": 14,
+    "win": 600
+   },
+   "notes": [
+    "crest + bend behind it, max grade 3.4 %, height 12.4 m"
+   ],
+   "offset": [
+    0,
+    0
+   ],
+   "view": {
+    "x": -578,
+    "z": 0,
+    "span": 900
+   },
+   "bbox": {
+    "minX": -1456,
+    "maxX": 1456,
+    "minZ": 0,
+    "maxZ": 447.4550806592613
+   }
+  }
+ ]
+}

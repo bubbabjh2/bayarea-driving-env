@@ -1,0 +1,132 @@
+{
+ "format": "bay-junctions/1",
+ "file": "junctions.bin",
+ "byteLength": 4256,
+ "sections": {
+  "mouthS": {
+   "byteOffset": 0,
+   "byteLength": 64,
+   "type": "Float32",
+   "length": 16
+  },
+  "goreS": {
+   "byteOffset": 64,
+   "byteLength": 32,
+   "type": "Float32",
+   "length": 8
+  },
+  "jNode": {
+   "byteOffset": 96,
+   "byteLength": 4,
+   "type": "Uint32",
+   "length": 1
+  },
+  "jFirstM": {
+   "byteOffset": 100,
+   "byteLength": 4,
+   "type": "Uint32",
+   "length": 1
+  },
+  "jCountM": {
+   "byteOffset": 104,
+   "byteLength": 4,
+   "type": "Uint32",
+   "length": 1
+  },
+  "jFirstC": {
+   "byteOffset": 108,
+   "byteLength": 4,
+   "type": "Uint32",
+   "length": 1
+  },
+  "jCountC": {
+   "byteOffset": 112,
+   "byteLength": 4,
+   "type": "Uint32",
+   "length": 1
+  },
+  "jFirstH": {
+   "byteOffset": 116,
+   "byteLength": 4,
+   "type": "Uint32",
+   "length": 1
+  },
+  "jCountH": {
+   "byteOffset": 120,
+   "byteLength": 4,
+   "type": "Uint32",
+   "length": 1
+  },
+  "mInfo": {
+   "byteOffset": 124,
+   "byteLength": 336,
+   "type": "Uint32",
+   "length": 84
+  },
+  "mF": {
+   "byteOffset": 460,
+   "byteLength": 192,
+   "type": "Float32",
+   "length": 48
+  },
+  "pts": {
+   "byteOffset": 652,
+   "byteLength": 2944,
+   "type": "Float32",
+   "length": 736
+  },
+  "conf": {
+   "byteOffset": 3596,
+   "byteLength": 348,
+   "type": "Uint32",
+   "length": 87
+  },
+  "confS": {
+   "byteOffset": 3944,
+   "byteLength": 232,
+   "type": "Float32",
+   "length": 58
+  },
+  "hull": {
+   "byteOffset": 4176,
+   "byteLength": 80,
+   "type": "Float32",
+   "length": 20
+  }
+ },
+ "edgeIds": "merged graph: main e, local mainEdgeCount + e (= src/sim fromRoadSet, src/geom)",
+ "mainEdgeCount": 8,
+ "nodeIds": "merged-graph node indices (graphFromRoadSets); they change with every rebuild, edge ids do not",
+ "layout": {
+  "mouthS": "Float32 x2 per edge: [sExit at the start junction, sStop at the end junction] (m along the edge; 0 / length where the node is not a junction)",
+  "goreS": "Float32 per edge: ramp wait point (m) where the ramp lane centre clears the mainline pavement by 1.3 m; -1 if the ramp is not a no-added-lane merge",
+  "jNode": "Uint32 per junction: merged-graph node",
+  "jFirstM/jCountM": "movements of the junction",
+  "jFirstC/jCountC": "conflicts of the junction",
+  "jFirstH/jCountH": "junction-box hull points (x,z pairs in hull)",
+  "mInfo": "Uint32 x7 per movement: [inEdge, inLane, outEdge, outLane, firstPt, ptCount, preferred]",
+  "mF": "Float32 x4 per movement: [sIn (leave inEdge here), sOut (join outEdge here), connector length, turn angle rad (>0 right)]",
+  "pts": "Float32 x4 per connector point: [x, y, z, metres along the connector]",
+  "conf": "Uint32 x3 per conflict: [movementA, movementB, type 0 crossing / 1 merge (exits within a car width)]; movements sharing an entry lane are not listed (an ordinary queue). Entries after the last junction range (jFirstC/jCountC) are cross-junction conflicts between connectors of neighbouring junctions (crossingFix)",
+  "confS": "Float32 x2 per conflict: [metres along A, metres along B] where the paths meet",
+  "hull": "Float32 x2 per hull point"
+ },
+ "counts": {
+  "junctions": 1,
+  "movements": 12,
+  "connectorPoints": 184,
+  "conflicts": 29,
+  "crossing": 17,
+  "merge": 12,
+  "sameEntry": 0,
+  "rampGores": 0
+ },
+ "crossingFix": {
+  "crossingsBefore": 0,
+  "crossingsAfter": 0,
+  "edgesAdjusted": 0,
+  "rounds": 0,
+  "crossConflicts": 0
+ },
+ "buildMs": 12
+}

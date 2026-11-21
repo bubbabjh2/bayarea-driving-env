@@ -1,0 +1,96 @@
+{
+ "format": "bay-scenario/1",
+ "name": "overpass-s1",
+ "family": "overpass",
+ "seed": 1,
+ "params": {
+  "under": "motorway",
+  "over": "primary",
+  "angle": 0.14252857491374016,
+  "rate": 13,
+  "win": 600
+ },
+ "notes": [
+  "primary over motorway, 6 % approaches, ramp 117 m"
+ ],
+ "bbox": {
+  "minX": -1200,
+  "maxX": 1200,
+  "minZ": -791.8879886429185,
+  "maxZ": 791.8879886429185
+ },
+ "nodeCount": 130,
+ "edgeCount": 7,
+ "mainEdgeCount": 7,
+ "nodeNames": {
+  "Ustart": 0,
+  "Uend": 1,
+  "Ostart": 49,
+  "Oend": 50
+ },
+ "trips": [
+  {
+   "count": 130,
+   "depart": [
+    25200,
+    25800
+   ],
+   "via": [],
+   "from": 0,
+   "to": 1
+  },
+  {
+   "count": 78,
+   "depart": [
+    25200,
+    25800
+   ],
+   "via": [],
+   "from": 49,
+   "to": 50
+  },
+  {
+   "count": 78,
+   "depart": [
+    25200,
+    25800
+   ],
+   "via": [],
+   "from": 50,
+   "to": 49
+  }
+ ],
+ "obstacles": [],
+ "tiles": [
+  {
+   "name": "overpass-s1",
+   "family": "overpass",
+   "seed": 1,
+   "params": {
+    "under": "motorway",
+    "over": "primary",
+    "angle": 0.14252857491374016,
+    "rate": 13,
+    "win": 600
+   },
+   "notes": [
+    "primary over motorway, 6 % approaches, ramp 117 m"
+   ],
+   "offset": [
+    0,
+    0
+   ],
+   "view": {
+    "x": 0,
+    "z": 0,
+    "span": 450
+   },
+   "bbox": {
+    "minX": -1200,
+    "maxX": 1200,
+    "minZ": -791.8879886429185,
+    "maxZ": 791.8879886429185
+   }
+  }
+ ]
+}

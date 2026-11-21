@@ -1,0 +1,106 @@
+{
+ "format": "bay-scenario/1",
+ "name": "weave-s1",
+ "family": "weave",
+ "seed": 1,
+ "params": {
+  "lanes": 2,
+  "weave": 306,
+  "rate": 16,
+  "rampRate": 7,
+  "win": 600
+ },
+ "notes": [
+  "2+1 lane weave, 306 m"
+ ],
+ "bbox": {
+  "minX": -1500,
+  "maxX": 1806,
+  "minZ": 0,
+  "maxZ": 150
+ },
+ "nodeCount": 111,
+ "edgeCount": 7,
+ "mainEdgeCount": 7,
+ "nodeNames": {
+  "start": 0,
+  "end": 3,
+  "ramp": 85,
+  "exit": 99
+ },
+ "trips": [
+  {
+   "count": 75,
+   "depart": [
+    25200,
+    25800
+   ],
+   "via": [],
+   "from": 0,
+   "to": 3
+  },
+  {
+   "count": 32,
+   "depart": [
+    25200,
+    25800
+   ],
+   "via": [],
+   "from": 0,
+   "to": 99
+  },
+  {
+   "count": 49,
+   "depart": [
+    25200,
+    25800
+   ],
+   "via": [],
+   "from": 85,
+   "to": 3
+  },
+  {
+   "count": 21,
+   "depart": [
+    25200,
+    25800
+   ],
+   "via": [],
+   "from": 85,
+   "to": 99
+  }
+ ],
+ "obstacles": [],
+ "tiles": [
+  {
+   "name": "weave-s1",
+   "family": "weave",
+   "seed": 1,
+   "params": {
+    "lanes": 2,
+    "weave": 306,
+    "rate": 16,
+    "rampRate": 7,
+    "win": 600
+   },
+   "notes": [
+    "2+1 lane weave, 306 m"
+   ],
+   "offset": [
+    0,
+    0
+   ],
+   "view": {
+    "x": 153,
+    "z": 30,
+    "span": 906
+   },
+   "bbox": {
+    "minX": -1500,
+    "maxX": 1806,
+    "minZ": 0,
+    "maxZ": 150
+   }
+  }
+ ]
+}

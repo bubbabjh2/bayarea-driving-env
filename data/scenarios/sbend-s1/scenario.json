@@ -1,0 +1,86 @@
+{
+ "format": "bay-scenario/1",
+ "name": "sbend-s1",
+ "family": "sbend",
+ "seed": 1,
+ "params": {
+  "radius": 50,
+  "sweep": 0.6786788943456485,
+  "tangent": 37,
+  "lanes": 1,
+  "rate": 4,
+  "win": 600
+ },
+ "notes": [
+  "radius 50 m, sweep 39 deg, tangent 37 m, 35 km/h"
+ ],
+ "bbox": {
+  "minX": -350,
+  "maxX": 441.5774234409086,
+  "minZ": 0,
+  "maxZ": 45.38703893832053
+ },
+ "nodeCount": 45,
+ "edgeCount": 10,
+ "mainEdgeCount": 0,
+ "nodeNames": {
+  "start": 27,
+  "end": 36
+ },
+ "trips": [
+  {
+   "count": 40,
+   "depart": [
+    25200,
+    25800
+   ],
+   "via": [],
+   "from": 27,
+   "to": 36
+  },
+  {
+   "count": 40,
+   "depart": [
+    25200,
+    25800
+   ],
+   "via": [],
+   "from": 36,
+   "to": 27
+  }
+ ],
+ "obstacles": [],
+ "tiles": [
+  {
+   "name": "sbend-s1",
+   "family": "sbend",
+   "seed": 1,
+   "params": {
+    "radius": 50,
+    "sweep": 0.6786788943456485,
+    "tangent": 37,
+    "lanes": 1,
+    "rate": 4,
+    "win": 600
+   },
+   "notes": [
+    "radius 50 m, sweep 39 deg, tangent 37 m, 35 km/h"
+   ],
+   "offset": [
+    0,
+    0
+   ],
+   "view": {
+    "x": 60.189162446939406,
+    "z": 34.30717603692888,
+    "span": 300
+   },
+   "bbox": {
+    "minX": -350,
+    "maxX": 441.5774234409086,
+    "minZ": 0,
+    "maxZ": 45.38703893832053
+   }
+  }
+ ]
+}

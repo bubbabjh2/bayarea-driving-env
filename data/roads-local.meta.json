@@ -1,0 +1,258 @@
+{
+ "format": "bay-roads-bin/1",
+ "tier": "local",
+ "classes": [
+  "tertiary",
+  "tertiary_link",
+  "unclassified",
+  "residential",
+  "living_street"
+ ],
+ "classIds": {
+  "motorway": 0,
+  "motorway_link": 1,
+  "trunk": 2,
+  "trunk_link": 3,
+  "primary": 4,
+  "primary_link": 5,
+  "secondary": 6,
+  "secondary_link": 7,
+  "tertiary": 8,
+  "tertiary_link": 9,
+  "unclassified": 10,
+  "residential": 11,
+  "living_street": 12
+ },
+ "generated": "2026-10-20T16:14:17Z",
+ "source": "OpenStreetMap via Overpass API (ODbL)",
+ "projection": {
+  "type": "equirectangular",
+  "lat0": 37.55,
+  "lon0": -122.15,
+  "earthRadius": 6371008.8,
+  "metersPerDegLon": 88157.883,
+  "metersPerDegLat": 111195.0802,
+  "axes": "x = east (m), y = up (m, elevation baked in), z = south (m), north = -z",
+  "rightOfTravel": "for direction (dx,dz) the right-hand perpendicular is (-dz, dx)"
+ },
+ "laneWidth": 3.7,
+ "laneDefaults": {
+  "oneway": {
+   "tertiary": 1,
+   "tertiary_link": 1,
+   "unclassified": 1,
+   "residential": 1,
+   "living_street": 1
+  },
+  "twowayPerDirection": {
+   "tertiary": 1,
+   "tertiary_link": 1,
+   "unclassified": 1,
+   "residential": 1,
+   "living_street": 1
+  }
+ },
+ "defaultSpeedKph": {
+  "tertiary": 45,
+  "tertiary_link": 35,
+  "unclassified": 40,
+  "residential": 40,
+  "living_street": 15
+ },
+ "elevation": {
+  "model": "terrain/1",
+  "previous": {
+   "model": "structures/2",
+   "deckPerLayer": 7,
+   "waterDeckMin": 20,
+   "crossingClearance": 7,
+   "minClearance": 4.5,
+   "maxGrade": {
+    "fw": 0.05,
+    "link": 0.06,
+    "art": 0.06,
+    "loc": 0.08
+   }
+  },
+  "ground": "USGS 3DEP bare earth: 1 m lidar DEM (CA_SanFrancisco_B23) in San Francisco, 1/3 arc-second seamless DEM elsewhere; NAVD88 m (data/dem/SOURCE.txt)",
+  "doc": "docs/elevation.md",
+  "tool": "tools/elevation/build_heights.mjs",
+  "params": {
+   "floor": 0.5,
+   "disk": 4,
+   "step": 4,
+   "sigma": 4,
+   "sigma13": 8,
+   "sigmaFw": 12,
+   "maxFw": 0.08,
+   "maxFwLink": 0.12,
+   "lateral": 2.5,
+   "dpTol": 0.12,
+   "minGap": 5,
+   "clearance": 6,
+   "oldMin": 4.5,
+   "rampFw": 0.05,
+   "rampArt": 0.06,
+   "rampLoc": 0.08,
+   "waterDeck": 19.9
+  },
+  "shapePoints": 187750,
+  "builtFrom": "structures/2 flat-ground build (y_old = structure offsets)"
+ },
+ "laneWidthByClass": {
+  "tertiary": 3.3,
+  "tertiary_link": 3.3,
+  "unclassified": 3.1,
+  "residential": 3.1,
+  "living_street": 3
+ },
+ "laneModel": {
+  "throughLanes": true,
+  "classMaxPerDirection": {
+   "tertiary": 2,
+   "tertiary_link": 2,
+   "unclassified": 2,
+   "residential": 2,
+   "living_street": 1
+  },
+  "minRunMeters": {
+   "fw": 400,
+   "link": 300,
+   "art": 300,
+   "loc": 200
+  },
+  "accelLaneMeters": 300,
+  "taperMeters": 90
+ },
+ "bbox": {
+  "minX": -36144.26,
+  "maxX": 30855.25,
+  "minZ": -46701.5,
+  "maxZ": 33358.23
+ },
+ "nodeCount": 386791,
+ "edgeCount": 240144,
+ "file": "roads-local.bin",
+ "byteLength": 20237276,
+ "endianness": "little",
+ "sections": {
+  "nodeXYZ": {
+   "byteOffset": 0,
+   "byteLength": 4641492,
+   "type": "Float32",
+   "length": 1160373,
+   "stride": 3,
+   "count": 386791
+  },
+  "edges": {
+   "byteOffset": 4641492,
+   "byteLength": 7684608,
+   "type": "Uint32",
+   "length": 1921152,
+   "stride": 8,
+   "count": 240144
+  },
+  "poly": {
+   "byteOffset": 12326100,
+   "byteLength": 4098456,
+   "type": "Uint32",
+   "length": 1024614,
+   "stride": 1,
+   "count": 1024614
+  },
+  "edgeLength": {
+   "byteOffset": 16424556,
+   "byteLength": 960576,
+   "type": "Float32",
+   "length": 240144,
+   "stride": 1,
+   "count": 240144
+  },
+  "csrOffsets": {
+   "byteOffset": 17385132,
+   "byteLength": 796168,
+   "type": "Uint32",
+   "length": 199042,
+   "stride": 1,
+   "count": 199042
+  },
+  "csrEdges": {
+   "byteOffset": 18181300,
+   "byteLength": 960576,
+   "type": "Uint32",
+   "length": 240144,
+   "stride": 1,
+   "count": 240144
+  },
+  "edgeLaneWidth": {
+   "byteOffset": 19141876,
+   "byteLength": 960576,
+   "type": "Float32",
+   "length": 240144,
+   "stride": 1,
+   "count": 240144
+  },
+  "linkNodes": {
+   "byteOffset": 20102452,
+   "byteLength": 134824,
+   "type": "Uint32",
+   "length": 33706,
+   "stride": 2,
+   "count": 16853
+  }
+ },
+ "edgeStride": 8,
+ "edgeFields": [
+  "firstNode",
+  "nodeCount",
+  "lanesFwd",
+  "lanesBack",
+  "classId",
+  "speedCmps",
+  "flags",
+  "twin"
+ ],
+ "edgeFieldDoc": {
+  "firstNode": "offset into poly[] of this edge's first node index (travel order)",
+  "nodeCount": "number of node indices in poly[] for this edge (>=2); from=poly[firstNode], to=poly[firstNode+nodeCount-1]",
+  "lanesFwd": "lanes in this edge's travel direction",
+  "lanesBack": "lanes in the opposite direction (0 if oneway)",
+  "classId": "index into meta.classIds / classesAll",
+  "speedCmps": "speed limit in cm/s (divide by 100 for m/s); class default if FLAG_SPEED_DEFAULT",
+  "flags": "bit set, see flagBits",
+  "twin": "edge id of the opposite direction of the same road, or 0xFFFFFFFF"
+ },
+ "flagBits": {
+  "ONEWAY": 1,
+  "BRIDGE": 2,
+  "TUNNEL": 4,
+  "LANES_FALLBACK": 8,
+  "SPEED_DEFAULT": 16,
+  "LINK": 32,
+  "LANES_CLAMPED": 64,
+  "LANES_SMOOTHED": 128,
+  "AUX_LANE": 256,
+  "LANE_DROP": 512
+ },
+ "classesAll": [
+  "motorway",
+  "motorway_link",
+  "trunk",
+  "trunk_link",
+  "primary",
+  "primary_link",
+  "secondary",
+  "secondary_link",
+  "tertiary",
+  "tertiary_link",
+  "unclassified",
+  "residential",
+  "living_street"
+ ],
+ "noTwin": 4294967295,
+ "laneOffsetFormula": "offset_k = ((lanesBack - lanesFwd)/2 + k + 0.5) * laneWidth, metres to the RIGHT of travel, k=0 is the leftmost lane",
+ "csrDoc": "outgoing edges of node n are csrEdges[csrOffsets[n] .. csrOffsets[n+1]); each is an edge id whose from-node is n",
+ "linkNodesDoc": "pairs (thisTierNodeIndex, mainTierNodeIndex) for nodes shared with roads.bin",
+ "json": "roads-local.json",
+ "heightsGenerated": "2026-10-25T00:49:26.392Z"
+}

@@ -1,0 +1,21 @@
+<!doctype html><html><head><meta charset="utf-8"><title>gpu smoke</title></head><body><pre id="out">running</pre>
+<script type="module">
+const out = document.getElementById('out');
+try {
+  if (!navigator.gpu) throw new Error('navigator.gpu missing');
+  const ad = await navigator.gpu.requestAdapter({ powerPreference: 'high-performance' });
+  if (!ad) throw new Error('no adapter');
+  const info = ad.info || (ad.requestAdapterInfo ? await ad.requestAdapterInfo() : {});
+  const dev = await ad.requestDevice({ requiredFeatures: ad.features.has('timestamp-query') ? ['timestamp-query'] : [] });
+  const m = dev.createShaderModule({ code: `@group(0) @binding(0) var<storage, read_write> a: array<u32>; @compute @workgroup_size(64) fn main(@builtin(global_invocation_id) g: vec3u) { a[g.x] = g.x * 2u; }` });
+  const p = dev.createComputePipeline({ layout: 'auto', compute: { module: m, entryPoint: 'main' } });
+  const b = dev.createBuffer({ size: 256 * 4, usage: GPUBufferUsage.STORAGE | GPUBufferUsage.COPY_SRC });
+  const r = dev.createBuffer({ size: 256 * 4, usage: GPUBufferUsage.MAP_READ | GPUBufferUsage.COPY_DST });
+  const bg = dev.createBindGroup({ layout: p.getBindGroupLayout(0), entries: [{ binding: 0, resource: { buffer: b } }] });
+  const e = dev.createCommandEncoder(); const ps = e.beginComputePass(); ps.setPipeline(p); ps.setBindGroup(0, bg); ps.dispatchWorkgroups(4); ps.end();
+  e.copyBufferToBuffer(b, 0, r, 0, 1024); dev.queue.submit([e.finish()]);
+  await r.mapAsync(GPUMapMode.READ); const v = new Uint32Array(r.getMappedRange());
+  window.__result = { ok: v[100] === 200, vendor: info.vendor, arch: info.architecture, desc: info.description, features: [...ad.features], maxSSBO: ad.limits.maxStorageBufferBindingSize, maxBuf: ad.limits.maxBufferSize, maxWG: ad.limits.maxComputeWorkgroupsPerDimension, maxSB: ad.limits.maxStorageBuffersPerShaderStage, maxBG: ad.limits.maxBindGroups, maxInv: ad.limits.maxComputeInvocationsPerWorkgroup, wgMem: ad.limits.maxComputeWorkgroupStorageSize, maxBindings: ad.limits.maxBindingsPerBindGroup };
+  document.title = window.__result.ok ? 'PASS' : 'FAIL';
+} catch (err) { window.__result = { ok: false, error: String(err.message || err) }; document.title = 'FAIL'; }
+</script></body></html>

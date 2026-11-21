@@ -1,0 +1,95 @@
+{
+ "format": "bay-scenario/1",
+ "name": "obstacle-s1",
+ "family": "obstacle",
+ "seed": 1,
+ "params": {
+  "lanes": 1,
+  "count": 2,
+  "rate": 5,
+  "win": 600
+ },
+ "notes": [
+  "2 stopped car(s), 1 lane(s) two-way"
+ ],
+ "bbox": {
+  "minX": -1000,
+  "maxX": 1000,
+  "minZ": 0,
+  "maxZ": 0
+ },
+ "nodeCount": 41,
+ "edgeCount": 2,
+ "mainEdgeCount": 2,
+ "nodeNames": {
+  "start": 0,
+  "end": 1
+ },
+ "trips": [
+  {
+   "count": 50,
+   "depart": [
+    25200,
+    25800
+   ],
+   "via": [],
+   "from": 0,
+   "to": 1
+  },
+  {
+   "count": 25,
+   "depart": [
+    25200,
+    25800
+   ],
+   "via": [],
+   "from": 1,
+   "to": 0
+  }
+ ],
+ "obstacles": [
+  {
+   "lane": 0,
+   "type": 0,
+   "at": 544,
+   "edge": 0
+  },
+  {
+   "lane": 0,
+   "type": 0,
+   "at": 1018,
+   "edge": 0
+  }
+ ],
+ "tiles": [
+  {
+   "name": "obstacle-s1",
+   "family": "obstacle",
+   "seed": 1,
+   "params": {
+    "lanes": 1,
+    "count": 2,
+    "rate": 5,
+    "win": 600
+   },
+   "notes": [
+    "2 stopped car(s), 1 lane(s) two-way"
+   ],
+   "offset": [
+    0,
+    0
+   ],
+   "view": {
+    "x": -456,
+    "z": 0,
+    "span": 500
+   },
+   "bbox": {
+    "minX": -1000,
+    "maxX": 1000,
+    "minZ": 0,
+    "maxZ": 0
+   }
+  }
+ ]
+}

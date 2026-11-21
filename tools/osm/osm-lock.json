@@ -1,0 +1,117 @@
+{
+ "doc": "sha256 of JSON.stringify(elements) per source (tools/osm/fetch.mjs)",
+ "sources": {
+  "roads": {
+   "sha256": "78aaa298f306901b0f807b01d3cd15f8dd0baf7b37bd43a891a6836adeb77d53",
+   "elements": 265139,
+   "date": "2026-10-20T04:00:00Z",
+   "endpoint": "https://overpass-api.de/api/interpreter",
+   "recorded": "2026-11-21T01:41:41.749Z"
+  },
+  "roads-north": {
+   "sha256": "e7af011d3ad680e9ae6a51c3642d667d5b7d819341e028a4b9231e87df8eeb22",
+   "elements": 39374,
+   "date": "2026-10-20T04:00:00Z",
+   "endpoint": "https://overpass-api.de/api/interpreter",
+   "recorded": "2026-11-21T01:42:30.101Z"
+  },
+  "local-tile1": {
+   "sha256": "3f93b7dccd13bd460a568ef79865b4069c5e893ad6be9c55646a3959634d2d95",
+   "elements": 39164,
+   "date": "2026-10-20T04:00:00Z",
+   "endpoint": "https://overpass-api.de/api/interpreter",
+   "recorded": "2026-11-21T01:43:27.942Z"
+  },
+  "local-tile2b": {
+   "sha256": "9b6ef5129529a5552aa26618c5a722006d4360124b2102f0fcc8808e727b26d5",
+   "elements": 93674,
+   "date": "2026-10-20T04:00:00Z",
+   "endpoint": "https://overpass-api.de/api/interpreter",
+   "recorded": "2026-11-21T01:45:03.881Z"
+  },
+  "local-tile3a": {
+   "sha256": "6f1f0905d18a707175baebb4182c92b60c7048a087ef98db20ce642d2f6a1597",
+   "elements": 36746,
+   "date": "2026-10-20T04:00:00Z",
+   "endpoint": "https://overpass-api.de/api/interpreter",
+   "recorded": "2026-11-21T01:46:01.809Z"
+  },
+  "local-tile3b": {
+   "sha256": "a67478227d645a77baeb5c1cdc64ad75b83158bde7aa8d9ecefc9eac1330785d",
+   "elements": 53292,
+   "date": "2026-10-20T04:00:00Z",
+   "endpoint": "https://overpass-api.de/api/interpreter",
+   "recorded": "2026-11-21T01:47:10.909Z"
+  },
+  "local-tile4a": {
+   "sha256": "fab595d4ec8d2bc974c43f96118032cd06348741a80cf4d4ba0cde0937385162",
+   "elements": 46576,
+   "date": "2026-10-20T04:00:00Z",
+   "endpoint": "https://overpass-api.de/api/interpreter",
+   "recorded": "2026-11-21T01:47:55.840Z"
+  },
+  "local-tile4b": {
+   "sha256": "7ce52e1b1dd962f8bf8eb2da3770c8a554ea5f81a58111c6c41e7fcce85763cb",
+   "elements": 27123,
+   "date": "2026-10-20T04:00:00Z",
+   "endpoint": "https://overpass-api.de/api/interpreter",
+   "recorded": "2026-11-21T01:48:49.127Z"
+  },
+  "local-tile5": {
+   "sha256": "ce1bbc5c4259248c48b944771895d261cc477d8e0fd823685c24ab02c85a2014",
+   "elements": 153612,
+   "date": "2026-10-20T04:00:00Z",
+   "endpoint": "https://overpass-api.de/api/interpreter",
+   "recorded": "2026-11-21T01:49:59.243Z"
+  },
+  "local-tile6": {
+   "sha256": "25d80162915871a53bda76a1d7f7522641f6a6b6433d031f84c09a1b0ab5bf75",
+   "elements": 112435,
+   "date": "2026-10-20T04:00:00Z",
+   "endpoint": "https://overpass-api.de/api/interpreter",
+   "recorded": "2026-11-21T01:51:03.953Z"
+  },
+  "local-tile7": {
+   "sha256": "bfbfe6c22f6d3e53dd9b191af0019587d3ea74d3e6231ac3738d5fd3efa90a0f",
+   "elements": 100676,
+   "date": "2026-10-20T04:00:00Z",
+   "endpoint": "https://overpass-api.de/api/interpreter",
+   "recorded": "2026-11-21T01:51:56.709Z"
+  },
+  "coast": {
+   "sha256": "35818ac66ff44c6c457ecc88cbbfb74db3f01870e54c22e903432cbea7bfbce2",
+   "elements": 31906,
+   "date": "2026-10-20T04:00:00Z",
+   "endpoint": "https://overpass-api.de/api/interpreter",
+   "recorded": "2026-11-21T01:52:55.788Z"
+  },
+  "controls-signals": {
+   "sha256": "2d84365f61d97bded77900509bb69daa1515f3d8af987be96199d460ae883915",
+   "elements": 37501,
+   "date": "2026-10-20T06:30:00Z",
+   "endpoint": "https://overpass-api.de/api/interpreter",
+   "recorded": "2026-11-21T01:54:44.055Z"
+  },
+  "local-tile2a": {
+   "sha256": "5613b374c546c52b523dabf0fdb211e2fe94ee9d5746a895d009f03e7e23c2db",
+   "elements": 84085,
+   "date": "2026-10-20T04:00:00Z",
+   "endpoint": "https://overpass-api.de/api/interpreter",
+   "recorded": "2026-11-21T01:56:13.538Z"
+  },
+  "controls-signs": {
+   "sha256": "b46dfcf1a1d0672785414ddbf7c6279951f269ecc54ab24b7cce91e4b9699657",
+   "elements": 42023,
+   "date": "2026-10-20T06:30:00Z",
+   "endpoint": "https://overpass-api.de/api/interpreter",
+   "recorded": "2026-11-21T01:58:18.136Z"
+  },
+  "crossings": {
+   "sha256": "304de23d17bb619151f01452874a5b992e6adbfcf7323d031f684ca1cd2504f8",
+   "elements": 127260,
+   "date": "2026-10-20T14:00:00Z",
+   "endpoint": "https://overpass-api.de/api/interpreter",
+   "recorded": "2026-11-21T02:00:27.553Z"
+  }
+ }
+}

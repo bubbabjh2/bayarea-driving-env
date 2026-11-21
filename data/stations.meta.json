@@ -1,0 +1,40 @@
+{
+ "format": "bay-stations-bin/1",
+ "file": "stations.bin",
+ "byteLength": 7000,
+ "endianness": "little",
+ "count": 250,
+ "sections": {
+  "stationXYZ": {
+   "byteOffset": 0,
+   "byteLength": 3000,
+   "type": "Float32",
+   "length": 750,
+   "stride": 3,
+   "count": 250
+  },
+  "stationInfo": {
+   "byteOffset": 3000,
+   "byteLength": 4000,
+   "type": "Uint32",
+   "length": 1000,
+   "stride": 4,
+   "count": 250
+  }
+ },
+ "stationInfoFields": [
+  "nodeIndex",
+  "tierId",
+  "pumps",
+  "flags"
+ ],
+ "tierIds": {
+  "main": 0,
+  "local": 1
+ },
+ "flagBits": {
+  "NEAR_INTERCHANGE": 1
+ },
+ "json": "stations.json",
+ "heights": "terrain/1 (tools/elevation/patch_points.mjs: y = road node y)"
+}

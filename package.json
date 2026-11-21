@@ -1,0 +1,26 @@
+{
+  "name": "bayarea-driving-env",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "license": "MIT",
+  "description": "Multi-agent driving environment of the San Francisco Bay Area (SF <-> San Jose) built from OpenStreetMap + USGS 3DEP elevation: full vehicle dynamics, rigid-body crashes, real traffic controls. Plain ES modules, no build step, no dependencies.",
+  "scripts": {
+    "test": "node --test test/*.test.js test/sim/",
+    "smoke": "node examples/random_policy.mjs",
+    "smoke:real": "node --max-old-space-size=12000 examples/random_policy.mjs --world real --n 2000 --steps 300",
+    "fetch:dem": "node tools/elevation/fetch_dem.mjs",
+    "build:elevation": "node tools/elevation/build_all.mjs",
+    "verify:elevation": "node tools/elevation/verify.mjs",
+    "build:scenarios": "node tools/scenarios/gen.mjs all --seed 1",
+    "unpack": "node tools/osm/unpack.mjs",
+    "build:junctions": "node --max-old-space-size=14000 tools/build_junctions.mjs data/",
+    "build:lines": "node --max-old-space-size=14000 tools/lines/build_lines.mjs data",
+    "build:world-derived": "bash tools/osm/build_world.sh derive",
+    "build:osm": "bash tools/osm/build_world.sh osm",
+    "verify:world": "node tools/osm/verify.mjs"
+  },
+  "engines": {
+    "node": ">=22"
+  }
+}

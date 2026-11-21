@@ -1,0 +1,63 @@
+<!doctype html>
+<html><head><meta charset="utf-8"><title>GPU sim benchmark</title>
+<style>body{font:13px/1.4 ui-monospace,Menlo,monospace;margin:16px;background:#111;color:#ddd}</style></head>
+<body><h3>GPU sim benchmark (real road packs)</h3><pre id="out"></pre>
+<script type="module">
+// ms per sim step at several vehicle counts on the real two-tier Bay Area graph.
+// Query: ?sizes=10000,50000,100000&steps=400&obs=v2|v3|none&cap=131072
+// Every car is driven by constant external actions (steer 0, gas 0.3) uploaded once with setActions.
+// For each size: fresh GPUSim, scatter n vehicles on random routes (all driving at once),
+// 100 warm-up steps, then `steps` steps in batches of 20 (one submit each, like a frame
+// at 1x real time) timed with performance.now() + onSubmittedWorkDone, plus one profiled
+// step with timestamp queries per stage.
+import { GPUSim } from '../../src/gpu/gpuSim.js';
+import { initGPU } from '../../src/gpu/device.js';
+import { loadWorld } from '../../src/sim/data.js';
+const out = document.getElementById('out');
+const log = (s) => { console.log(s); out.textContent += s + '\n'; };
+const q = new URLSearchParams(location.search);
+const sizes = (q.get('sizes') || '10000,50000,100000').split(',').map(Number);
+const STEPS = +(q.get('steps') || 400), WARM = +(q.get('warm') || 100), obs = q.get('obs') || 'v2', cap = +(q.get('cap') || 131072);
+const result = { ok: false, rows: [] };
+try {
+  const t0 = performance.now();
+  const world = await loadWorld({ base: new URL('../../data/', location.href) });
+  const { graph, stations } = world;
+  log(`world: ${graph.edgeCount} edges, ${graph.nodeCount} nodes, ${stations.length} stations (${(performance.now() - t0).toFixed(0)} ms)`);
+  const gpu = await initGPU();
+  result.adapter = gpu.adapterName; result.obs = obs;
+  log(`adapter: ${gpu.adapterName}, timestamps: ${gpu.timestamps}`);
+  let sim = null;
+  for (const n of sizes) {
+    if (sim) { for (const b of gpu.buffers.values()) b.destroy(); gpu.buffers.clear(); }
+    const tc = performance.now();
+    sim = await GPUSim.create(graph, { gpu, capacity: Math.max(n <= cap ? cap : Math.ceil(n / 1024) * 1024, n), obs, features: { accidents: true, fuel: true, collisions: true, laneChanges: true }, controls: q.get('controls') === '0' ? null : world.controls });
+    { const A = new Float32Array(sim.cap * 3); for (let i = 0; i < sim.cap; i++) A[3 * i + 1] = 0.3; sim.setActions(A); }
+    const sc = sim.scatter(n, { seed: 11 });
+    log(`placed ${sc.placed} (minRank ${sc.minRank}, spacing ${sc.spacing} m, ${sc.pool} pool routes) in ${(performance.now() - tc).toFixed(0)} ms`);
+    const tSetup = performance.now() - tc;
+    for (let k = 0; k < WARM; k += 20) await sim.runSteps(20);
+    await sim.sync();
+    // timed
+    const t1 = performance.now();
+    for (let k = 0; k < STEPS; k += 20) { sim.runSteps(20); }
+    await sim.sync();
+    const wall = performance.now() - t1;
+    // profiled step(s)
+    await sim.runSteps(1, { profile: true });
+    await sim.sync();
+    await new Promise((r) => setTimeout(r, 50));
+    const km = sim.kernelMs || {};
+    const gpuStep = Object.values(km).reduce((a, b) => a + b, 0);
+    const st = sim.getStats();
+    const row = { n, placed: sc.placed, msPerStep: +(wall / STEPS).toFixed(3), stepsPerSec: +(STEPS / wall * 1000).toFixed(0), realTimeX: +((STEPS * sim.dt) / (wall / 1000)).toFixed(1),
+      gpuMsPerStepTimestamps: +gpuStep.toFixed(3), kernels: Object.fromEntries(Object.entries(km).map(([k, v]) => [k, +v.toFixed(3)])),
+      memoryMB: +(gpu.memoryBytes() / 1048576).toFixed(1), minRank: sc.minRank, spacing: sc.spacing, setupMs: +tSetup.toFixed(0), driving: st.driving, avgMph: +st.avgSpeedMph.toFixed(1), crashes: st.crashes, bumps: st.bumps, accidents: st.accidents, laneChanges: st.laneChanges, simSeconds: +((sim.step) * sim.dt).toFixed(0) };
+    result.rows.push(row);
+    log(JSON.stringify(row));
+  }
+  result.memoryTop = gpu.memoryReport().slice(0, 12).map(([k, b]) => [k, +(b / 1048576).toFixed(1)]);
+  result.ok = true;
+} catch (e) { result.error = String(e && e.stack || e); log('ERROR ' + result.error); }
+window.__result = result; window.__done = true; document.title = result.ok ? 'PASS' : 'FAIL';
+</script></body></html>

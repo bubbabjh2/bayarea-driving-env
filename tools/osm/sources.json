@@ -1,0 +1,104 @@
+{
+ "doc": "Pinned OSM inputs. Each query in tools/queries/<name>.ql is sent to Overpass with [date:\"<date>\"] (attic snapshot) inserted into its settings line. Dates = just after the original downloads (query file times, PDT -> UTC). See docs/WORLD-BUILD.md for which sources reproduce the original bit-exactly. Map data (c) OpenStreetMap contributors, ODbL 1.0.",
+ "endpoint": "https://overpass-api.de/api/interpreter",
+ "sources": [
+  {
+   "name": "roads",
+   "date": "2026-10-20T04:00:00Z",
+   "use": "build_roads, build_controls (road input)"
+  },
+  {
+   "name": "roads-north",
+   "date": "2026-10-20T04:00:00Z",
+   "use": "build_roads, build_controls"
+  },
+  {
+   "name": "local-tile1",
+   "date": "2026-10-20T04:00:00Z",
+   "use": "build_roads, build_controls"
+  },
+  {
+   "name": "local-tile2a",
+   "date": "2026-10-20T04:00:00Z",
+   "use": "build_roads, build_controls"
+  },
+  {
+   "name": "local-tile2b",
+   "date": "2026-10-20T04:00:00Z",
+   "use": "build_roads, build_controls"
+  },
+  {
+   "name": "local-tile3a",
+   "date": "2026-10-20T04:00:00Z",
+   "use": "build_roads, build_controls"
+  },
+  {
+   "name": "local-tile3b",
+   "date": "2026-10-20T04:00:00Z",
+   "use": "build_roads, build_controls"
+  },
+  {
+   "name": "local-tile4a",
+   "date": "2026-10-20T04:00:00Z",
+   "use": "build_roads, build_controls"
+  },
+  {
+   "name": "local-tile4b",
+   "date": "2026-10-20T04:00:00Z",
+   "use": "build_roads, build_controls"
+  },
+  {
+   "name": "local-tile5",
+   "date": "2026-10-20T04:00:00Z",
+   "use": "build_roads, build_controls"
+  },
+  {
+   "name": "local-tile6",
+   "date": "2026-10-20T04:00:00Z",
+   "use": "build_roads, build_controls"
+  },
+  {
+   "name": "local-tile7",
+   "date": "2026-10-20T04:00:00Z",
+   "use": "build_roads, build_controls"
+  },
+  {
+   "name": "coast",
+   "date": "2026-10-20T04:00:00Z",
+   "use": "build_water"
+  },
+  {
+   "name": "controls-signals",
+   "date": "2026-10-20T06:30:00Z",
+   "use": "build_controls"
+  },
+  {
+   "name": "controls-signs",
+   "date": "2026-10-20T06:30:00Z",
+   "use": "build_controls"
+  },
+  {
+   "name": "crossings",
+   "date": "2026-10-20T14:00:00Z",
+   "use": "build_crosswalks"
+  }
+ ],
+ "originalMatch": {
+  "coast": "water.json bit-exact",
+  "crossings": "crosswalks.json bit-exact",
+  "roads": "NOT reproducible: original was fetched from a mirror with an inconsistent database (node positions as of <= 2026-06, ways created up to 2026-07-23); no attic date matches",
+  "local-tile1": "close, not exact",
+  "local-tile2a": "close, not exact",
+  "local-tile2b": "close, not exact",
+  "local-tile5": "close, not exact",
+  "local-tile6": "close (6 missing / 35 moved of 18,459 nodes)",
+  "roads-north": "near (37 missing / 5 moved of 7,382 nodes)",
+  "local-tile3a": "node-exact (1 moved of 11,226)",
+  "local-tile3b": "node-exact",
+  "local-tile4a": "near (2 missing / 10 moved)",
+  "local-tile4b": "near (5 moved)",
+  "local-tile7": "node-exact",
+  "controls-signals": "all 64,615 original control node ids present",
+  "controls-signs": "all original control node ids present"
+ }
+}

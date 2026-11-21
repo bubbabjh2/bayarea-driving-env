@@ -1,0 +1,83 @@
+{
+ "format": "bay-scenario/1",
+ "name": "rampmeter-s1",
+ "family": "rampmeter",
+ "seed": 1,
+ "params": {
+  "lanes": 4,
+  "rate": 29,
+  "rampRate": 8,
+  "win": 600
+ },
+ "notes": [
+  "4-lane mainline, metered ramp"
+ ],
+ "bbox": {
+  "minX": -1500,
+  "maxX": 1500,
+  "minZ": 0,
+  "maxZ": 190
+ },
+ "nodeCount": 94,
+ "edgeCount": 5,
+ "mainEdgeCount": 5,
+ "nodeNames": {
+  "start": 0,
+  "end": 3,
+  "ramp": 77
+ },
+ "trips": [
+  {
+   "count": 387,
+   "depart": [
+    25200,
+    25800
+   ],
+   "via": [],
+   "from": 0,
+   "to": 3
+  },
+  {
+   "count": 80,
+   "depart": [
+    25200,
+    25800
+   ],
+   "via": [],
+   "from": 77,
+   "to": 3
+  }
+ ],
+ "obstacles": [],
+ "tiles": [
+  {
+   "name": "rampmeter-s1",
+   "family": "rampmeter",
+   "seed": 1,
+   "params": {
+    "lanes": 4,
+    "rate": 29,
+    "rampRate": 8,
+    "win": 600
+   },
+   "notes": [
+    "4-lane mainline, metered ramp"
+   ],
+   "offset": [
+    0,
+    0
+   ],
+   "view": {
+    "x": -250,
+    "z": 60,
+    "span": 800
+   },
+   "bbox": {
+    "minX": -1500,
+    "maxX": 1500,
+    "minZ": 0,
+    "maxZ": 190
+   }
+  }
+ ]
+}

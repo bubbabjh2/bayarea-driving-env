@@ -1,0 +1,52 @@
+<!doctype html><html><head><meta charset="utf-8"><title>gpu actions</title></head><body><pre id="out">running</pre>
+<script type="module">
+// External-action GPU sim on the synthetic graph: compiles every kernel (obs v2 and v3), scatters cars, drives them
+// with constant actions from setActions, checks that gas accelerates, full brake stops, and the observation vectors
+// are finite. Query: ?n=2000&obs=v2|v3|none
+import { GPUSim } from '../../src/gpu/gpuSim.js';
+import { buildGraph } from '../../src/sim/roadGraph.js';
+import { makeSynthGraph } from '../../src/sim/synthGraph.js';
+const out = document.getElementById('out');
+const log = (...a) => { console.log(...a); out.textContent += '\n' + a.join(' '); };
+const res = { ok: true, checks: {} };
+const check = (k, cond, info) => { res.checks[k] = { pass: !!cond, ...info }; if (!cond) res.ok = false; log(k, cond ? 'PASS' : 'FAIL', JSON.stringify(info)); };
+try {
+  const q = new URLSearchParams(location.search);
+  const graph = buildGraph(makeSynthGraph({ blocks: 30, cross: 6, bridges: 3 }));
+  const n = +(q.get('n') || 2000);
+  for (const obs of (q.get('obs') ? [q.get('obs')] : ['v2', 'v3', 'none'])) {
+    const sim = await GPUSim.create(graph, { capacity: 8192, dt: 0.1, obs, features: { accidents: false } });
+    const r = sim.scatter(n);
+    const speeds = async () => {
+      await sim.sync(); const st = await sim.readState(); let sum = 0, cnt = 0, bad = 0;
+      for (let i = 0; i < sim.cap; i++) { if (st.veh.get(i, 'state') !== 1) continue; const s = st.veh.get(i, 'speed'); if (!Number.isFinite(s) || !Number.isFinite(st.pose[i * 4])) bad++; sum += s; cnt++; }
+      return { mean: cnt ? sum / cnt : 0, cnt, bad };
+    };
+    const s0 = await speeds();
+    const A = new Float32Array(sim.cap * 3);
+    for (let i = 0; i < sim.cap; i++) { A[3 * i] = 0; A[3 * i + 1] = 0.5; A[3 * i + 2] = 0; }
+    sim.setActions(A);
+    const t0 = performance.now();
+    for (let k = 0; k < 10; k++) await sim.runSteps(10);
+    await sim.sync();
+    const msPerStep = (performance.now() - t0) / 100;
+    const s1 = await speeds();
+    for (let i = 0; i < sim.cap; i++) { A[3 * i + 1] = 0; A[3 * i + 2] = 1; }
+    sim.setActions(A);
+    for (let k = 0; k < 10; k++) await sim.runSteps(10);
+    const s2 = await speeds();
+    let obsInfo = null;
+    if (obs !== 'none') {
+      const X = await sim.readObs(); let fin = 0, nz = 0;
+      for (let k = 0; k < Math.min(X.length, 200 * sim.obsSize); k++) { if (Number.isFinite(X[k])) fin++; if (X[k] !== 0) nz++; }
+      obsInfo = { obsSize: sim.obsSize, finite: fin, nonzero: nz, sampled: Math.min(X.length, 200 * sim.obsSize) };
+      check(`${obs}.obs finite`, fin === obsInfo.sampled && nz > 0, obsInfo);
+    }
+    const st = sim.getStats();
+    check(`${obs}.placed`, r.placed > 0 && s0.cnt > 0, { placed: r.placed, driving: s0.cnt });
+    check(`${obs}.gas accelerates`, s1.mean > s0.mean + 0.5 && s1.bad === 0, { before: +s0.mean.toFixed(2), after: +s1.mean.toFixed(2), msPerStep: +msPerStep.toFixed(3) });
+    check(`${obs}.brake stops`, s2.mean < 0.5 * s1.mean && s2.bad === 0, { gas: +s1.mean.toFixed(2), braked: +s2.mean.toFixed(2), policySteps: st.policySteps });
+  }
+} catch (e) { res.ok = false; res.error = String(e.message || e); res.stack = e.stack; log('ERROR', e.stack || e); }
+window.__result = res; document.title = res.ok ? 'PASS' : 'FAIL';
+</script></body></html>

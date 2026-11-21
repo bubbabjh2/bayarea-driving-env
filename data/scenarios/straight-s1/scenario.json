@@ -1,0 +1,78 @@
+{
+ "format": "bay-scenario/1",
+ "name": "straight-s1",
+ "family": "straight",
+ "seed": 1,
+ "params": {
+  "lanes": 1,
+  "length": 2631,
+  "rate": 12,
+  "win": 600
+ },
+ "notes": [],
+ "bbox": {
+  "minX": -1315.5,
+  "maxX": 1315.5,
+  "minZ": 0,
+  "maxZ": 0
+ },
+ "nodeCount": 54,
+ "edgeCount": 2,
+ "mainEdgeCount": 0,
+ "nodeNames": {
+  "west": 0,
+  "east": 1
+ },
+ "trips": [
+  {
+   "count": 60,
+   "depart": [
+    25200,
+    25800
+   ],
+   "via": [],
+   "from": 0,
+   "to": 1
+  },
+  {
+   "count": 60,
+   "depart": [
+    25200,
+    25800
+   ],
+   "via": [],
+   "from": 1,
+   "to": 0
+  }
+ ],
+ "obstacles": [],
+ "tiles": [
+  {
+   "name": "straight-s1",
+   "family": "straight",
+   "seed": 1,
+   "params": {
+    "lanes": 1,
+    "length": 2631,
+    "rate": 12,
+    "win": 600
+   },
+   "notes": [],
+   "offset": [
+    0,
+    0
+   ],
+   "view": {
+    "x": 0,
+    "z": 0,
+    "span": 500
+   },
+   "bbox": {
+    "minX": -1315.5,
+    "maxX": 1315.5,
+    "minZ": 0,
+    "maxZ": 0
+   }
+  }
+ ]
+}

@@ -1,0 +1,168 @@
+{
+ "format": "bay-scenario/1",
+ "name": "interchange-s1",
+ "family": "interchange",
+ "seed": 1,
+ "params": {
+  "lanes": 3,
+  "terminal": "stop",
+  "rate": 14,
+  "rampRate": 7,
+  "win": 900
+ },
+ "notes": [
+  "3-lane freeway, stop terminals, arterial deck 7 m"
+ ],
+ "bbox": {
+  "minX": -1800,
+  "maxX": 1800,
+  "minZ": -750,
+  "maxZ": 750
+ },
+ "nodeCount": 305,
+ "edgeCount": 18,
+ "mainEdgeCount": 18,
+ "nodeNames": {
+  "EBstart": 0,
+  "EBend": 4,
+  "WBstart": 5,
+  "WBend": 9,
+  "Sart": 186,
+  "Nart": 187
+ },
+ "trips": [
+  {
+   "count": 210,
+   "depart": [
+    25200,
+    26100
+   ],
+   "via": [],
+   "from": 0,
+   "to": 4
+  },
+  {
+   "count": 210,
+   "depart": [
+    25200,
+    26100
+   ],
+   "via": [],
+   "from": 5,
+   "to": 9
+  },
+  {
+   "count": 105,
+   "depart": [
+    25200,
+    26100
+   ],
+   "via": [],
+   "from": 0,
+   "to": 187
+  },
+  {
+   "count": 105,
+   "depart": [
+    25200,
+    26100
+   ],
+   "via": [],
+   "from": 0,
+   "to": 186
+  },
+  {
+   "count": 105,
+   "depart": [
+    25200,
+    26100
+   ],
+   "via": [],
+   "from": 5,
+   "to": 186
+  },
+  {
+   "count": 105,
+   "depart": [
+    25200,
+    26100
+   ],
+   "via": [],
+   "from": 186,
+   "to": 4
+  },
+  {
+   "count": 105,
+   "depart": [
+    25200,
+    26100
+   ],
+   "via": [],
+   "from": 187,
+   "to": 9
+  },
+  {
+   "count": 105,
+   "depart": [
+    25200,
+    26100
+   ],
+   "via": [],
+   "from": 187,
+   "to": 4
+  },
+  {
+   "count": 105,
+   "depart": [
+    25200,
+    26100
+   ],
+   "via": [],
+   "from": 186,
+   "to": 187
+  },
+  {
+   "count": 105,
+   "depart": [
+    25200,
+    26100
+   ],
+   "via": [],
+   "from": 187,
+   "to": 186
+  }
+ ],
+ "obstacles": [],
+ "tiles": [
+  {
+   "name": "interchange-s1",
+   "family": "interchange",
+   "seed": 1,
+   "params": {
+    "lanes": 3,
+    "terminal": "stop",
+    "rate": 14,
+    "rampRate": 7,
+    "win": 900
+   },
+   "notes": [
+    "3-lane freeway, stop terminals, arterial deck 7 m"
+   ],
+   "offset": [
+    0,
+    0
+   ],
+   "view": {
+    "x": 0,
+    "z": 0,
+    "span": 1000
+   },
+   "bbox": {
+    "minX": -1800,
+    "maxX": 1800,
+    "minZ": -750,
+    "maxZ": 750
+   }
+  }
+ ]
+}

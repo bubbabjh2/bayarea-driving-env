@@ -1,0 +1,162 @@
+{
+ "format": "bay-scenario/1",
+ "name": "junction-s1",
+ "family": "junction",
+ "seed": 1,
+ "params": {
+  "control": "allway",
+  "movement": "mixed",
+  "shape": "cross",
+  "major": "secondary1",
+  "angle": -0.11475845950189978,
+  "rate": 3,
+  "crossRate": 3,
+  "win": 600
+ },
+ "notes": [
+  "cross allway mixed; major secondary x1, minor secondary, skew -7 deg"
+ ],
+ "bbox": {
+  "minX": -450,
+  "maxX": 450,
+  "minZ": -447.0401120885957,
+  "maxZ": 447.0401120885957
+ },
+ "nodeCount": 45,
+ "edgeCount": 8,
+ "mainEdgeCount": 8,
+ "nodeNames": {
+  "W": 1,
+  "E": 12,
+  "S": 23,
+  "N": 34
+ },
+ "trips": [
+  {
+   "count": 30,
+   "depart": [
+    25200,
+    25800
+   ],
+   "via": [],
+   "from": 23,
+   "to": 1
+  },
+  {
+   "count": 30,
+   "depart": [
+    25200,
+    25800
+   ],
+   "via": [],
+   "from": 12,
+   "to": 23
+  },
+  {
+   "count": 30,
+   "depart": [
+    25200,
+    25800
+   ],
+   "via": [],
+   "from": 23,
+   "to": 12
+  },
+  {
+   "count": 30,
+   "depart": [
+    25200,
+    25800
+   ],
+   "via": [],
+   "from": 1,
+   "to": 23
+  },
+  {
+   "count": 30,
+   "depart": [
+    25200,
+    25800
+   ],
+   "via": [],
+   "from": 23,
+   "to": 34
+  },
+  {
+   "count": 30,
+   "depart": [
+    25200,
+    25800
+   ],
+   "via": [],
+   "from": 34,
+   "to": 23
+  },
+  {
+   "count": 30,
+   "depart": [
+    25200,
+    25800
+   ],
+   "via": [],
+   "from": 1,
+   "to": 12
+  },
+  {
+   "count": 30,
+   "depart": [
+    25200,
+    25800
+   ],
+   "via": [],
+   "from": 12,
+   "to": 1
+  },
+  {
+   "count": 15,
+   "depart": [
+    25200,
+    25800
+   ],
+   "via": [],
+   "from": 34,
+   "to": 23
+  }
+ ],
+ "obstacles": [],
+ "tiles": [
+  {
+   "name": "junction-s1",
+   "family": "junction",
+   "seed": 1,
+   "params": {
+    "control": "allway",
+    "movement": "mixed",
+    "shape": "cross",
+    "major": "secondary1",
+    "angle": -0.11475845950189978,
+    "rate": 3,
+    "crossRate": 3,
+    "win": 600
+   },
+   "notes": [
+    "cross allway mixed; major secondary x1, minor secondary, skew -7 deg"
+   ],
+   "offset": [
+    0,
+    0
+   ],
+   "view": {
+    "x": 0,
+    "z": 0,
+    "span": 170
+   },
+   "bbox": {
+    "minX": -450,
+    "maxX": 450,
+    "minZ": -447.0401120885957,
+    "maxZ": 447.0401120885957
+   }
+  }
+ ]
+}
