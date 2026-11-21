@@ -69,7 +69,7 @@ impl Env {
                 let sw = Arc::new(bayenv_sim::world::World::from_bayenv(&world));
                 let pop = Arc::new(bayenv_sim::population::Population::generate_like_env(&sw, "real", n_cars, seed as f64, Some(std::path::Path::new(&data)))?);
                 let mut opts = bayenv_sim::sim::SimOpts::default(); opts.dt = dt; opts.seed = seed as f64; opts.fuel = fuel_on;
-                let cfg = bayenv_sim::env::EnvConfig { opts, start_time, static_obstacles: Vec::new(), scenario_obstacles: Vec::new() };
+                let cfg = bayenv_sim::env::EnvConfig { opts, start_time, static_obstacles: Vec::new(), scenario_obstacles: Vec::new(), obstacles: None };
                 let env = bayenv_sim::env::Env::new(sw, pop, cfg, Box::new(|w| bayenv_sim::harness::router_for(&w)));
                 Ok((world, env))
             });
