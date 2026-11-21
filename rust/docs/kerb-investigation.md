@@ -1,5 +1,10 @@
 # Kerb strikes: CPU vs GPU (investigation)
 
+> **Status:** the fix is the default on `rust` (`GpuOptions.cpu_connector_join = true`, Python
+> `cpu_connector_join=True`). `false` is the legacy mode that reproduces the JS GPU bit-for-bit, and every JS-oracle
+> check runs in it. **Legacy GPU runs and all earlier GPU checkpoints were trained with the bug described below.**
+> `crates/bayenv-gpu/tests/cpu_vs_gpu.rs` (in `check.sh`) asserts CPU / GPU aggregate agreement on the default model.
+
 **Problem.** On the `compare_backends.py` scenario (5,000 commuters, seed 42, from 07:00, dt 0.05, k = 1, every
 driving car commanded [steer 0, gas 0.3, brake 0], position-mode steering) the GPU logged 1,394 contact rows over
 1,200 steps, 1,388 of them barrier (kerb) strikes. The CPU logged 17, 12 of them barrier strikes. The CPU model is
@@ -102,7 +107,7 @@ JS-GPU      578 255965 367.897 1.39264 -0.0851789 0 0 0 24.1371   (lat -0.1 m pe
 
 ### compare_backends.py (5,000 commuters, 1,200 steps, from 07:00)
 
-| event (CPU / GPU) | default | `--spawn-default` | `--cpu-connector-join` | both |
+| event (CPU / GPU) | legacy GPU (`--legacy-gpu`) | legacy, `--spawn-default` | fixed GPU (now the default) | fixed, `--spawn-default` |
 |---|---|---|---|---|
 | contact rows | 17 / 1,394 | 17 / 1,336 | 17 / 10 | 17 / 12 |
 | crashed (car disabled) | 28 / 41 (13 common) | 28 / 39 | 28 / 31 (27 common) | 28 / 27 (27 common, 26 on the same step) |
@@ -123,18 +128,20 @@ The missed exits still differ in their reported step: 15 of 116 are on the same 
 emits a missed exit at the connector join, while the CPU emits it in `_missedExits` after the integration. This was
 not investigated further.
 
-## Fix (flagged, default off)
+## Fix (originally flagged, default off; now the default)
 
 `GpuOptions.cpu_connector_join` applies the text patch `crates/bayenv-gpu/kernels/cpu_connector_join.wgsl` to the
-integrate kernel. Python: `bayenv.Env(..., cpu_connector_join=True)` and `VecEnv(..., cpu_connector_join=True)`.
-Examples: `BAYENV_GPU_OPTS=cpu_connector_join=1`. The patch adds `var sArr = s0`, sets `sArr = movSOut` at a
+integrate kernel. It is on by default. Legacy mode is `GpuOptions { cpu_connector_join: false, .. }`, Python
+`bayenv.Env(..., cpu_connector_join=False)` / `VecEnv(..., cpu_connector_join=False)`, or
+`BAYENV_GPU_OPTS=cpu_connector_join=0` in the examples (the JS-oracle examples default to legacy). The patch adds `var sArr = s0`, sets `sArr = movSOut` at a
 connector exit and `sArr = 0` after an edge hop, and tests `sArr > sIn + 0.3`. This is the CPU's `sArrive`.
 `kernels::patch_text` asserts that every original snippet occurs exactly once, and a unit test in `kernels.rs`
 checks the same.
 
-With the flag off, the kernels are the JS kernels. A Python state dump (veh + pose after 400 steps, scatter of 10,000,
+With the flag off (legacy mode), the kernels are the JS kernels. A Python state dump (veh + pose after 400 steps, scatter of 10,000,
 seed 11) is byte-identical between the pre-change build and this build, and the run is deterministic. The 20k
 population run is not deterministic run to run (contact atomics), so it is not used for this check.
 
-Recommendation: fix the JS kernel upstream with the same four lines in `src/gpu/kernels/integrate.wgsl`. Until then,
-train on the GPU with `cpu_connector_join=True`, so that policies see the CPU's connector entry.
+Recommendation: fix the JS kernel upstream with the same four lines in `src/gpu/kernels/integrate.wgsl`. The Rust
+GPU now uses the fix by default, so new training sees the CPU's connector entry. Policies trained on legacy runs saw the
+drift and should be fine-tuned on the default model.

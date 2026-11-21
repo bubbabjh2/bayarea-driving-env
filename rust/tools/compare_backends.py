@@ -1,9 +1,9 @@
 """CPU vs GPU events on the same scenario, k = 1 (rust/README.md "CPU vs GPU events").
 
-    python rust/tools/compare_backends.py data [n_commuters=5000] [steps=3000] [start=25200] [seed=42] [--cpu-connector-join]
+    python rust/tools/compare_backends.py data [n_commuters=5000] [steps=3000] [start=25200] [seed=42] [--legacy-gpu] [--spawn-default]
 
---cpu-connector-join: GPU model patch GpuOptions.cpu_connector_join (junction connector entry as in the CPU sim,
-rust/docs/kerb-investigation.md); default off = the JS GPU kernels.
+--legacy-gpu: GPU with cpu_connector_join=False, the JS GPU kernels bit-for-bit including their junction connector-entry
+bug (rust/docs/kerb-investigation.md; the model of every GPU run before the fix became the default).
 --spawn-default: GPU rows of slots that are not driving get the CPU sim's default action [0, 0, 0.3]. The CPU applies
 an action only to cars driving when act() is called, so a car spawning during a step brakes (default action) on its
 first decision; the GPU holds the slot's row (gas 0.3). This shifts the CPU trajectories by ~2 steps (harness only).
@@ -16,8 +16,8 @@ import sys, collections
 import numpy as np
 import bayenv
 
-cj = "--cpu-connector-join" in sys.argv; sd = "--spawn-default" in sys.argv
-sys.argv = [a for a in sys.argv if a not in ("--cpu-connector-join", "--spawn-default")]
+cj = "--legacy-gpu" not in sys.argv; sd = "--spawn-default" in sys.argv
+sys.argv = [a for a in sys.argv if a not in ("--legacy-gpu", "--spawn-default")]
 data = sys.argv[1] if len(sys.argv) > 1 else "data"
 n = int(sys.argv[2]) if len(sys.argv) > 2 else 5000
 steps = int(sys.argv[3]) if len(sys.argv) > 3 else 3000

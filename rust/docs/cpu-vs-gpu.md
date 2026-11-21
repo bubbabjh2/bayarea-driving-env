@@ -1,43 +1,48 @@
 # CPU vs GPU backend: expected differences
 
 The two backends implement the same model twice. The CPU sim is `src/sim` in JS and `bayenv-sim` in Rust, bit-exact
-with each other. The GPU sim is `src/gpu` in JS (WGSL) and `bayenv-gpu` in Rust (the same WGSL through wgpu), equal
-within float tolerance. The CPU and GPU models are not equal to each other. The JS project's own CPU-vs-GPU check
-(`test/gpu/equivalence.html`, synthetic graph) reaches 92.5 % of cars within 0.5 m after 1,000 steps. On the real
-world with blind constant actions the differences grow faster, because crashes and kerb strikes amplify them.
+with each other. The GPU sim is `src/gpu` in JS (WGSL) and `bayenv-gpu` in Rust (the same WGSL through wgpu).
 
-Measured with `rust/tools/compare_backends.py data 5000 1200` (5,000 commuters from population.js, seed 42, from
-07:00, dt 0.05, k = 1, every driving car commanded [steer 0, gas 0.3, brake 0], rows matched by agent):
+The Rust GPU defaults to `GpuOptions.cpu_connector_join = true`. This fixes a bug in the JS GPU kernel's junction
+connector entry, described in `kerb-investigation.md`. With `false` (legacy mode), the Rust GPU runs the JS kernels
+and matches the JS GPU within float tolerance, including the bug.
 
-| event | CPU | GPU | agree |
+**Legacy GPU runs and every GPU checkpoint trained before this default were trained with the bug.** In those runs,
+almost every car entering a junction box got a constant heading offset of up to 0.09 rad. A car that does not steer
+against the offset drifts into the kerb. Those policies learned to correct a drift that the CPU model, and now the
+default GPU model, does not have.
+
+Measured with `rust/tools/compare_backends.py data 5000 1200 25200 42 [--legacy-gpu] [--spawn-default]`. The setup is
+5,000 commuters from population.js, seed 42, from 07:00, dt 0.05, k = 1, with every driving car commanded
+[steer 0, gas 0.3, brake 0]. Rows are matched by agent.
+
+| event (CPU / GPU) | default GPU, `--spawn-default` | default GPU | legacy GPU (`--legacy-gpu`) |
 |---|---|---|---|
-| spawned | 834 | 834 | 833 agents on the identical step, 834 within 20 steps |
-| arrived | 4 | 4 | 3 common agents; late_by within 1.6 s |
-| crashed (car disabled) | 28 | 41 | 13 common agents |
-| contact rows | 17 | 1,394 | 1,388 of the GPU rows are barrier (kerb) strikes, vs 12 on the CPU |
-| missed exit | 120 | 86 | 74 common agents |
-| signal / stop violation | 1,627 | 1,592 | 655 common agents |
+| spawned | 834 / 834 | 834 / 834 | 834 / 834 |
+| arrived | 4 / 4, late_by identical | 4 / 4, max 0.15 s | 4 / 4, max 1.6 s |
+| crashed (car disabled) | 28 / 27, 27 common, 26 on the same step | 28 / 31, 27 common | 28 / 41, 13 common |
+| contact rows | 17 / 12 | 17 / 10 | 17 / 1,394 (1,388 barrier strikes) |
+| missed exit | 120 / 123, 116 common | 120 / 123, 116 common | 120 / 86, 74 common |
+| signal / stop violation | 1,627 / 1,627, 657 on the same step | 1,627 / 1,625 | 1,627 / 1,592 |
+
+`crates/bayenv-gpu/tests/cpu_vs_gpu.rs` runs the first column as a test, so it is part of `check.sh`. It asserts
+aggregate agreement within tolerances around these values.
 
 What this means:
 * **Spawning and the trip schedule are identical:** same population, same departure step.
-* **Kerb strikes** are the largest difference. Both report a strike once, when it starts. On the GPU, cars driving
-  blind (steer 0) leave the lane, hit the kerb and bounce back far more often: about 5 separate strikes per car over
-  the run, at a median Δv of 2 km/h. The CPU does this rarely. **Root cause: a JS-GPU bug** in the junction connector
-  entry (`integrate.wgsl:228` tests the end-of-step `s`, `vehicle.js:368` the start-of-step `sArrive`), which gives
-  almost every car entering a junction box a constant heading offset of up to 0.09 rad. See `kerb-investigation.md`.
-  `GpuOptions.cpu_connector_join` / `Env(..., cpu_connector_join=True)` (default off) fixes it. With the fix the
-  numbers are: contacts 17 / 10, crashed 28 / 31 (27 common), missed exits 120 / 123 (116 common), violations
-  1,627 / 1,625. With `compare_backends.py --spawn-default` as well, crashed is 28 / 27 (26 on the same step) and
-  violations 1,627 / 1,627.
-* **Crashes, missed exits and violations** depend on where the cars drift, so their counts and timing diverge with
-  the trajectories (same order of magnitude, different agents).
-* For training, treat the backends as two related environments. Compare policies within one backend. Use the
-  harness when you need to check that a reward or metric behaves the same on both.
+* **`--spawn-default`** only changes the harness. The CPU applies `act()` rows only to cars that are driving when it
+  is called, so a car that spawns during a step brakes (the default action) on its first decision. The GPU uses the
+  slot's held row. This shifts trajectories by about 2 steps, but not the aggregates.
+* **Remaining differences** are f32 vs f64 arithmetic and the order of contact resolution. Missed exits are also
+  reported at a different point: the GPU at the connector join, the CPU in `_missedExits`. Contacts amplify these.
+  With the default GPU model, a single car matches the CPU to 1e-3 m over 3,000 steps.
+* **For training,** the default GPU model is the CPU model. Compare policies trained on legacy GPU runs only with
+  `cpu_connector_join=False`, or retrain or fine-tune them on the default model.
 
 ## Crash divergence dumps (CPU half: `rust/tools/cpu_divergence.py`)
 
 `python rust/tools/cpu_divergence.py data [n=5000] [steps=3000] [start=25200] [seed=42] [--agents a,b,c] [--k 3] [--window 50]`
-runs the `compare_backends.py --cpu-connector-join --spawn-default` setup on both backends, picks the first k agents
+runs the `compare_backends.py --spawn-default` setup (default GPU model, `cpu_connector_join=True`) on both backends, picks the first k agents
 that are CRASHED (event kind 2) on the CPU only, reruns the CPU and writes `rust/oracle/divergence/cpu-<agent>.jsonl`:
 one JSON object per step for the `window` steps before the agent's crash step and the crash step itself, read from
 `env.state()` after `env.step(1)` (the state at the END of that step), for the slot holding that agent:
