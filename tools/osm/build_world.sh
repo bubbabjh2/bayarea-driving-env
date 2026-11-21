@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # Full rebuild of the world data from the pinned OSM snapshots (docs/WORLD-BUILD.md).
 #   bash tools/osm/build_world.sh osm       # fetch + flat-ground OSM build -> data/osm/flat, data/water.json, data/crosswalks.json
-#   bash tools/osm/build_world.sh derive    # after the elevation step: crossings, junctions (+ controls stop lines), lane lines
+#   bash tools/osm/build_world.sh derive    # after the elevation step: crossings, controls merge (tools/controls/), junctions, lane lines
 #   bash tools/osm/build_world.sh all       # osm, then the elevation step (npm run build:elevation), then derive
 # FLAT (default data/osm/flat) = where the flat-ground (structures/2) build goes; the elevation step reads it.
 # Map data (c) OpenStreetMap contributors, ODbL 1.0.
@@ -24,8 +24,8 @@ osm() {
 }
 derive() {
   python3 -I tools/build_crossings.py data
-  node --max-old-space-size=$HEAP tools/build_junctions.mjs data/
-  node --max-old-space-size=$HEAP tools/lines/build_lines.mjs data
+  # traffic controls: OSM (data/src/flat/controls.*) + authoritative merge -> patch_points -> junctions -> lines
+  HEAP_MB=$HEAP node tools/controls/build.mjs --no-verify
   node tools/osm/verify.mjs
 }
 case "${1:-all}" in

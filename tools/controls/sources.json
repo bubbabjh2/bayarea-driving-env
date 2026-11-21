@@ -1,0 +1,131 @@
+{
+ "doc": "Traffic-control datasets used by tools/controls/merge.py. role 'merge': the licence allows redistribution (PDDL / CC BY), the features are merged into data/controls.* and the snapshot is committed in data/controls-src/. role 'verify': no licence stated, so the data is only compared with (tools/controls/report/), never written into data/ or committed; fetch.mjs stores it in data/controls-src/verify/ (gitignored). fetch.mjs pins download date, feature count and sha256 of the normalised GeoJSON in sources.lock.json.",
+ "sources": [
+  {
+   "id": "sf-signals",
+   "city": "San Francisco",
+   "kind": "signal",
+   "publisher": "SFMTA via DataSF (dataset ybh5-27n2)",
+   "landing": "https://data.sfgov.org/d/ybh5-27n2",
+   "type": "socrata",
+   "url": "https://data.sf.gov/resource/ybh5-27n2.geojson",
+   "licence": "ODC PDDL 1.0 (public domain dedication)",
+   "inventoryComplete": true,
+   "role": "merge"
+  },
+  {
+   "id": "sf-stop-signs",
+   "city": "San Francisco",
+   "kind": "stop",
+   "publisher": "SFMTA via DataSF (dataset 4542-gpa3)",
+   "landing": "https://data.sfgov.org/d/4542-gpa3",
+   "type": "socrata",
+   "url": "https://data.sf.gov/resource/4542-gpa3.geojson",
+   "licence": "ODC PDDL 1.0 (public domain dedication)",
+   "inventoryComplete": true,
+   "role": "merge"
+  },
+  {
+   "id": "sj-signals",
+   "city": "San Jose",
+   "kind": "signal",
+   "publisher": "City of San Jose, City Owned Traffic Signals",
+   "landing": "https://data.sanjoseca.gov/dataset/city-owned-traffic-signals",
+   "type": "arcgis",
+   "url": "https://geo.sanjoseca.gov/server/rest/services/OPN/OPN_OpenDataService/MapServer/506",
+   "licence": "CC BY (Creative Commons Attribution, as listed on data.sanjoseca.gov; attribution: City of San Jose)",
+   "role": "merge"
+  },
+  {
+   "id": "oakland-signals",
+   "city": "Oakland",
+   "kind": "signal",
+   "publisher": "City of Oakland GIS, TrafficSignals",
+   "landing": "https://services.arcgis.com/9tC74aDHuml0x5Yz/arcgis/rest/services/TrafficSignals/FeatureServer/0",
+   "type": "arcgis",
+   "url": "https://services.arcgis.com/9tC74aDHuml0x5Yz/arcgis/rest/services/TrafficSignals/FeatureServer/0",
+   "licence": "public ArcGIS service; no licence stated (used for verification and placement only; see README)",
+   "role": "verify"
+  },
+  {
+   "id": "ssf-signals",
+   "city": "South San Francisco",
+   "kind": "signal",
+   "publisher": "City of South San Francisco, Traffic_Signals_View",
+   "landing": "https://services5.arcgis.com/inY93B27l4TSbT7h/arcgis/rest/services/Traffic_Signals_View/FeatureServer/0",
+   "type": "arcgis",
+   "url": "https://services5.arcgis.com/inY93B27l4TSbT7h/arcgis/rest/services/Traffic_Signals_View/FeatureServer/0",
+   "licence": "public ArcGIS service; no licence stated",
+   "role": "verify"
+  },
+  {
+   "id": "emeryville-signals",
+   "city": "Emeryville",
+   "kind": "signal",
+   "publisher": "City of Emeryville, Traffic_Signals_View",
+   "landing": "https://services3.arcgis.com/ljOdqLVbHpS7dOJQ/arcgis/rest/services/Traffic_Signals_View/FeatureServer/0",
+   "type": "arcgis",
+   "url": "https://services3.arcgis.com/ljOdqLVbHpS7dOJQ/arcgis/rest/services/Traffic_Signals_View/FeatureServer/0",
+   "licence": "public ArcGIS service; no licence stated",
+   "role": "verify"
+  },
+  {
+   "id": "mv-signals",
+   "city": "Mountain View",
+   "kind": "signal-pole",
+   "publisher": "City of Mountain View, Public/Signal (signal poles, MOUNTTYPE)",
+   "landing": "https://maps.mountainview.gov/arcgis/rest/services/Public/Signal/MapServer/0",
+   "type": "arcgis",
+   "url": "https://maps.mountainview.gov/arcgis/rest/services/Public/Signal/MapServer/0",
+   "licence": "public ArcGIS service; (c) City of Mountain View, no licence stated",
+   "role": "verify"
+  },
+  {
+   "id": "cupertino-signal-heads",
+   "city": "Cupertino",
+   "kind": "signal-head",
+   "publisher": "City of Cupertino, Traffic Signal Head",
+   "landing": "https://gis.cupertino.org/cupgis/rest/services/Public/Traffic_Infrastructure/MapServer/3",
+   "type": "arcgis",
+   "url": "https://gis.cupertino.org/cupgis/rest/services/Public/Traffic_Infrastructure/MapServer/3",
+   "licence": "public ArcGIS service; no licence stated",
+   "role": "verify"
+  },
+  {
+   "id": "cupertino-signs",
+   "city": "Cupertino",
+   "kind": "sign",
+   "publisher": "City of Cupertino, Traffic Signs (all MUTCD codes; R1-1 stop, R1-2 yield are used)",
+   "landing": "https://gis.cupertino.org/cupgis/rest/services/Public/Traffic_Infrastructure/MapServer/34",
+   "type": "arcgis",
+   "url": "https://gis.cupertino.org/cupgis/rest/services/Public/Traffic_Infrastructure/MapServer/34",
+   "licence": "public ArcGIS service; no licence stated",
+   "role": "verify"
+  }
+ ],
+ "noAuthoritativeSource": [
+  "Palo Alto",
+  "Sunnyvale",
+  "Santa Clara",
+  "Redwood City",
+  "San Mateo",
+  "Menlo Park",
+  "Burlingame",
+  "San Bruno",
+  "Millbrae",
+  "Daly City",
+  "Belmont",
+  "San Carlos",
+  "Foster City",
+  "Los Altos",
+  "Milpitas",
+  "Fremont",
+  "Newark",
+  "Union City",
+  "Hayward",
+  "San Leandro",
+  "Alameda",
+  "Berkeley",
+  "Caltrans (state highway signals, ramp meters: only PDF maps / RMDP report, no GIS layer found)"
+ ]
+}

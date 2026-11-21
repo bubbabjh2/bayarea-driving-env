@@ -1,0 +1,7214 @@
+{
+ "doc": "tools/controls/merge.py: per-city coverage (merge = written into data/controls.*, verify = compared only)",
+ "cities": {
+  "San Francisco": {
+   "sf-signals": {
+    "role": "merge",
+    "authoritative": 1311,
+    "unplaced": 50,
+    "added": 32,
+    "confirmed": 1229,
+    "signsReplacedBySignal": 4,
+    "osmNotInDataset": 85
+   },
+   "sf-stop-signs": {
+    "role": "merge",
+    "authoritative": 11174,
+    "approachesAdded": 2696,
+    "controlsConfirmed": 2026,
+    "controlsAdded": 1823,
+    "noMatchingLeg": 344,
+    "atSignals": 201,
+    "unplaced": 135,
+    "osmNotInDataset": 135,
+    "osmRemoved": 135
+   }
+  },
+  "San Jose": {
+   "sj-signals": {
+    "role": "merge",
+    "authoritative": 971,
+    "confirmed": 757,
+    "unplaced": 163,
+    "added": 51,
+    "signsReplacedBySignal": 1,
+    "osmNotInDataset": 145
+   }
+  },
+  "Oakland": {
+   "oakland-signals": {
+    "role": "verify",
+    "authoritative": 730,
+    "confirmed": 621,
+    "knownMissing": 74,
+    "unplaced": 35,
+    "osmNotInDataset": 53
+   }
+  },
+  "South San Francisco": {
+   "ssf-signals": {
+    "role": "verify",
+    "authoritative": 135,
+    "confirmed": 109,
+    "knownMissing": 12,
+    "unplaced": 14,
+    "osmNotInDataset": 27
+   }
+  },
+  "Emeryville": {
+   "emeryville-signals": {
+    "role": "verify",
+    "authoritative": 36,
+    "confirmed": 30,
+    "unplaced": 3,
+    "knownMissing": 3,
+    "osmNotInDataset": 17
+   }
+  },
+  "Mountain View": {
+   "mv-signals": {
+    "role": "verify",
+    "authoritative": 129,
+    "confirmed": 116,
+    "unplaced": 9,
+    "knownMissing": 4,
+    "osmNotInDataset": 54
+   }
+  },
+  "Cupertino": {
+   "cupertino-signal-heads": {
+    "role": "verify",
+    "authoritative": 74,
+    "confirmed": 68,
+    "unplaced": 6,
+    "osmNotInDataset": 7
+   },
+   "cupertino-signs": {
+    "role": "verify",
+    "authoritative": 605,
+    "knownMissing": 415,
+    "confirmed": 171,
+    "unplaced": 14,
+    "atSignals": 2,
+    "noMatchingLeg": 3,
+    "osmNotInDataset": 55
+   }
+  }
+ },
+ "unplaced": [
+  {
+   "source": "sf-signals",
+   "id": "14401",
+   "lonlat": [
+    -122.382782,
+    37.7399
+   ]
+  },
+  {
+   "source": "sf-signals",
+   "id": "14402",
+   "lonlat": [
+    -122.475475,
+    37.714157
+   ]
+  },
+  {
+   "source": "sf-signals",
+   "id": "14447",
+   "lonlat": [
+    -122.398265,
+    37.716468
+   ]
+  },
+  {
+   "source": "sf-signals",
+   "id": "14497",
+   "lonlat": [
+    -122.445437,
+    37.722118
+   ]
+  },
+  {
+   "source": "sf-signals",
+   "id": "14665",
+   "lonlat": [
+    -122.413304,
+    37.77983
+   ]
+  },
+  {
+   "source": "sf-signals",
+   "id": "14666",
+   "lonlat": [
+    -122.415127,
+    37.779789
+   ]
+  },
+  {
+   "source": "sf-signals",
+   "id": "14695",
+   "lonlat": [
+    -122.416768,
+    37.779584
+   ]
+  },
+  {
+   "source": "sf-signals",
+   "id": "15413",
+   "lonlat": [
+    -122.401794,
+    37.802311
+   ]
+  },
+  {
+   "source": "sf-signals",
+   "id": "15461",
+   "lonlat": [
+    -122.401116,
+    37.785544
+   ]
+  },
+  {
+   "source": "sf-signals",
+   "id": "15462",
+   "lonlat": [
+    -122.403085,
+    37.785367
+   ]
+  },
+  {
+   "source": "sf-signals",
+   "id": "15463",
+   "lonlat": [
+    -122.405339,
+    37.783586
+   ]
+  },
+  {
+   "source": "sf-signals",
+   "id": "15464",
+   "lonlat": [
+    -122.401544,
+    37.784169
+   ]
+  },
+  {
+   "source": "sf-signals",
+   "id": "15465",
+   "lonlat": [
+    -122.506985,
+    37.737951
+   ]
+  },
+  {
+   "source": "sf-signals",
+   "id": "15466",
+   "lonlat": [
+    -122.507448,
+    37.741654
+   ]
+  },
+  {
+   "source": "sf-signals",
+   "id": "15467",
+   "lonlat": [
+    -122.507946,
+    37.745365
+   ]
+  },
+  {
+   "source": "sf-signals",
+   "id": "15468",
+   "lonlat": [
+    -122.508412,
+    37.749085
+   ]
+  },
+  {
+   "source": "sf-signals",
+   "id": "15469",
+   "lonlat": [
+    -122.508892,
+    37.752814
+   ]
+  },
+  {
+   "source": "sf-signals",
+   "id": "15470",
+   "lonlat": [
+    -122.509875,
+    37.760272
+   ]
+  },
+  {
+   "source": "sf-signals",
+   "id": "15471",
+   "lonlat": [
+    -122.509384,
+    37.756543
+   ]
+  },
+  {
+   "source": "sf-signals",
+   "id": "15472",
+   "lonlat": [
+    -122.429783,
+    37.785564
+   ]
+  },
+  {
+   "source": "sf-signals",
+   "id": "15473",
+   "lonlat": [
+    -122.397885,
+    37.794863
+   ]
+  },
+  {
+   "source": "sf-signals",
+   "id": "15474",
+   "lonlat": [
+    -122.393805,
+    37.795182
+   ]
+  },
+  {
+   "source": "sf-signals",
+   "id": "15476",
+   "lonlat": [
+    -122.400871,
+    37.802964
+   ]
+  },
+  {
+   "source": "sf-signals",
+   "id": "15477",
+   "lonlat": [
+    -122.388257,
+    37.783585
+   ]
+  },
+  {
+   "source": "sf-signals",
+   "id": "15478",
+   "lonlat": [
+    -122.390614,
+    37.779047
+   ]
+  },
+  {
+   "source": "sf-signals",
+   "id": "15479",
+   "lonlat": [
+    -122.392934,
+    37.777273
+   ]
+  },
+  {
+   "source": "sf-signals",
+   "id": "15480",
+   "lonlat": [
+    -122.39519,
+    37.775527
+   ]
+  },
+  {
+   "source": "sf-signals",
+   "id": "15481",
+   "lonlat": [
+    -122.396656,
+    37.795008
+   ]
+  },
+  {
+   "source": "sf-signals",
+   "id": "15482",
+   "lonlat": [
+    -122.399049,
+    37.794727
+   ]
+  },
+  {
+   "source": "sf-signals",
+   "id": "15484",
+   "lonlat": [
+    -122.42177,
+    37.775127
+   ]
+  },
+  {
+   "source": "sf-signals",
+   "id": "15485",
+   "lonlat": [
+    -122.458666,
+    37.763201
+   ]
+  },
+  {
+   "source": "sf-signals",
+   "id": "15508",
+   "lonlat": [
+    -122.404299,
+    37.73226
+   ]
+  },
+  {
+   "source": "sf-signals",
+   "id": "15519",
+   "lonlat": [
+    -122.394232,
+    37.794884
+   ]
+  },
+  {
+   "source": "sf-signals",
+   "id": "15525",
+   "lonlat": [
+    -122.396899,
+    37.798364
+   ]
+  },
+  {
+   "source": "sf-signals",
+   "id": "15551",
+   "lonlat": [
+    -122.490444,
+    37.73405
+   ]
+  },
+  {
+   "source": "sf-signals",
+   "id": "15566",
+   "lonlat": [
+    -122.469304,
+    37.712591
+   ]
+  },
+  {
+   "source": "sf-signals",
+   "id": "15588",
+   "lonlat": [
+    -122.452359,
+    37.725716
+   ]
+  },
+  {
+   "source": "sf-signals",
+   "id": "15590",
+   "lonlat": [
+    -122.406558,
+    37.755335
+   ]
+  },
+  {
+   "source": "sf-signals",
+   "id": "15600",
+   "lonlat": [
+    -122.418406,
+    37.779343
+   ]
+  },
+  {
+   "source": "sf-signals",
+   "id": "15612",
+   "lonlat": [
+    -122.480302,
+    37.71454
+   ]
+  },
+  {
+   "source": "sf-signals",
+   "id": "15633",
+   "lonlat": [
+    -122.406012,
+    37.742011
+   ]
+  },
+  {
+   "source": "sf-signals",
+   "id": "15654",
+   "lonlat": [
+    -122.452374,
+    37.72712
+   ]
+  },
+  {
+   "source": "sf-signals",
+   "id": "15655",
+   "lonlat": [
+    -122.39098,
+    37.768719
+   ]
+  },
+  {
+   "source": "sf-signals",
+   "id": "15677",
+   "lonlat": [
+    -122.45234,
+    37.723892
+   ]
+  },
+  {
+   "source": "sf-signals",
+   "id": "15719",
+   "lonlat": [
+    -122.393804,
+    37.767602
+   ]
+  },
+  {
+   "source": "sf-signals",
+   "id": "15765",
+   "lonlat": [
+    -122.396571,
+    37.788963
+   ]
+  },
+  {
+   "source": "sf-signals",
+   "id": "15766",
+   "lonlat": [
+    -122.394814,
+    37.790355
+   ]
+  },
+  {
+   "source": "sf-signals",
+   "id": "15767",
+   "lonlat": [
+    -122.395685,
+    37.78966
+   ]
+  },
+  {
+   "source": "sf-signals",
+   "id": "15779",
+   "lonlat": [
+    -122.398564,
+    37.788981
+   ]
+  },
+  {
+   "source": "sf-signals",
+   "id": "15793",
+   "lonlat": [
+    -122.39244,
+    37.765723
+   ]
+  },
+  {
+   "source": "sj-signals",
+   "id": 5170,
+   "lonlat": [
+    -121.922667,
+    37.243493
+   ]
+  },
+  {
+   "source": "sj-signals",
+   "id": 5176,
+   "lonlat": [
+    -121.889283,
+    37.332356
+   ]
+  },
+  {
+   "source": "sj-signals",
+   "id": 5192,
+   "lonlat": [
+    -121.884562,
+    37.333825
+   ]
+  },
+  {
+   "source": "sj-signals",
+   "id": 5215,
+   "lonlat": [
+    -121.885773,
+    37.33355
+   ]
+  },
+  {
+   "source": "sj-signals",
+   "id": 5237,
+   "lonlat": [
+    -121.890296,
+    37.328064
+   ]
+  },
+  {
+   "source": "sj-signals",
+   "id": 5263,
+   "lonlat": [
+    -121.79533,
+    37.320071
+   ]
+  },
+  {
+   "source": "sj-signals",
+   "id": 5332,
+   "lonlat": [
+    -121.791537,
+    37.313971
+   ]
+  },
+  {
+   "source": "sj-signals",
+   "id": 5381,
+   "lonlat": [
+    -121.90987,
+    37.248897
+   ]
+  },
+  {
+   "source": "sj-signals",
+   "id": 5427,
+   "lonlat": [
+    -121.894626,
+    37.249069
+   ]
+  },
+  {
+   "source": "sj-signals",
+   "id": 5438,
+   "lonlat": [
+    -121.877774,
+    37.250499
+   ]
+  },
+  {
+   "source": "sj-signals",
+   "id": 5444,
+   "lonlat": [
+    -121.903536,
+    37.236368
+   ]
+  },
+  {
+   "source": "sj-signals",
+   "id": 5469,
+   "lonlat": [
+    -121.887106,
+    37.245818
+   ]
+  },
+  {
+   "source": "sj-signals",
+   "id": 5471,
+   "lonlat": [
+    -121.889538,
+    37.243184
+   ]
+  },
+  {
+   "source": "sj-signals",
+   "id": 5472,
+   "lonlat": [
+    -121.891986,
+    37.245523
+   ]
+  },
+  {
+   "source": "sj-signals",
+   "id": 5476,
+   "lonlat": [
+    -121.83062,
+    37.236878
+   ]
+  },
+  {
+   "source": "sj-signals",
+   "id": 5505,
+   "lonlat": [
+    -121.803853,
+    37.236994
+   ]
+  },
+  {
+   "source": "sj-signals",
+   "id": 5510,
+   "lonlat": [
+    -121.912988,
+    37.236265
+   ]
+  },
+  {
+   "source": "sj-signals",
+   "id": 5511,
+   "lonlat": [
+    -121.922624,
+    37.236191
+   ]
+  },
+  {
+   "source": "sj-signals",
+   "id": 5512,
+   "lonlat": [
+    -121.903809,
+    37.240141
+   ]
+  },
+  {
+   "source": "sj-signals",
+   "id": 5533,
+   "lonlat": [
+    -121.885335,
+    37.24685
+   ]
+  },
+  {
+   "source": "sj-signals",
+   "id": 5534,
+   "lonlat": [
+    -121.879564,
+    37.249859
+   ]
+  },
+  {
+   "source": "sj-signals",
+   "id": 5546,
+   "lonlat": [
+    -121.79697,
+    37.324923
+   ]
+  },
+  {
+   "source": "sj-signals",
+   "id": 5547,
+   "lonlat": [
+    -121.850814,
+    37.238787
+   ]
+  },
+  {
+   "source": "sj-signals",
+   "id": 5548,
+   "lonlat": [
+    -121.816869,
+    37.236981
+   ]
+  },
+  {
+   "source": "sj-signals",
+   "id": 5550,
+   "lonlat": [
+    -121.931254,
+    37.243424
+   ]
+  },
+  {
+   "source": "sj-signals",
+   "id": 5553,
+   "lonlat": [
+    -121.845613,
+    37.237594
+   ]
+  },
+  {
+   "source": "sj-signals",
+   "id": 5554,
+   "lonlat": [
+    -121.776857,
+    37.226869
+   ]
+  },
+  {
+   "source": "sj-signals",
+   "id": 5567,
+   "lonlat": [
+    -121.884382,
+    37.228158
+   ]
+  },
+  {
+   "source": "sj-signals",
+   "id": 5579,
+   "lonlat": [
+    -121.839633,
+    37.236794
+   ]
+  },
+  {
+   "source": "sj-signals",
+   "id": 5580,
+   "lonlat": [
+    -121.84475,
+    37.371842
+   ]
+  },
+  {
+   "source": "sj-signals",
+   "id": 5585,
+   "lonlat": [
+    -121.796154,
+    37.313294
+   ]
+  },
+  {
+   "source": "sj-signals",
+   "id": 5588,
+   "lonlat": [
+    -121.903484,
+    37.225813
+   ]
+  },
+  {
+   "source": "sj-signals",
+   "id": 5589,
+   "lonlat": [
+    -121.886662,
+    37.237894
+   ]
+  },
+  {
+   "source": "sj-signals",
+   "id": 5590,
+   "lonlat": [
+    -121.860281,
+    37.242266
+   ]
+  },
+  {
+   "source": "sj-signals",
+   "id": 5592,
+   "lonlat": [
+    -121.868986,
+    37.243
+   ]
+  },
+  {
+   "source": "sj-signals",
+   "id": 5593,
+   "lonlat": [
+    -121.793712,
+    37.236612
+   ]
+  },
+  {
+   "source": "sj-signals",
+   "id": 5594,
+   "lonlat": [
+    -121.857954,
+    37.240477
+   ]
+  },
+  {
+   "source": "sj-signals",
+   "id": 5595,
+   "lonlat": [
+    -121.859959,
+    37.245904
+   ]
+  },
+  {
+   "source": "sj-signals",
+   "id": 5599,
+   "lonlat": [
+    -121.801146,
+    37.237007
+   ]
+  },
+  {
+   "source": "sj-signals",
+   "id": 5600,
+   "lonlat": [
+    -121.767251,
+    37.22406
+   ]
+  },
+  {
+   "source": "sj-signals",
+   "id": 5606,
+   "lonlat": [
+    -121.865264,
+    37.220763
+   ]
+  },
+  {
+   "source": "sj-signals",
+   "id": 5611,
+   "lonlat": [
+    -121.803849,
+    37.239383
+   ]
+  },
+  {
+   "source": "sj-signals",
+   "id": 5612,
+   "lonlat": [
+    -121.882087,
+    37.221711
+   ]
+  },
+  {
+   "source": "sj-signals",
+   "id": 5613,
+   "lonlat": [
+    -121.876565,
+    37.221999
+   ]
+  },
+  {
+   "source": "sj-signals",
+   "id": 5614,
+   "lonlat": [
+    -121.868858,
+    37.222003
+   ]
+  },
+  {
+   "source": "sj-signals",
+   "id": 5615,
+   "lonlat": [
+    -121.896761,
+    37.230313
+   ]
+  },
+  {
+   "source": "sj-signals",
+   "id": 5616,
+   "lonlat": [
+    -121.882437,
+    37.248426
+   ]
+  },
+  {
+   "source": "sj-signals",
+   "id": 5626,
+   "lonlat": [
+    -121.893104,
+    37.221439
+   ]
+  },
+  {
+   "source": "sj-signals",
+   "id": 5631,
+   "lonlat": [
+    -121.771354,
+    37.299349
+   ]
+  },
+  {
+   "source": "sj-signals",
+   "id": 5640,
+   "lonlat": [
+    -121.783503,
+    37.230841
+   ]
+  },
+  {
+   "source": "sj-signals",
+   "id": 5644,
+   "lonlat": [
+    -121.830701,
+    37.242078
+   ]
+  },
+  {
+   "source": "sj-signals",
+   "id": 5657,
+   "lonlat": [
+    -121.772247,
+    37.232617
+   ]
+  },
+  {
+   "source": "sj-signals",
+   "id": 5661,
+   "lonlat": [
+    -121.803957,
+    37.245969
+   ]
+  },
+  {
+   "source": "sj-signals",
+   "id": 5663,
+   "lonlat": [
+    -121.787135,
+    37.233012
+   ]
+  },
+  {
+   "source": "sj-signals",
+   "id": 5667,
+   "lonlat": [
+    -121.80391,
+    37.339267
+   ]
+  },
+  {
+   "source": "sj-signals",
+   "id": 5671,
+   "lonlat": [
+    -121.774398,
+    37.238831
+   ]
+  },
+  {
+   "source": "sj-signals",
+   "id": 5672,
+   "lonlat": [
+    -121.77275,
+    37.237837
+   ]
+  },
+  {
+   "source": "sj-signals",
+   "id": 5673,
+   "lonlat": [
+    -121.772317,
+    37.240025
+   ]
+  },
+  {
+   "source": "sj-signals",
+   "id": 5686,
+   "lonlat": [
+    -121.772812,
+    37.225076
+   ]
+  },
+  {
+   "source": "sj-signals",
+   "id": 5697,
+   "lonlat": [
+    -121.776226,
+    37.297288
+   ]
+  },
+  {
+   "source": "sj-signals",
+   "id": 5705,
+   "lonlat": [
+    -121.736417,
+    37.201134
+   ]
+  },
+  {
+   "source": "sj-signals",
+   "id": 5711,
+   "lonlat": [
+    -121.788912,
+    37.247542
+   ]
+  },
+  {
+   "source": "sj-signals",
+   "id": 5712,
+   "lonlat": [
+    -121.741697,
+    37.218518
+   ]
+  },
+  {
+   "source": "sj-signals",
+   "id": 5713,
+   "lonlat": [
+    -121.751162,
+    37.226439
+   ]
+  },
+  {
+   "source": "sj-signals",
+   "id": 5714,
+   "lonlat": [
+    -121.728876,
+    37.206447
+   ]
+  },
+  {
+   "source": "sj-signals",
+   "id": 5715,
+   "lonlat": [
+    -121.688851,
+    37.167442
+   ]
+  },
+  {
+   "source": "sj-signals",
+   "id": 5716,
+   "lonlat": [
+    -121.705721,
+    37.183988
+   ]
+  },
+  {
+   "source": "sj-signals",
+   "id": 5734,
+   "lonlat": [
+    -121.798314,
+    37.328672
+   ]
+  },
+  {
+   "source": "sj-signals",
+   "id": 5737,
+   "lonlat": [
+    -121.994917,
+    37.292116
+   ]
+  },
+  {
+   "source": "sj-signals",
+   "id": 5738,
+   "lonlat": [
+    -121.786232,
+    37.310662
+   ]
+  },
+  {
+   "source": "sj-signals",
+   "id": 5755,
+   "lonlat": [
+    -121.889672,
+    37.330251
+   ]
+  },
+  {
+   "source": "sj-signals",
+   "id": 5770,
+   "lonlat": [
+    -121.830514,
+    37.249776
+   ]
+  },
+  {
+   "source": "sj-signals",
+   "id": 5776,
+   "lonlat": [
+    -121.870926,
+    37.243312
+   ]
+  },
+  {
+   "source": "sj-signals",
+   "id": 5777,
+   "lonlat": [
+    -121.789889,
+    37.234648
+   ]
+  },
+  {
+   "source": "sj-signals",
+   "id": 5778,
+   "lonlat": [
+    -121.822115,
+    37.237576
+   ]
+  },
+  {
+   "source": "sj-signals",
+   "id": 5780,
+   "lonlat": [
+    -121.933589,
+    37.261813
+   ]
+  },
+  {
+   "source": "sj-signals",
+   "id": 5783,
+   "lonlat": [
+    -121.797218,
+    37.252525
+   ]
+  },
+  {
+   "source": "sj-signals",
+   "id": 5784,
+   "lonlat": [
+    -121.799296,
+    37.253785
+   ]
+  },
+  {
+   "source": "sj-signals",
+   "id": 5794,
+   "lonlat": [
+    -121.830464,
+    37.245784
+   ]
+  },
+  {
+   "source": "sj-signals",
+   "id": 5796,
+   "lonlat": [
+    -121.765757,
+    37.233909
+   ]
+  },
+  {
+   "source": "sj-signals",
+   "id": 5798,
+   "lonlat": [
+    -121.803942,
+    37.244449
+   ]
+  },
+  {
+   "source": "sj-signals",
+   "id": 5799,
+   "lonlat": [
+    -121.803909,
+    37.241782
+   ]
+  },
+  {
+   "source": "sj-signals",
+   "id": 5800,
+   "lonlat": [
+    -121.780362,
+    37.228961
+   ]
+  },
+  {
+   "source": "sj-signals",
+   "id": 5802,
+   "lonlat": [
+    -121.936396,
+    37.243407
+   ]
+  },
+  {
+   "source": "sj-signals",
+   "id": 5803,
+   "lonlat": [
+    -121.8766,
+    37.229286
+   ]
+  },
+  {
+   "source": "sj-signals",
+   "id": 5817,
+   "lonlat": [
+    -121.773762,
+    37.284111
+   ]
+  },
+  {
+   "source": "sj-signals",
+   "id": 5818,
+   "lonlat": [
+    -121.78369,
+    37.260295
+   ]
+  },
+  {
+   "source": "sj-signals",
+   "id": 5819,
+   "lonlat": [
+    -121.785105,
+    37.296076
+   ]
+  },
+  {
+   "source": "sj-signals",
+   "id": 5835,
+   "lonlat": [
+    -121.772711,
+    37.243233
+   ]
+  },
+  {
+   "source": "sj-signals",
+   "id": 5839,
+   "lonlat": [
+    -121.783614,
+    37.309576
+   ]
+  },
+  {
+   "source": "sj-signals",
+   "id": 5843,
+   "lonlat": [
+    -121.775195,
+    37.316417
+   ]
+  },
+  {
+   "source": "sj-signals",
+   "id": 5846,
+   "lonlat": [
+    -121.895781,
+    37.239194
+   ]
+  },
+  {
+   "source": "sj-signals",
+   "id": 5847,
+   "lonlat": [
+    -121.859217,
+    37.247964
+   ]
+  },
+  {
+   "source": "sj-signals",
+   "id": 5858,
+   "lonlat": [
+    -121.772586,
+    37.241216
+   ]
+  },
+  {
+   "source": "sj-signals",
+   "id": 5862,
+   "lonlat": [
+    -121.787059,
+    37.324844
+   ]
+  },
+  {
+   "source": "sj-signals",
+   "id": 5871,
+   "lonlat": [
+    -121.777508,
+    37.235469
+   ]
+  },
+  {
+   "source": "sj-signals",
+   "id": 5879,
+   "lonlat": [
+    -121.840112,
+    37.275042
+   ]
+  },
+  {
+   "source": "sj-signals",
+   "id": 5891,
+   "lonlat": [
+    -121.779506,
+    37.315818
+   ]
+  },
+  {
+   "source": "sj-signals",
+   "id": 5892,
+   "lonlat": [
+    -121.777885,
+    37.305979
+   ]
+  },
+  {
+   "source": "sj-signals",
+   "id": 5895,
+   "lonlat": [
+    -121.993574,
+    37.290395
+   ]
+  },
+  {
+   "source": "sj-signals",
+   "id": 5898,
+   "lonlat": [
+    -121.782154,
+    37.324972
+   ]
+  },
+  {
+   "source": "sj-signals",
+   "id": 5899,
+   "lonlat": [
+    -121.772333,
+    37.316894
+   ]
+  },
+  {
+   "source": "sj-signals",
+   "id": 5900,
+   "lonlat": [
+    -121.875126,
+    37.275728
+   ]
+  },
+  {
+   "source": "sj-signals",
+   "id": 5904,
+   "lonlat": [
+    -121.932222,
+    37.41344
+   ]
+  },
+  {
+   "source": "sj-signals",
+   "id": 5907,
+   "lonlat": [
+    -121.839719,
+    37.242047
+   ]
+  },
+  {
+   "source": "sj-signals",
+   "id": 5919,
+   "lonlat": [
+    -121.765315,
+    37.290994
+   ]
+  },
+  {
+   "source": "sj-signals",
+   "id": 5923,
+   "lonlat": [
+    -121.774216,
+    37.22981
+   ]
+  },
+  {
+   "source": "sj-signals",
+   "id": 5937,
+   "lonlat": [
+    -121.758749,
+    37.281253
+   ]
+  },
+  {
+   "source": "sj-signals",
+   "id": 5940,
+   "lonlat": [
+    -121.798908,
+    37.330454
+   ]
+  },
+  {
+   "source": "sj-signals",
+   "id": 5945,
+   "lonlat": [
+    -121.78066,
+    37.288892
+   ]
+  },
+  {
+   "source": "sj-signals",
+   "id": 5947,
+   "lonlat": [
+    -121.789365,
+    37.257131
+   ]
+  },
+  {
+   "source": "sj-signals",
+   "id": 5948,
+   "lonlat": [
+    -121.785877,
+    37.258395
+   ]
+  },
+  {
+   "source": "sj-signals",
+   "id": 5954,
+   "lonlat": [
+    -121.790289,
+    37.266302
+   ]
+  },
+  {
+   "source": "sj-signals",
+   "id": 5961,
+   "lonlat": [
+    -121.770599,
+    37.250254
+   ]
+  },
+  {
+   "source": "sj-signals",
+   "id": 5966,
+   "lonlat": [
+    -121.931293,
+    37.248307
+   ]
+  },
+  {
+   "source": "sj-signals",
+   "id": 5972,
+   "lonlat": [
+    -121.796185,
+    37.236926
+   ]
+  },
+  {
+   "source": "sj-signals",
+   "id": 5995,
+   "lonlat": [
+    -121.777906,
+    37.240362
+   ]
+  },
+  {
+   "source": "sj-signals",
+   "id": 5996,
+   "lonlat": [
+    -121.782845,
+    37.29135
+   ]
+  },
+  {
+   "source": "sj-signals",
+   "id": 5998,
+   "lonlat": [
+    -121.841501,
+    37.341004
+   ]
+  },
+  {
+   "source": "sj-signals",
+   "id": 5999,
+   "lonlat": [
+    -121.79141,
+    37.25716
+   ]
+  },
+  {
+   "source": "sj-signals",
+   "id": 6000,
+   "lonlat": [
+    -121.730101,
+    37.207624
+   ]
+  },
+  {
+   "source": "sj-signals",
+   "id": 6007,
+   "lonlat": [
+    -121.763714,
+    37.282124
+   ]
+  },
+  {
+   "source": "sj-signals",
+   "id": 6008,
+   "lonlat": [
+    -121.77585,
+    37.278571
+   ]
+  },
+  {
+   "source": "sj-signals",
+   "id": 6009,
+   "lonlat": [
+    -121.775351,
+    37.228551
+   ]
+  },
+  {
+   "source": "sj-signals",
+   "id": 6011,
+   "lonlat": [
+    -121.779352,
+    37.241231
+   ]
+  },
+  {
+   "source": "sj-signals",
+   "id": 6012,
+   "lonlat": [
+    -121.779831,
+    37.232957
+   ]
+  },
+  {
+   "source": "sj-signals",
+   "id": 6013,
+   "lonlat": [
+    -121.781327,
+    37.258187
+   ]
+  },
+  {
+   "source": "sj-signals",
+   "id": 6014,
+   "lonlat": [
+    -121.771073,
+    37.236837
+   ]
+  },
+  {
+   "source": "sj-signals",
+   "id": 6015,
+   "lonlat": [
+    -121.784215,
+    37.235579
+   ]
+  },
+  {
+   "source": "sj-signals",
+   "id": 6016,
+   "lonlat": [
+    -121.772805,
+    37.245184
+   ]
+  },
+  {
+   "source": "sj-signals",
+   "id": 6022,
+   "lonlat": [
+    -121.810768,
+    37.33263
+   ]
+  },
+  {
+   "source": "sj-signals",
+   "id": 6023,
+   "lonlat": [
+    -121.788017,
+    37.263394
+   ]
+  },
+  {
+   "source": "sj-signals",
+   "id": 6024,
+   "lonlat": [
+    -121.918845,
+    37.262694
+   ]
+  },
+  {
+   "source": "sj-signals",
+   "id": 6035,
+   "lonlat": [
+    -121.844145,
+    37.211291
+   ]
+  },
+  {
+   "source": "sj-signals",
+   "id": 6059,
+   "lonlat": [
+    -121.866491,
+    37.251854
+   ]
+  },
+  {
+   "source": "sj-signals",
+   "id": 6074,
+   "lonlat": [
+    -121.791694,
+    37.337495
+   ]
+  },
+  {
+   "source": "sj-signals",
+   "id": 6078,
+   "lonlat": [
+    -121.774443,
+    37.302406
+   ]
+  },
+  {
+   "source": "sj-signals",
+   "id": 6082,
+   "lonlat": [
+    -121.90578,
+    37.242862
+   ]
+  },
+  {
+   "source": "sj-signals",
+   "id": 6099,
+   "lonlat": [
+    -121.808756,
+    37.248551
+   ]
+  },
+  {
+   "source": "sj-signals",
+   "id": 6110,
+   "lonlat": [
+    -121.7281,
+    37.207831
+   ]
+  },
+  {
+   "source": "sj-signals",
+   "id": 6113,
+   "lonlat": [
+    -121.766481,
+    37.317757
+   ]
+  },
+  {
+   "source": "sj-signals",
+   "id": 6117,
+   "lonlat": [
+    -121.900096,
+    37.329946
+   ]
+  },
+  {
+   "source": "sj-signals",
+   "id": 6127,
+   "lonlat": [
+    -121.906621,
+    37.340788
+   ]
+  },
+  {
+   "source": "sj-signals",
+   "id": 6163,
+   "lonlat": [
+    -121.823285,
+    37.353382
+   ]
+  },
+  {
+   "source": "sj-signals",
+   "id": 6167,
+   "lonlat": [
+    -121.80113,
+    37.24587
+   ]
+  },
+  {
+   "source": "sj-signals",
+   "id": 6180,
+   "lonlat": [
+    -121.918495,
+    37.309733
+   ]
+  },
+  {
+   "source": "sj-signals",
+   "id": 6192,
+   "lonlat": [
+    -121.922947,
+    37.364193
+   ]
+  },
+  {
+   "source": "sj-signals",
+   "id": 6193,
+   "lonlat": [
+    -121.922737,
+    37.364338
+   ]
+  },
+  {
+   "source": "sj-signals",
+   "id": 6210,
+   "lonlat": [
+    -121.873761,
+    37.259251
+   ]
+  },
+  {
+   "source": "sj-signals",
+   "id": 6211,
+   "lonlat": [
+    -121.871831,
+    37.258904
+   ]
+  },
+  {
+   "source": "sj-signals",
+   "id": 6212,
+   "lonlat": [
+    -121.803991,
+    37.248432
+   ]
+  },
+  {
+   "source": "sj-signals",
+   "id": 6215,
+   "lonlat": [
+    -121.895356,
+    37.381016
+   ]
+  },
+  {
+   "source": "sj-signals",
+   "id": 6220,
+   "lonlat": [
+    -121.942001,
+    37.327035
+   ]
+  },
+  {
+   "source": "sj-signals",
+   "id": 6222,
+   "lonlat": [
+    -121.874382,
+    37.370355
+   ]
+  },
+  {
+   "source": "sj-signals",
+   "id": 6223,
+   "lonlat": [
+    -121.874238,
+    37.368912
+   ]
+  },
+  {
+   "source": "sj-signals",
+   "id": 6224,
+   "lonlat": [
+    -121.872829,
+    37.366952
+   ]
+  },
+  {
+   "source": "sj-signals",
+   "id": 6237,
+   "lonlat": [
+    -121.791247,
+    37.248237
+   ]
+  },
+  {
+   "source": "sj-signals",
+   "id": 6238,
+   "lonlat": [
+    -121.783832,
+    37.243774
+   ]
+  },
+  {
+   "source": "sj-signals",
+   "id": 6242,
+   "lonlat": [
+    -121.889296,
+    37.308552
+   ]
+  },
+  {
+   "source": "sj-signals",
+   "id": 6243,
+   "lonlat": [
+    -121.927964,
+    37.368587
+   ]
+  },
+  {
+   "source": "sj-signals",
+   "id": 6250,
+   "lonlat": [
+    -121.849328,
+    37.306843
+   ]
+  },
+  {
+   "source": "sj-signals",
+   "id": 6256,
+   "lonlat": [
+    -121.931333,
+    37.254999
+   ]
+  },
+  {
+   "source": "sj-signals",
+   "id": 6877,
+   "lonlat": [
+    -121.872832,
+    37.360966
+   ]
+  },
+  {
+   "source": "oakland-signals",
+   "id": 87,
+   "lonlat": [
+    -122.305841,
+    37.817593
+   ]
+  },
+  {
+   "source": "oakland-signals",
+   "id": 97,
+   "lonlat": [
+    -122.245801,
+    37.815444
+   ]
+  },
+  {
+   "source": "oakland-signals",
+   "id": 120,
+   "lonlat": [
+    -122.231449,
+    37.776899
+   ]
+  },
+  {
+   "source": "oakland-signals",
+   "id": 80,
+   "lonlat": [
+    -122.267892,
+    37.837293
+   ]
+  },
+  {
+   "source": "oakland-signals",
+   "id": 150,
+   "lonlat": [
+    -122.222472,
+    37.850538
+   ]
+  },
+  {
+   "source": "oakland-signals",
+   "id": 196,
+   "lonlat": [
+    -122.259699,
+    37.822741
+   ]
+  },
+  {
+   "source": "oakland-signals",
+   "id": 154,
+   "lonlat": [
+    -122.232415,
+    37.851387
+   ]
+  },
+  {
+   "source": "oakland-signals",
+   "id": 157,
+   "lonlat": [
+    -122.263088,
+    37.795001
+   ]
+  },
+  {
+   "source": "oakland-signals",
+   "id": 240,
+   "lonlat": [
+    -122.273291,
+    37.803431
+   ]
+  },
+  {
+   "source": "oakland-signals",
+   "id": 250,
+   "lonlat": [
+    -122.149507,
+    37.764382
+   ]
+  },
+  {
+   "source": "oakland-signals",
+   "id": 290,
+   "lonlat": [
+    -122.272438,
+    37.804811
+   ]
+  },
+  {
+   "source": "oakland-signals",
+   "id": 214,
+   "lonlat": [
+    -122.309995,
+    37.813651
+   ]
+  },
+  {
+   "source": "oakland-signals",
+   "id": 226,
+   "lonlat": [
+    -122.245314,
+    37.858051
+   ]
+  },
+  {
+   "source": "oakland-signals",
+   "id": 236,
+   "lonlat": [
+    -122.204947,
+    37.807974
+   ]
+  },
+  {
+   "source": "oakland-signals",
+   "id": 346,
+   "lonlat": [
+    -122.202377,
+    37.80939
+   ]
+  },
+  {
+   "source": "oakland-signals",
+   "id": 364,
+   "lonlat": [
+    -122.312713,
+    37.810671
+   ]
+  },
+  {
+   "source": "oakland-signals",
+   "id": 366,
+   "lonlat": [
+    -122.274041,
+    37.804589
+   ]
+  },
+  {
+   "source": "oakland-signals",
+   "id": 330,
+   "lonlat": [
+    -122.273176,
+    37.805964
+   ]
+  },
+  {
+   "source": "oakland-signals",
+   "id": 305,
+   "lonlat": [
+    -122.271764,
+    37.800988
+   ]
+  },
+  {
+   "source": "oakland-signals",
+   "id": 383,
+   "lonlat": [
+    -122.259366,
+    37.823276
+   ]
+  },
+  {
+   "source": "oakland-signals",
+   "id": 606,
+   "lonlat": [
+    -122.244619,
+    37.810571
+   ]
+  },
+  {
+   "source": "oakland-signals",
+   "id": 534,
+   "lonlat": [
+    -122.27522,
+    37.805053
+   ]
+  },
+  {
+   "source": "oakland-signals",
+   "id": 553,
+   "lonlat": [
+    -122.262502,
+    37.836438
+   ]
+  },
+  {
+   "source": "oakland-signals",
+   "id": 628,
+   "lonlat": [
+    -122.196249,
+    37.748293
+   ]
+  },
+  {
+   "source": "oakland-signals",
+   "id": 682,
+   "lonlat": [
+    -122.247238,
+    37.812612
+   ]
+  },
+  {
+   "source": "oakland-signals",
+   "id": 233,
+   "lonlat": [
+    -122.213611,
+    37.712992
+   ]
+  },
+  {
+   "source": "oakland-signals",
+   "id": 703,
+   "lonlat": [
+    -122.224021,
+    37.768157
+   ]
+  },
+  {
+   "source": "oakland-signals",
+   "id": 718,
+   "lonlat": [
+    -122.206204,
+    37.751142
+   ]
+  },
+  {
+   "source": "oakland-signals",
+   "id": 725,
+   "lonlat": [
+    -122.203146,
+    37.823804
+   ]
+  },
+  {
+   "source": "oakland-signals",
+   "id": 422,
+   "lonlat": [
+    -122.262696,
+    37.822228
+   ]
+  },
+  {
+   "source": "oakland-signals",
+   "id": 721,
+   "lonlat": [
+    -122.261932,
+    37.817248
+   ]
+  },
+  {
+   "source": "oakland-signals",
+   "id": 329,
+   "lonlat": [
+    -122.199086,
+    37.740168
+   ]
+  },
+  {
+   "source": "oakland-signals",
+   "id": 401,
+   "lonlat": [
+    -122.296238,
+    37.798164
+   ]
+  },
+  {
+   "source": "oakland-signals",
+   "id": 105,
+   "lonlat": [
+    -122.24193,
+    37.857459
+   ]
+  },
+  {
+   "source": "oakland-signals",
+   "id": 1065,
+   "lonlat": [
+    -122.203928,
+    37.808487
+   ]
+  },
+  {
+   "source": "ssf-signals",
+   "id": 34,
+   "lonlat": [
+    -122.397616,
+    37.658713
+   ]
+  },
+  {
+   "source": "ssf-signals",
+   "id": 37,
+   "lonlat": [
+    -122.39948,
+    37.657641
+   ]
+  },
+  {
+   "source": "ssf-signals",
+   "id": 40,
+   "lonlat": [
+    -122.38287,
+    37.654458
+   ]
+  },
+  {
+   "source": "ssf-signals",
+   "id": 42,
+   "lonlat": [
+    -122.396466,
+    37.659866
+   ]
+  },
+  {
+   "source": "ssf-signals",
+   "id": 60,
+   "lonlat": [
+    -122.421838,
+    37.645786
+   ]
+  },
+  {
+   "source": "ssf-signals",
+   "id": 73,
+   "lonlat": [
+    -122.468116,
+    37.676852
+   ]
+  },
+  {
+   "source": "ssf-signals",
+   "id": 81,
+   "lonlat": [
+    -122.419091,
+    37.6388
+   ]
+  },
+  {
+   "source": "ssf-signals",
+   "id": 85,
+   "lonlat": [
+    -122.415251,
+    37.636544
+   ]
+  },
+  {
+   "source": "ssf-signals",
+   "id": 96,
+   "lonlat": [
+    -122.399506,
+    37.636056
+   ]
+  },
+  {
+   "source": "ssf-signals",
+   "id": 116,
+   "lonlat": [
+    -122.396448,
+    37.653972
+   ]
+  },
+  {
+   "source": "ssf-signals",
+   "id": 117,
+   "lonlat": [
+    -122.453727,
+    37.644549
+   ]
+  },
+  {
+   "source": "ssf-signals",
+   "id": 121,
+   "lonlat": [
+    -122.396903,
+    37.666384
+   ]
+  },
+  {
+   "source": "ssf-signals",
+   "id": 122,
+   "lonlat": [
+    -122.390319,
+    37.662495
+   ]
+  },
+  {
+   "source": "ssf-signals",
+   "id": 123,
+   "lonlat": [
+    -122.466038,
+    37.672607
+   ]
+  },
+  {
+   "source": "emeryville-signals",
+   "id": 11,
+   "lonlat": [
+    -122.2931,
+    37.83217
+   ]
+  },
+  {
+   "source": "emeryville-signals",
+   "id": 12,
+   "lonlat": [
+    -122.292926,
+    37.830487
+   ]
+  },
+  {
+   "source": "emeryville-signals",
+   "id": 27,
+   "lonlat": [
+    -122.295261,
+    37.842137
+   ]
+  },
+  {
+   "source": "mv-signals",
+   "id": 49,
+   "lonlat": [
+    -122.091575,
+    37.419981
+   ]
+  },
+  {
+   "source": "mv-signals",
+   "id": 103,
+   "lonlat": [
+    -122.076206,
+    37.410819
+   ]
+  },
+  {
+   "source": "mv-signals",
+   "id": 122,
+   "lonlat": [
+    -122.07895,
+    37.393821
+   ]
+  },
+  {
+   "source": "mv-signals",
+   "id": 129,
+   "lonlat": [
+    -122.079748,
+    37.39256
+   ]
+  },
+  {
+   "source": "mv-signals",
+   "id": 178,
+   "lonlat": [
+    -122.067335,
+    37.407619
+   ]
+  },
+  {
+   "source": "mv-signals",
+   "id": 318,
+   "lonlat": [
+    -122.086976,
+    37.37088
+   ]
+  },
+  {
+   "source": "mv-signals",
+   "id": 319,
+   "lonlat": [
+    -122.093442,
+    37.373371
+   ]
+  },
+  {
+   "source": "mv-signals",
+   "id": 398,
+   "lonlat": [
+    -122.072386,
+    37.389387
+   ]
+  },
+  {
+   "source": "mv-signals",
+   "id": 470,
+   "lonlat": [
+    -122.06399,
+    37.375792
+   ]
+  },
+  {
+   "source": "cupertino-signal-heads",
+   "id": 45,
+   "lonlat": [
+    -122.017333,
+    37.322953
+   ]
+  },
+  {
+   "source": "cupertino-signal-heads",
+   "id": 812,
+   "lonlat": [
+    -122.027036,
+    37.323004
+   ]
+  },
+  {
+   "source": "cupertino-signal-heads",
+   "id": 859,
+   "lonlat": [
+    -122.005849,
+    37.328527
+   ]
+  },
+  {
+   "source": "cupertino-signal-heads",
+   "id": 868,
+   "lonlat": [
+    -122.011728,
+    37.325573
+   ]
+  },
+  {
+   "source": "cupertino-signal-heads",
+   "id": 921,
+   "lonlat": [
+    -122.008884,
+    37.324714
+   ]
+  },
+  {
+   "source": "cupertino-signal-heads",
+   "id": 938,
+   "lonlat": [
+    -122.009886,
+    37.325221
+   ]
+  }
+ ],
+ "knownMissing": [
+  {
+   "source": "oakland-signals",
+   "type": "signal",
+   "id": 17
+  },
+  {
+   "source": "oakland-signals",
+   "type": "signal",
+   "id": 30
+  },
+  {
+   "source": "oakland-signals",
+   "type": "signal",
+   "id": 34
+  },
+  {
+   "source": "oakland-signals",
+   "type": "signal",
+   "id": 102
+  },
+  {
+   "source": "oakland-signals",
+   "type": "signal",
+   "id": 118
+  },
+  {
+   "source": "oakland-signals",
+   "type": "signal",
+   "id": 130
+  },
+  {
+   "source": "oakland-signals",
+   "type": "signal",
+   "id": 151
+  },
+  {
+   "source": "oakland-signals",
+   "type": "signal",
+   "id": 180
+  },
+  {
+   "source": "oakland-signals",
+   "type": "signal",
+   "id": 187
+  },
+  {
+   "source": "oakland-signals",
+   "type": "signal",
+   "id": 188
+  },
+  {
+   "source": "oakland-signals",
+   "type": "signal",
+   "id": 194
+  },
+  {
+   "source": "oakland-signals",
+   "type": "signal",
+   "id": 203
+  },
+  {
+   "source": "oakland-signals",
+   "type": "signal",
+   "id": 170
+  },
+  {
+   "source": "oakland-signals",
+   "type": "signal",
+   "id": 138
+  },
+  {
+   "source": "oakland-signals",
+   "type": "signal",
+   "id": 241
+  },
+  {
+   "source": "oakland-signals",
+   "type": "signal",
+   "id": 249
+  },
+  {
+   "source": "oakland-signals",
+   "type": "signal",
+   "id": 252
+  },
+  {
+   "source": "oakland-signals",
+   "type": "signal",
+   "id": 265
+  },
+  {
+   "source": "oakland-signals",
+   "type": "signal",
+   "id": 282
+  },
+  {
+   "source": "oakland-signals",
+   "type": "signal",
+   "id": 525
+  },
+  {
+   "source": "oakland-signals",
+   "type": "signal",
+   "id": 291
+  },
+  {
+   "source": "oakland-signals",
+   "type": "signal",
+   "id": 206
+  },
+  {
+   "source": "oakland-signals",
+   "type": "signal",
+   "id": 211
+  },
+  {
+   "source": "oakland-signals",
+   "type": "signal",
+   "id": 212
+  },
+  {
+   "source": "oakland-signals",
+   "type": "signal",
+   "id": 213
+  },
+  {
+   "source": "oakland-signals",
+   "type": "signal",
+   "id": 215
+  },
+  {
+   "source": "oakland-signals",
+   "type": "signal",
+   "id": 217
+  },
+  {
+   "source": "oakland-signals",
+   "type": "signal",
+   "id": 309
+  },
+  {
+   "source": "oakland-signals",
+   "type": "signal",
+   "id": 311
+  },
+  {
+   "source": "oakland-signals",
+   "type": "signal",
+   "id": 367
+  },
+  {
+   "source": "oakland-signals",
+   "type": "signal",
+   "id": 323
+  },
+  {
+   "source": "oakland-signals",
+   "type": "signal",
+   "id": 326
+  },
+  {
+   "source": "oakland-signals",
+   "type": "signal",
+   "id": 412
+  },
+  {
+   "source": "oakland-signals",
+   "type": "signal",
+   "id": 415
+  },
+  {
+   "source": "oakland-signals",
+   "type": "signal",
+   "id": 424
+  },
+  {
+   "source": "oakland-signals",
+   "type": "signal",
+   "id": 425
+  },
+  {
+   "source": "oakland-signals",
+   "type": "signal",
+   "id": 426
+  },
+  {
+   "source": "oakland-signals",
+   "type": "signal",
+   "id": 438
+  },
+  {
+   "source": "oakland-signals",
+   "type": "signal",
+   "id": 439
+  },
+  {
+   "source": "oakland-signals",
+   "type": "signal",
+   "id": 452
+  },
+  {
+   "source": "oakland-signals",
+   "type": "signal",
+   "id": 372
+  },
+  {
+   "source": "oakland-signals",
+   "type": "signal",
+   "id": 386
+  },
+  {
+   "source": "oakland-signals",
+   "type": "signal",
+   "id": 476
+  },
+  {
+   "source": "oakland-signals",
+   "type": "signal",
+   "id": 493
+  },
+  {
+   "source": "oakland-signals",
+   "type": "signal",
+   "id": 496
+  },
+  {
+   "source": "oakland-signals",
+   "type": "signal",
+   "id": 500
+  },
+  {
+   "source": "oakland-signals",
+   "type": "signal",
+   "id": 462
+  },
+  {
+   "source": "oakland-signals",
+   "type": "signal",
+   "id": 463
+  },
+  {
+   "source": "oakland-signals",
+   "type": "signal",
+   "id": 599
+  },
+  {
+   "source": "oakland-signals",
+   "type": "signal",
+   "id": 536
+  },
+  {
+   "source": "oakland-signals",
+   "type": "signal",
+   "id": 542
+  },
+  {
+   "source": "oakland-signals",
+   "type": "signal",
+   "id": 663
+  },
+  {
+   "source": "oakland-signals",
+   "type": "signal",
+   "id": 674
+  },
+  {
+   "source": "oakland-signals",
+   "type": "signal",
+   "id": 679
+  },
+  {
+   "source": "oakland-signals",
+   "type": "signal",
+   "id": 685
+  },
+  {
+   "source": "oakland-signals",
+   "type": "signal",
+   "id": 623
+  },
+  {
+   "source": "oakland-signals",
+   "type": "signal",
+   "id": 626
+  },
+  {
+   "source": "oakland-signals",
+   "type": "signal",
+   "id": 627
+  },
+  {
+   "source": "oakland-signals",
+   "type": "signal",
+   "id": 727
+  },
+  {
+   "source": "oakland-signals",
+   "type": "signal",
+   "id": 745
+  },
+  {
+   "source": "oakland-signals",
+   "type": "signal",
+   "id": 671
+  },
+  {
+   "source": "oakland-signals",
+   "type": "signal",
+   "id": 700
+  },
+  {
+   "source": "oakland-signals",
+   "type": "signal",
+   "id": 723
+  },
+  {
+   "source": "oakland-signals",
+   "type": "signal",
+   "id": 224
+  },
+  {
+   "source": "oakland-signals",
+   "type": "signal",
+   "id": 139
+  },
+  {
+   "source": "oakland-signals",
+   "type": "signal",
+   "id": 720
+  },
+  {
+   "source": "oakland-signals",
+   "type": "signal",
+   "id": 719
+  },
+  {
+   "source": "oakland-signals",
+   "type": "signal",
+   "id": 726
+  },
+  {
+   "source": "oakland-signals",
+   "type": "signal",
+   "id": 136
+  },
+  {
+   "source": "oakland-signals",
+   "type": "signal",
+   "id": 48
+  },
+  {
+   "source": "oakland-signals",
+   "type": "signal",
+   "id": 423
+  },
+  {
+   "source": "oakland-signals",
+   "type": "signal",
+   "id": 435
+  },
+  {
+   "source": "oakland-signals",
+   "type": "signal",
+   "id": 223
+  },
+  {
+   "source": "oakland-signals",
+   "type": "signal",
+   "id": 539
+  },
+  {
+   "source": "ssf-signals",
+   "type": "signal",
+   "id": 20
+  },
+  {
+   "source": "ssf-signals",
+   "type": "signal",
+   "id": 30
+  },
+  {
+   "source": "ssf-signals",
+   "type": "signal",
+   "id": 45
+  },
+  {
+   "source": "ssf-signals",
+   "type": "signal",
+   "id": 47
+  },
+  {
+   "source": "ssf-signals",
+   "type": "signal",
+   "id": 84
+  },
+  {
+   "source": "ssf-signals",
+   "type": "signal",
+   "id": 94
+  },
+  {
+   "source": "ssf-signals",
+   "type": "signal",
+   "id": 130
+  },
+  {
+   "source": "ssf-signals",
+   "type": "signal",
+   "id": 131
+  },
+  {
+   "source": "ssf-signals",
+   "type": "signal",
+   "id": 132
+  },
+  {
+   "source": "ssf-signals",
+   "type": "signal",
+   "id": 133
+  },
+  {
+   "source": "ssf-signals",
+   "type": "signal",
+   "id": 134
+  },
+  {
+   "source": "ssf-signals",
+   "type": "signal",
+   "id": 135
+  },
+  {
+   "source": "emeryville-signals",
+   "type": "signal",
+   "id": 21
+  },
+  {
+   "source": "emeryville-signals",
+   "type": "signal",
+   "id": 25
+  },
+  {
+   "source": "emeryville-signals",
+   "type": "signal",
+   "id": 33
+  },
+  {
+   "source": "mv-signals",
+   "type": "signal",
+   "id": 213
+  },
+  {
+   "source": "mv-signals",
+   "type": "signal",
+   "id": 399
+  },
+  {
+   "source": "mv-signals",
+   "type": "signal",
+   "id": 477
+  },
+  {
+   "source": "mv-signals",
+   "type": "signal",
+   "id": 484
+  },
+  {
+   "source": "cupertino-signs",
+   "type": "stop",
+   "id": 12017984,
+   "facing": "E"
+  },
+  {
+   "source": "cupertino-signs",
+   "type": "stop",
+   "id": 12017985,
+   "facing": "E"
+  },
+  {
+   "source": "cupertino-signs",
+   "type": "stop",
+   "id": 12017986,
+   "facing": "E"
+  },
+  {
+   "source": "cupertino-signs",
+   "type": "stop",
+   "id": 12017987,
+   "facing": "N"
+  },
+  {
+   "source": "cupertino-signs",
+   "type": "stop",
+   "id": 12017996,
+   "facing": "S"
+  },
+  {
+   "source": "cupertino-signs",
+   "type": "stop",
+   "id": 12018019,
+   "facing": "N"
+  },
+  {
+   "source": "cupertino-signs",
+   "type": "stop",
+   "id": 12018020,
+   "facing": "S"
+  },
+  {
+   "source": "cupertino-signs",
+   "type": "stop",
+   "id": 12018021,
+   "facing": "S"
+  },
+  {
+   "source": "cupertino-signs",
+   "type": "stop",
+   "id": 12018022,
+   "facing": "N"
+  },
+  {
+   "source": "cupertino-signs",
+   "type": "stop",
+   "id": 12018023,
+   "facing": "S"
+  },
+  {
+   "source": "cupertino-signs",
+   "type": "stop",
+   "id": 12018032,
+   "facing": "W"
+  },
+  {
+   "source": "cupertino-signs",
+   "type": "stop",
+   "id": 12018034,
+   "facing": "W"
+  },
+  {
+   "source": "cupertino-signs",
+   "type": "stop",
+   "id": 12018035,
+   "facing": "W"
+  },
+  {
+   "source": "cupertino-signs",
+   "type": "stop",
+   "id": 12018036,
+   "facing": "N"
+  },
+  {
+   "source": "cupertino-signs",
+   "type": "stop",
+   "id": 12018039,
+   "facing": "E"
+  },
+  {
+   "source": "cupertino-signs",
+   "type": "stop",
+   "id": 12018218,
+   "facing": "N"
+  },
+  {
+   "source": "cupertino-signs",
+   "type": "stop",
+   "id": 12019257,
+   "facing": "NE"
+  },
+  {
+   "source": "cupertino-signs",
+   "type": "stop",
+   "id": 12019309,
+   "facing": "E"
+  },
+  {
+   "source": "cupertino-signs",
+   "type": "stop",
+   "id": 12019370,
+   "facing": "N"
+  },
+  {
+   "source": "cupertino-signs",
+   "type": "stop",
+   "id": 12019727,
+   "facing": "E"
+  },
+  {
+   "source": "cupertino-signs",
+   "type": "stop",
+   "id": 12020108,
+   "facing": "W"
+  },
+  {
+   "source": "cupertino-signs",
+   "type": "stop",
+   "id": 12020119,
+   "facing": "W"
+  },
+  {
+   "source": "cupertino-signs",
+   "type": "stop",
+   "id": 12020257,
+   "facing": "E"
+  },
+  {
+   "source": "cupertino-signs",
+   "type": "stop",
+   "id": 12020694,
+   "facing": "E"
+  },
+  {
+   "source": "cupertino-signs",
+   "type": "stop",
+   "id": 12020740,
+   "facing": "N"
+  },
+  {
+   "source": "cupertino-signs",
+   "type": "stop",
+   "id": 12020747,
+   "facing": "W"
+  },
+  {
+   "source": "cupertino-signs",
+   "type": "stop",
+   "id": 12020749,
+   "facing": "E"
+  },
+  {
+   "source": "cupertino-signs",
+   "type": "stop",
+   "id": 12021054,
+   "facing": "N"
+  },
+  {
+   "source": "cupertino-signs",
+   "type": "stop",
+   "id": 12021076,
+   "facing": "E"
+  },
+  {
+   "source": "cupertino-signs",
+   "type": "stop",
+   "id": 12021172,
+   "facing": "S"
+  },
+  {
+   "source": "cupertino-signs",
+   "type": "stop",
+   "id": 12021280,
+   "facing": "S"
+  },
+  {
+   "source": "cupertino-signs",
+   "type": "stop",
+   "id": 12021282,
+   "facing": "S"
+  },
+  {
+   "source": "cupertino-signs",
+   "type": "stop",
+   "id": 12021288,
+   "facing": "W"
+  },
+  {
+   "source": "cupertino-signs",
+   "type": "stop",
+   "id": 12021289,
+   "facing": "E"
+  },
+  {
+   "source": "cupertino-signs",
+   "type": "stop",
+   "id": 12021655,
+   "facing": "S"
+  },
+  {
+   "source": "cupertino-signs",
+   "type": "stop",
+   "id": 12021659,
+   "facing": "S"
+  },
+  {
+   "source": "cupertino-signs",
+   "type": "stop",
+   "id": 12021662,
+   "facing": "N"
+  },
+  {
+   "source": "cupertino-signs",
+   "type": "stop",
+   "id": 12021663,
+   "facing": "S"
+  },
+  {
+   "source": "cupertino-signs",
+   "type": "stop",
+   "id": 12021664,
+   "facing": "E"
+  },
+  {
+   "source": "cupertino-signs",
+   "type": "stop",
+   "id": 12021665,
+   "facing": "S"
+  },
+  {
+   "source": "cupertino-signs",
+   "type": "stop",
+   "id": 12021667,
+   "facing": "E"
+  },
+  {
+   "source": "cupertino-signs",
+   "type": "stop",
+   "id": 12021672,
+   "facing": "E"
+  },
+  {
+   "source": "cupertino-signs",
+   "type": "stop",
+   "id": 12021673,
+   "facing": "N"
+  },
+  {
+   "source": "cupertino-signs",
+   "type": "stop",
+   "id": 12021674,
+   "facing": "NW"
+  },
+  {
+   "source": "cupertino-signs",
+   "type": "stop",
+   "id": 12021675,
+   "facing": "NW"
+  },
+  {
+   "source": "cupertino-signs",
+   "type": "stop",
+   "id": 12021678,
+   "facing": "N"
+  },
+  {
+   "source": "cupertino-signs",
+   "type": "stop",
+   "id": 12021679,
+   "facing": "N"
+  },
+  {
+   "source": "cupertino-signs",
+   "type": "stop",
+   "id": 12021680,
+   "facing": "E"
+  },
+  {
+   "source": "cupertino-signs",
+   "type": "stop",
+   "id": 12021683,
+   "facing": "S"
+  },
+  {
+   "source": "cupertino-signs",
+   "type": "stop",
+   "id": 12021685,
+   "facing": "E"
+  },
+  {
+   "source": "cupertino-signs",
+   "type": "stop",
+   "id": 12021686,
+   "facing": "W"
+  },
+  {
+   "source": "cupertino-signs",
+   "type": "stop",
+   "id": 12021687,
+   "facing": "S"
+  },
+  {
+   "source": "cupertino-signs",
+   "type": "stop",
+   "id": 12021688,
+   "facing": "W"
+  },
+  {
+   "source": "cupertino-signs",
+   "type": "stop",
+   "id": 12021689,
+   "facing": "W"
+  },
+  {
+   "source": "cupertino-signs",
+   "type": "stop",
+   "id": 12021690,
+   "facing": "N"
+  },
+  {
+   "source": "cupertino-signs",
+   "type": "stop",
+   "id": 12021694,
+   "facing": "S"
+  },
+  {
+   "source": "cupertino-signs",
+   "type": "stop",
+   "id": 12021812,
+   "facing": "E"
+  },
+  {
+   "source": "cupertino-signs",
+   "type": "stop",
+   "id": 12021818,
+   "facing": "E"
+  },
+  {
+   "source": "cupertino-signs",
+   "type": "stop",
+   "id": 12021820,
+   "facing": "S"
+  },
+  {
+   "source": "cupertino-signs",
+   "type": "stop",
+   "id": 12021823,
+   "facing": "S"
+  },
+  {
+   "source": "cupertino-signs",
+   "type": "stop",
+   "id": 12021824,
+   "facing": "N"
+  },
+  {
+   "source": "cupertino-signs",
+   "type": "stop",
+   "id": 12021825,
+   "facing": "S"
+  },
+  {
+   "source": "cupertino-signs",
+   "type": "stop",
+   "id": 12021826,
+   "facing": "N"
+  },
+  {
+   "source": "cupertino-signs",
+   "type": "stop",
+   "id": 12021827,
+   "facing": "S"
+  },
+  {
+   "source": "cupertino-signs",
+   "type": "stop",
+   "id": 12021828,
+   "facing": "N"
+  },
+  {
+   "source": "cupertino-signs",
+   "type": "stop",
+   "id": 12021829,
+   "facing": "S"
+  },
+  {
+   "source": "cupertino-signs",
+   "type": "stop",
+   "id": 12021830,
+   "facing": "N"
+  },
+  {
+   "source": "cupertino-signs",
+   "type": "stop",
+   "id": 12021831,
+   "facing": "S"
+  },
+  {
+   "source": "cupertino-signs",
+   "type": "stop",
+   "id": 12021832,
+   "facing": "S"
+  },
+  {
+   "source": "cupertino-signs",
+   "type": "stop",
+   "id": 12021833,
+   "facing": "E"
+  },
+  {
+   "source": "cupertino-signs",
+   "type": "stop",
+   "id": 12021840,
+   "facing": "S"
+  },
+  {
+   "source": "cupertino-signs",
+   "type": "stop",
+   "id": 12021890,
+   "facing": "S"
+  },
+  {
+   "source": "cupertino-signs",
+   "type": "stop",
+   "id": 12021900,
+   "facing": "S"
+  },
+  {
+   "source": "cupertino-signs",
+   "type": "stop",
+   "id": 12021908,
+   "facing": "W"
+  },
+  {
+   "source": "cupertino-signs",
+   "type": "stop",
+   "id": 12021912,
+   "facing": "S"
+  },
+  {
+   "source": "cupertino-signs",
+   "type": "stop",
+   "id": 12021915,
+   "facing": "N"
+  },
+  {
+   "source": "cupertino-signs",
+   "type": "stop",
+   "id": 12021920,
+   "facing": "N"
+  },
+  {
+   "source": "cupertino-signs",
+   "type": "stop",
+   "id": 12021921,
+   "facing": "NW"
+  },
+  {
+   "source": "cupertino-signs",
+   "type": "stop",
+   "id": 12021923,
+   "facing": "NE"
+  },
+  {
+   "source": "cupertino-signs",
+   "type": "stop",
+   "id": 12021924,
+   "facing": "SE"
+  },
+  {
+   "source": "cupertino-signs",
+   "type": "stop",
+   "id": 12021925,
+   "facing": "W"
+  },
+  {
+   "source": "cupertino-signs",
+   "type": "stop",
+   "id": 12021927,
+   "facing": "S"
+  },
+  {
+   "source": "cupertino-signs",
+   "type": "stop",
+   "id": 12021929,
+   "facing": "N"
+  },
+  {
+   "source": "cupertino-signs",
+   "type": "stop",
+   "id": 12021932,
+   "facing": "W"
+  },
+  {
+   "source": "cupertino-signs",
+   "type": "stop",
+   "id": 12021933,
+   "facing": "S"
+  },
+  {
+   "source": "cupertino-signs",
+   "type": "stop",
+   "id": 12021934,
+   "facing": "S"
+  },
+  {
+   "source": "cupertino-signs",
+   "type": "stop",
+   "id": 12021953,
+   "facing": "N"
+  },
+  {
+   "source": "cupertino-signs",
+   "type": "stop",
+   "id": 12021959,
+   "facing": "S"
+  },
+  {
+   "source": "cupertino-signs",
+   "type": "stop",
+   "id": 12021964,
+   "facing": "N"
+  },
+  {
+   "source": "cupertino-signs",
+   "type": "stop",
+   "id": 12021966,
+   "facing": "W"
+  },
+  {
+   "source": "cupertino-signs",
+   "type": "stop",
+   "id": 12021970,
+   "facing": "N"
+  },
+  {
+   "source": "cupertino-signs",
+   "type": "stop",
+   "id": 12021971,
+   "facing": "S"
+  },
+  {
+   "source": "cupertino-signs",
+   "type": "stop",
+   "id": 12021972,
+   "facing": "S"
+  },
+  {
+   "source": "cupertino-signs",
+   "type": "stop",
+   "id": 12021973,
+   "facing": "W"
+  },
+  {
+   "source": "cupertino-signs",
+   "type": "stop",
+   "id": 12021974,
+   "facing": "SW"
+  },
+  {
+   "source": "cupertino-signs",
+   "type": "stop",
+   "id": 12021979,
+   "facing": "E"
+  },
+  {
+   "source": "cupertino-signs",
+   "type": "stop",
+   "id": 12021981,
+   "facing": "N"
+  },
+  {
+   "source": "cupertino-signs",
+   "type": "stop",
+   "id": 12021982,
+   "facing": "S"
+  },
+  {
+   "source": "cupertino-signs",
+   "type": "stop",
+   "id": 12022190,
+   "facing": "E"
+  },
+  {
+   "source": "cupertino-signs",
+   "type": "stop",
+   "id": 12022225,
+   "facing": "S"
+  },
+  {
+   "source": "cupertino-signs",
+   "type": "stop",
+   "id": 12022233,
+   "facing": "W"
+  },
+  {
+   "source": "cupertino-signs",
+   "type": "stop",
+   "id": 12022238,
+   "facing": "W"
+  },
+  {
+   "source": "cupertino-signs",
+   "type": "stop",
+   "id": 12022242,
+   "facing": "NE"
+  },
+  {
+   "source": "cupertino-signs",
+   "type": "stop",
+   "id": 12022257,
+   "facing": "S"
+  },
+  {
+   "source": "cupertino-signs",
+   "type": "stop",
+   "id": 12022267,
+   "facing": "W"
+  },
+  {
+   "source": "cupertino-signs",
+   "type": "stop",
+   "id": 12022271,
+   "facing": "W"
+  },
+  {
+   "source": "cupertino-signs",
+   "type": "stop",
+   "id": 12022272,
+   "facing": "E"
+  },
+  {
+   "source": "cupertino-signs",
+   "type": "stop",
+   "id": 12022273,
+   "facing": "W"
+  },
+  {
+   "source": "cupertino-signs",
+   "type": "stop",
+   "id": 12022274,
+   "facing": "N"
+  },
+  {
+   "source": "cupertino-signs",
+   "type": "stop",
+   "id": 12022275,
+   "facing": "S"
+  },
+  {
+   "source": "cupertino-signs",
+   "type": "stop",
+   "id": 12022276,
+   "facing": "W"
+  },
+  {
+   "source": "cupertino-signs",
+   "type": "stop",
+   "id": 12022284,
+   "facing": "W"
+  },
+  {
+   "source": "cupertino-signs",
+   "type": "stop",
+   "id": 12022297,
+   "facing": "N"
+  },
+  {
+   "source": "cupertino-signs",
+   "type": "stop",
+   "id": 12022312,
+   "facing": "S"
+  },
+  {
+   "source": "cupertino-signs",
+   "type": "stop",
+   "id": 12022342,
+   "facing": "S"
+  },
+  {
+   "source": "cupertino-signs",
+   "type": "stop",
+   "id": 12022343,
+   "facing": "N"
+  },
+  {
+   "source": "cupertino-signs",
+   "type": "stop",
+   "id": 12022366,
+   "facing": "W"
+  },
+  {
+   "source": "cupertino-signs",
+   "type": "stop",
+   "id": 12022373,
+   "facing": "S"
+  },
+  {
+   "source": "cupertino-signs",
+   "type": "stop",
+   "id": 12022374,
+   "facing": "S"
+  },
+  {
+   "source": "cupertino-signs",
+   "type": "stop",
+   "id": 12022375,
+   "facing": "N"
+  },
+  {
+   "source": "cupertino-signs",
+   "type": "stop",
+   "id": 12022377,
+   "facing": "E"
+  },
+  {
+   "source": "cupertino-signs",
+   "type": "stop",
+   "id": 12022382,
+   "facing": "W"
+  },
+  {
+   "source": "cupertino-signs",
+   "type": "stop",
+   "id": 12022384,
+   "facing": "N"
+  },
+  {
+   "source": "cupertino-signs",
+   "type": "stop",
+   "id": 12022396,
+   "facing": "W"
+  },
+  {
+   "source": "cupertino-signs",
+   "type": "stop",
+   "id": 12022404,
+   "facing": "S"
+  },
+  {
+   "source": "cupertino-signs",
+   "type": "stop",
+   "id": 12022449,
+   "facing": "S"
+  },
+  {
+   "source": "cupertino-signs",
+   "type": "stop",
+   "id": 12022466,
+   "facing": "NE"
+  },
+  {
+   "source": "cupertino-signs",
+   "type": "stop",
+   "id": 12022468,
+   "facing": "E"
+  },
+  {
+   "source": "cupertino-signs",
+   "type": "stop",
+   "id": 12022471,
+   "facing": "W"
+  },
+  {
+   "source": "cupertino-signs",
+   "type": "stop",
+   "id": 12022781,
+   "facing": "W"
+  },
+  {
+   "source": "cupertino-signs",
+   "type": "stop",
+   "id": 12022882,
+   "facing": "W"
+  },
+  {
+   "source": "cupertino-signs",
+   "type": "stop",
+   "id": 12022884,
+   "facing": "N"
+  },
+  {
+   "source": "cupertino-signs",
+   "type": "stop",
+   "id": 12022885,
+   "facing": "E"
+  },
+  {
+   "source": "cupertino-signs",
+   "type": "stop",
+   "id": 12022887,
+   "facing": "S"
+  },
+  {
+   "source": "cupertino-signs",
+   "type": "stop",
+   "id": 12022888,
+   "facing": "S"
+  },
+  {
+   "source": "cupertino-signs",
+   "type": "stop",
+   "id": 12022889,
+   "facing": "S"
+  },
+  {
+   "source": "cupertino-signs",
+   "type": "stop",
+   "id": 12022890,
+   "facing": "S"
+  },
+  {
+   "source": "cupertino-signs",
+   "type": "stop",
+   "id": 12022891,
+   "facing": "S"
+  },
+  {
+   "source": "cupertino-signs",
+   "type": "stop",
+   "id": 12022892,
+   "facing": "N"
+  },
+  {
+   "source": "cupertino-signs",
+   "type": "stop",
+   "id": 12022893,
+   "facing": "S"
+  },
+  {
+   "source": "cupertino-signs",
+   "type": "stop",
+   "id": 12022894,
+   "facing": "W"
+  },
+  {
+   "source": "cupertino-signs",
+   "type": "stop",
+   "id": 12022895,
+   "facing": "S"
+  },
+  {
+   "source": "cupertino-signs",
+   "type": "stop",
+   "id": 12022896,
+   "facing": "E"
+  },
+  {
+   "source": "cupertino-signs",
+   "type": "stop",
+   "id": 12022897,
+   "facing": "W"
+  },
+  {
+   "source": "cupertino-signs",
+   "type": "stop",
+   "id": 12022899,
+   "facing": "W"
+  },
+  {
+   "source": "cupertino-signs",
+   "type": "stop",
+   "id": 12022900,
+   "facing": "S"
+  },
+  {
+   "source": "cupertino-signs",
+   "type": "stop",
+   "id": 12022901,
+   "facing": "E"
+  },
+  {
+   "source": "cupertino-signs",
+   "type": "stop",
+   "id": 12022902,
+   "facing": "N"
+  },
+  {
+   "source": "cupertino-signs",
+   "type": "stop",
+   "id": 12022904,
+   "facing": "E"
+  },
+  {
+   "source": "cupertino-signs",
+   "type": "stop",
+   "id": 12022905,
+   "facing": "E"
+  },
+  {
+   "source": "cupertino-signs",
+   "type": "stop",
+   "id": 12022907,
+   "facing": "W"
+  },
+  {
+   "source": "cupertino-signs",
+   "type": "stop",
+   "id": 12022910,
+   "facing": "E"
+  },
+  {
+   "source": "cupertino-signs",
+   "type": "stop",
+   "id": 12022935,
+   "facing": "E"
+  },
+  {
+   "source": "cupertino-signs",
+   "type": "stop",
+   "id": 12022949,
+   "facing": "W"
+  },
+  {
+   "source": "cupertino-signs",
+   "type": "stop",
+   "id": 12022975,
+   "facing": "W"
+  },
+  {
+   "source": "cupertino-signs",
+   "type": "stop",
+   "id": 12022980,
+   "facing": "S"
+  },
+  {
+   "source": "cupertino-signs",
+   "type": "stop",
+   "id": 12022981,
+   "facing": "S"
+  },
+  {
+   "source": "cupertino-signs",
+   "type": "stop",
+   "id": 12022982,
+   "facing": "W"
+  },
+  {
+   "source": "cupertino-signs",
+   "type": "stop",
+   "id": 12022983,
+   "facing": "W"
+  },
+  {
+   "source": "cupertino-signs",
+   "type": "stop",
+   "id": 12022984,
+   "facing": "E"
+  },
+  {
+   "source": "cupertino-signs",
+   "type": "stop",
+   "id": 12022987,
+   "facing": "N"
+  },
+  {
+   "source": "cupertino-signs",
+   "type": "stop",
+   "id": 12022989,
+   "facing": "N"
+  },
+  {
+   "source": "cupertino-signs",
+   "type": "stop",
+   "id": 12022990,
+   "facing": "E"
+  },
+  {
+   "source": "cupertino-signs",
+   "type": "stop",
+   "id": 12022991,
+   "facing": "W"
+  },
+  {
+   "source": "cupertino-signs",
+   "type": "stop",
+   "id": 12022992,
+   "facing": "E"
+  },
+  {
+   "source": "cupertino-signs",
+   "type": "stop",
+   "id": 12022993,
+   "facing": "E"
+  },
+  {
+   "source": "cupertino-signs",
+   "type": "stop",
+   "id": 12023003,
+   "facing": "E"
+  },
+  {
+   "source": "cupertino-signs",
+   "type": "stop",
+   "id": 12023011,
+   "facing": "W"
+  },
+  {
+   "source": "cupertino-signs",
+   "type": "stop",
+   "id": 12023056,
+   "facing": "E"
+  },
+  {
+   "source": "cupertino-signs",
+   "type": "stop",
+   "id": 12023119,
+   "facing": "E"
+  },
+  {
+   "source": "cupertino-signs",
+   "type": "stop",
+   "id": 12023121,
+   "facing": "E"
+  },
+  {
+   "source": "cupertino-signs",
+   "type": "stop",
+   "id": 12023122,
+   "facing": "W"
+  },
+  {
+   "source": "cupertino-signs",
+   "type": "stop",
+   "id": 12023123,
+   "facing": "E"
+  },
+  {
+   "source": "cupertino-signs",
+   "type": "stop",
+   "id": 12023124,
+   "facing": "N"
+  },
+  {
+   "source": "cupertino-signs",
+   "type": "stop",
+   "id": 12023126,
+   "facing": "S"
+  },
+  {
+   "source": "cupertino-signs",
+   "type": "stop",
+   "id": 12023128,
+   "facing": "N"
+  },
+  {
+   "source": "cupertino-signs",
+   "type": "stop",
+   "id": 12023129,
+   "facing": "S"
+  },
+  {
+   "source": "cupertino-signs",
+   "type": "stop",
+   "id": 12023130,
+   "facing": "N"
+  },
+  {
+   "source": "cupertino-signs",
+   "type": "stop",
+   "id": 12023134,
+   "facing": "S"
+  },
+  {
+   "source": "cupertino-signs",
+   "type": "stop",
+   "id": 12023135,
+   "facing": "N"
+  },
+  {
+   "source": "cupertino-signs",
+   "type": "stop",
+   "id": 12023136,
+   "facing": "E"
+  },
+  {
+   "source": "cupertino-signs",
+   "type": "stop",
+   "id": 12023137,
+   "facing": "N"
+  },
+  {
+   "source": "cupertino-signs",
+   "type": "stop",
+   "id": 12023208,
+   "facing": "E"
+  },
+  {
+   "source": "cupertino-signs",
+   "type": "stop",
+   "id": 12023209,
+   "facing": "W"
+  },
+  {
+   "source": "cupertino-signs",
+   "type": "stop",
+   "id": 12023211,
+   "facing": "E"
+  },
+  {
+   "source": "cupertino-signs",
+   "type": "stop",
+   "id": 12023267,
+   "facing": "N"
+  },
+  {
+   "source": "cupertino-signs",
+   "type": "stop",
+   "id": 12023312,
+   "facing": "W"
+  },
+  {
+   "source": "cupertino-signs",
+   "type": "stop",
+   "id": 12023313,
+   "facing": "E"
+  },
+  {
+   "source": "cupertino-signs",
+   "type": "stop",
+   "id": 12023333,
+   "facing": "N"
+  },
+  {
+   "source": "cupertino-signs",
+   "type": "stop",
+   "id": 12023341,
+   "facing": "S"
+  },
+  {
+   "source": "cupertino-signs",
+   "type": "stop",
+   "id": 12023342,
+   "facing": "N"
+  },
+  {
+   "source": "cupertino-signs",
+   "type": "stop",
+   "id": 12023343,
+   "facing": "W"
+  },
+  {
+   "source": "cupertino-signs",
+   "type": "stop",
+   "id": 12023344,
+   "facing": "N"
+  },
+  {
+   "source": "cupertino-signs",
+   "type": "stop",
+   "id": 12023346,
+   "facing": "S"
+  },
+  {
+   "source": "cupertino-signs",
+   "type": "stop",
+   "id": 12023348,
+   "facing": "E"
+  },
+  {
+   "source": "cupertino-signs",
+   "type": "stop",
+   "id": 12023349,
+   "facing": "W"
+  },
+  {
+   "source": "cupertino-signs",
+   "type": "stop",
+   "id": 12023350,
+   "facing": "E"
+  },
+  {
+   "source": "cupertino-signs",
+   "type": "stop",
+   "id": 12023351,
+   "facing": "N"
+  },
+  {
+   "source": "cupertino-signs",
+   "type": "stop",
+   "id": 12023352,
+   "facing": "N"
+  },
+  {
+   "source": "cupertino-signs",
+   "type": "stop",
+   "id": 12023353,
+   "facing": "N"
+  },
+  {
+   "source": "cupertino-signs",
+   "type": "stop",
+   "id": 12023354,
+   "facing": "S"
+  },
+  {
+   "source": "cupertino-signs",
+   "type": "stop",
+   "id": 12023361,
+   "facing": "S"
+  },
+  {
+   "source": "cupertino-signs",
+   "type": "stop",
+   "id": 12023362,
+   "facing": "E"
+  },
+  {
+   "source": "cupertino-signs",
+   "type": "stop",
+   "id": 12023363,
+   "facing": "E"
+  },
+  {
+   "source": "cupertino-signs",
+   "type": "stop",
+   "id": 12023365,
+   "facing": "E"
+  },
+  {
+   "source": "cupertino-signs",
+   "type": "stop",
+   "id": 12023366,
+   "facing": "W"
+  },
+  {
+   "source": "cupertino-signs",
+   "type": "stop",
+   "id": 12023371,
+   "facing": "E"
+  },
+  {
+   "source": "cupertino-signs",
+   "type": "stop",
+   "id": 12023372,
+   "facing": "E"
+  },
+  {
+   "source": "cupertino-signs",
+   "type": "stop",
+   "id": 12023373,
+   "facing": "W"
+  },
+  {
+   "source": "cupertino-signs",
+   "type": "stop",
+   "id": 12023374,
+   "facing": "E"
+  },
+  {
+   "source": "cupertino-signs",
+   "type": "stop",
+   "id": 12023375,
+   "facing": "W"
+  },
+  {
+   "source": "cupertino-signs",
+   "type": "stop",
+   "id": 12023376,
+   "facing": "W"
+  },
+  {
+   "source": "cupertino-signs",
+   "type": "stop",
+   "id": 12023377,
+   "facing": "W"
+  },
+  {
+   "source": "cupertino-signs",
+   "type": "stop",
+   "id": 12023378,
+   "facing": "E"
+  },
+  {
+   "source": "cupertino-signs",
+   "type": "stop",
+   "id": 12023379,
+   "facing": "E"
+  },
+  {
+   "source": "cupertino-signs",
+   "type": "stop",
+   "id": 12023380,
+   "facing": "W"
+  },
+  {
+   "source": "cupertino-signs",
+   "type": "stop",
+   "id": 12023381,
+   "facing": "N"
+  },
+  {
+   "source": "cupertino-signs",
+   "type": "stop",
+   "id": 12023383,
+   "facing": "W"
+  },
+  {
+   "source": "cupertino-signs",
+   "type": "stop",
+   "id": 12023384,
+   "facing": "W"
+  },
+  {
+   "source": "cupertino-signs",
+   "type": "stop",
+   "id": 12023387,
+   "facing": "SW"
+  },
+  {
+   "source": "cupertino-signs",
+   "type": "stop",
+   "id": 12023392,
+   "facing": "W"
+  },
+  {
+   "source": "cupertino-signs",
+   "type": "stop",
+   "id": 12023393,
+   "facing": "E"
+  },
+  {
+   "source": "cupertino-signs",
+   "type": "stop",
+   "id": 12023430,
+   "facing": "E"
+  },
+  {
+   "source": "cupertino-signs",
+   "type": "stop",
+   "id": 12023499,
+   "facing": "N"
+  },
+  {
+   "source": "cupertino-signs",
+   "type": "stop",
+   "id": 12023500,
+   "facing": "N"
+  },
+  {
+   "source": "cupertino-signs",
+   "type": "stop",
+   "id": 12023501,
+   "facing": "W"
+  },
+  {
+   "source": "cupertino-signs",
+   "type": "stop",
+   "id": 12023513,
+   "facing": "N"
+  },
+  {
+   "source": "cupertino-signs",
+   "type": "stop",
+   "id": 12023520,
+   "facing": "N"
+  },
+  {
+   "source": "cupertino-signs",
+   "type": "stop",
+   "id": 12023522,
+   "facing": "S"
+  },
+  {
+   "source": "cupertino-signs",
+   "type": "stop",
+   "id": 12023527,
+   "facing": "S"
+  },
+  {
+   "source": "cupertino-signs",
+   "type": "stop",
+   "id": 12023546,
+   "facing": "N"
+  },
+  {
+   "source": "cupertino-signs",
+   "type": "stop",
+   "id": 12023547,
+   "facing": "S"
+  },
+  {
+   "source": "cupertino-signs",
+   "type": "stop",
+   "id": 12023548,
+   "facing": "S"
+  },
+  {
+   "source": "cupertino-signs",
+   "type": "stop",
+   "id": 12023552,
+   "facing": "N"
+  },
+  {
+   "source": "cupertino-signs",
+   "type": "stop",
+   "id": 12023553,
+   "facing": "N"
+  },
+  {
+   "source": "cupertino-signs",
+   "type": "stop",
+   "id": 12023554,
+   "facing": "E"
+  },
+  {
+   "source": "cupertino-signs",
+   "type": "stop",
+   "id": 12023625,
+   "facing": "S"
+  },
+  {
+   "source": "cupertino-signs",
+   "type": "stop",
+   "id": 12023626,
+   "facing": "S"
+  },
+  {
+   "source": "cupertino-signs",
+   "type": "stop",
+   "id": 12023627,
+   "facing": "N"
+  },
+  {
+   "source": "cupertino-signs",
+   "type": "stop",
+   "id": 12023647,
+   "facing": "S"
+  },
+  {
+   "source": "cupertino-signs",
+   "type": "stop",
+   "id": 12023653,
+   "facing": "E"
+  },
+  {
+   "source": "cupertino-signs",
+   "type": "stop",
+   "id": 12023680,
+   "facing": "N"
+  },
+  {
+   "source": "cupertino-signs",
+   "type": "stop",
+   "id": 12023683,
+   "facing": "S"
+  },
+  {
+   "source": "cupertino-signs",
+   "type": "stop",
+   "id": 12023808,
+   "facing": "W"
+  },
+  {
+   "source": "cupertino-signs",
+   "type": "stop",
+   "id": 12023809,
+   "facing": "E"
+  },
+  {
+   "source": "cupertino-signs",
+   "type": "stop",
+   "id": 12023810,
+   "facing": "W"
+  },
+  {
+   "source": "cupertino-signs",
+   "type": "stop",
+   "id": 12023811,
+   "facing": "E"
+  },
+  {
+   "source": "cupertino-signs",
+   "type": "stop",
+   "id": 12023812,
+   "facing": "W"
+  },
+  {
+   "source": "cupertino-signs",
+   "type": "stop",
+   "id": 12023813,
+   "facing": "E"
+  },
+  {
+   "source": "cupertino-signs",
+   "type": "stop",
+   "id": 12023824,
+   "facing": "E"
+  },
+  {
+   "source": "cupertino-signs",
+   "type": "stop",
+   "id": 12023825,
+   "facing": "S"
+  },
+  {
+   "source": "cupertino-signs",
+   "type": "stop",
+   "id": 12023826,
+   "facing": "N"
+  },
+  {
+   "source": "cupertino-signs",
+   "type": "stop",
+   "id": 12023950,
+   "facing": "NE"
+  },
+  {
+   "source": "cupertino-signs",
+   "type": "stop",
+   "id": 12023951,
+   "facing": "S"
+  },
+  {
+   "source": "cupertino-signs",
+   "type": "stop",
+   "id": 12024027,
+   "facing": "E"
+  },
+  {
+   "source": "cupertino-signs",
+   "type": "stop",
+   "id": 12024065,
+   "facing": "E"
+  },
+  {
+   "source": "cupertino-signs",
+   "type": "stop",
+   "id": 12024072,
+   "facing": "N"
+  },
+  {
+   "source": "cupertino-signs",
+   "type": "stop",
+   "id": 12024283,
+   "facing": "E"
+  },
+  {
+   "source": "cupertino-signs",
+   "type": "stop",
+   "id": 12024294,
+   "facing": "W"
+  },
+  {
+   "source": "cupertino-signs",
+   "type": "stop",
+   "id": 12024297,
+   "facing": "S"
+  },
+  {
+   "source": "cupertino-signs",
+   "type": "stop",
+   "id": 12024298,
+   "facing": "W"
+  },
+  {
+   "source": "cupertino-signs",
+   "type": "stop",
+   "id": 12024300,
+   "facing": "N"
+  },
+  {
+   "source": "cupertino-signs",
+   "type": "stop",
+   "id": 12024308,
+   "facing": "W"
+  },
+  {
+   "source": "cupertino-signs",
+   "type": "stop",
+   "id": 12024312,
+   "facing": "W"
+  },
+  {
+   "source": "cupertino-signs",
+   "type": "stop",
+   "id": 12024314,
+   "facing": "N"
+  },
+  {
+   "source": "cupertino-signs",
+   "type": "stop",
+   "id": 12024331,
+   "facing": "S"
+  },
+  {
+   "source": "cupertino-signs",
+   "type": "stop",
+   "id": 12024332,
+   "facing": "N"
+  },
+  {
+   "source": "cupertino-signs",
+   "type": "stop",
+   "id": 12024333,
+   "facing": "S"
+  },
+  {
+   "source": "cupertino-signs",
+   "type": "stop",
+   "id": 12024336,
+   "facing": "E"
+  },
+  {
+   "source": "cupertino-signs",
+   "type": "stop",
+   "id": 12024337,
+   "facing": "E"
+  },
+  {
+   "source": "cupertino-signs",
+   "type": "stop",
+   "id": 12024338,
+   "facing": "E"
+  },
+  {
+   "source": "cupertino-signs",
+   "type": "stop",
+   "id": 12024339,
+   "facing": "S"
+  },
+  {
+   "source": "cupertino-signs",
+   "type": "stop",
+   "id": 12024340,
+   "facing": "E"
+  },
+  {
+   "source": "cupertino-signs",
+   "type": "stop",
+   "id": 12024341,
+   "facing": "W"
+  },
+  {
+   "source": "cupertino-signs",
+   "type": "stop",
+   "id": 12024346,
+   "facing": "S"
+  },
+  {
+   "source": "cupertino-signs",
+   "type": "stop",
+   "id": 12024347,
+   "facing": "E"
+  },
+  {
+   "source": "cupertino-signs",
+   "type": "stop",
+   "id": 12024348,
+   "facing": "E"
+  },
+  {
+   "source": "cupertino-signs",
+   "type": "stop",
+   "id": 12024349,
+   "facing": "E"
+  },
+  {
+   "source": "cupertino-signs",
+   "type": "stop",
+   "id": 12024350,
+   "facing": "W"
+  },
+  {
+   "source": "cupertino-signs",
+   "type": "stop",
+   "id": 12024351,
+   "facing": "E"
+  },
+  {
+   "source": "cupertino-signs",
+   "type": "stop",
+   "id": 12024353,
+   "facing": "S"
+  },
+  {
+   "source": "cupertino-signs",
+   "type": "stop",
+   "id": 12024354,
+   "facing": "N"
+  },
+  {
+   "source": "cupertino-signs",
+   "type": "stop",
+   "id": 12024361,
+   "facing": "S"
+  },
+  {
+   "source": "cupertino-signs",
+   "type": "stop",
+   "id": 12024362,
+   "facing": "W"
+  },
+  {
+   "source": "cupertino-signs",
+   "type": "stop",
+   "id": 12024363,
+   "facing": "E"
+  },
+  {
+   "source": "cupertino-signs",
+   "type": "stop",
+   "id": 12024364,
+   "facing": "N"
+  },
+  {
+   "source": "cupertino-signs",
+   "type": "stop",
+   "id": 12024365,
+   "facing": "E"
+  },
+  {
+   "source": "cupertino-signs",
+   "type": "stop",
+   "id": 12024367,
+   "facing": "W"
+  },
+  {
+   "source": "cupertino-signs",
+   "type": "stop",
+   "id": 12024369,
+   "facing": "N"
+  },
+  {
+   "source": "cupertino-signs",
+   "type": "stop",
+   "id": 12024370,
+   "facing": "N"
+  },
+  {
+   "source": "cupertino-signs",
+   "type": "stop",
+   "id": 12024371,
+   "facing": "S"
+  },
+  {
+   "source": "cupertino-signs",
+   "type": "stop",
+   "id": 12024372,
+   "facing": "E"
+  },
+  {
+   "source": "cupertino-signs",
+   "type": "stop",
+   "id": 12024373,
+   "facing": "N"
+  },
+  {
+   "source": "cupertino-signs",
+   "type": "stop",
+   "id": 12024375,
+   "facing": "N"
+  },
+  {
+   "source": "cupertino-signs",
+   "type": "stop",
+   "id": 12024376,
+   "facing": "N"
+  },
+  {
+   "source": "cupertino-signs",
+   "type": "stop",
+   "id": 12024381,
+   "facing": "S"
+  },
+  {
+   "source": "cupertino-signs",
+   "type": "stop",
+   "id": 12024382,
+   "facing": "E"
+  },
+  {
+   "source": "cupertino-signs",
+   "type": "stop",
+   "id": 12024383,
+   "facing": "N"
+  },
+  {
+   "source": "cupertino-signs",
+   "type": "stop",
+   "id": 12024389,
+   "facing": "N"
+  },
+  {
+   "source": "cupertino-signs",
+   "type": "stop",
+   "id": 12024393,
+   "facing": "E"
+  },
+  {
+   "source": "cupertino-signs",
+   "type": "stop",
+   "id": 12024394,
+   "facing": "N"
+  },
+  {
+   "source": "cupertino-signs",
+   "type": "stop",
+   "id": 12024395,
+   "facing": "E"
+  },
+  {
+   "source": "cupertino-signs",
+   "type": "stop",
+   "id": 12024396,
+   "facing": "W"
+  },
+  {
+   "source": "cupertino-signs",
+   "type": "stop",
+   "id": 12024398,
+   "facing": "S"
+  },
+  {
+   "source": "cupertino-signs",
+   "type": "stop",
+   "id": 12024399,
+   "facing": "E"
+  },
+  {
+   "source": "cupertino-signs",
+   "type": "stop",
+   "id": 12024400,
+   "facing": "W"
+  },
+  {
+   "source": "cupertino-signs",
+   "type": "stop",
+   "id": 12024405,
+   "facing": "S"
+  },
+  {
+   "source": "cupertino-signs",
+   "type": "stop",
+   "id": 12024408,
+   "facing": "W"
+  },
+  {
+   "source": "cupertino-signs",
+   "type": "stop",
+   "id": 12024413,
+   "facing": "N"
+  },
+  {
+   "source": "cupertino-signs",
+   "type": "stop",
+   "id": 12024416,
+   "facing": "E"
+  },
+  {
+   "source": "cupertino-signs",
+   "type": "stop",
+   "id": 12024417,
+   "facing": "W"
+  },
+  {
+   "source": "cupertino-signs",
+   "type": "stop",
+   "id": 12024420,
+   "facing": "S"
+  },
+  {
+   "source": "cupertino-signs",
+   "type": "stop",
+   "id": 12024527,
+   "facing": "S"
+  },
+  {
+   "source": "cupertino-signs",
+   "type": "stop",
+   "id": 12024528,
+   "facing": "E"
+  },
+  {
+   "source": "cupertino-signs",
+   "type": "stop",
+   "id": 12024529,
+   "facing": "S"
+  },
+  {
+   "source": "cupertino-signs",
+   "type": "stop",
+   "id": 12024532,
+   "facing": "E"
+  },
+  {
+   "source": "cupertino-signs",
+   "type": "stop",
+   "id": 12024535,
+   "facing": "W"
+  },
+  {
+   "source": "cupertino-signs",
+   "type": "stop",
+   "id": 12024536,
+   "facing": "W"
+  },
+  {
+   "source": "cupertino-signs",
+   "type": "stop",
+   "id": 12024537,
+   "facing": "W"
+  },
+  {
+   "source": "cupertino-signs",
+   "type": "stop",
+   "id": 12024580,
+   "facing": "W"
+  },
+  {
+   "source": "cupertino-signs",
+   "type": "stop",
+   "id": 12024581,
+   "facing": "S"
+  },
+  {
+   "source": "cupertino-signs",
+   "type": "stop",
+   "id": 12024582,
+   "facing": "E"
+  },
+  {
+   "source": "cupertino-signs",
+   "type": "stop",
+   "id": 12024583,
+   "facing": "W"
+  },
+  {
+   "source": "cupertino-signs",
+   "type": "stop",
+   "id": 12024667,
+   "facing": "S"
+  },
+  {
+   "source": "cupertino-signs",
+   "type": "stop",
+   "id": 12024669,
+   "facing": "E"
+  },
+  {
+   "source": "cupertino-signs",
+   "type": "stop",
+   "id": 12024670,
+   "facing": "E"
+  },
+  {
+   "source": "cupertino-signs",
+   "type": "stop",
+   "id": 12024671,
+   "facing": "S"
+  },
+  {
+   "source": "cupertino-signs",
+   "type": "stop",
+   "id": 12024680,
+   "facing": "S"
+  },
+  {
+   "source": "cupertino-signs",
+   "type": "stop",
+   "id": 12024687,
+   "facing": "W"
+  },
+  {
+   "source": "cupertino-signs",
+   "type": "stop",
+   "id": 12024698,
+   "facing": "W"
+  },
+  {
+   "source": "cupertino-signs",
+   "type": "stop",
+   "id": 12024711,
+   "facing": "S"
+  },
+  {
+   "source": "cupertino-signs",
+   "type": "stop",
+   "id": 12024712,
+   "facing": "E"
+  },
+  {
+   "source": "cupertino-signs",
+   "type": "stop",
+   "id": 12024727,
+   "facing": "N"
+  },
+  {
+   "source": "cupertino-signs",
+   "type": "stop",
+   "id": 12024730,
+   "facing": "E"
+  },
+  {
+   "source": "cupertino-signs",
+   "type": "stop",
+   "id": 12024743,
+   "facing": "N"
+  },
+  {
+   "source": "cupertino-signs",
+   "type": "stop",
+   "id": 12024744,
+   "facing": "W"
+  },
+  {
+   "source": "cupertino-signs",
+   "type": "stop",
+   "id": 12024748,
+   "facing": "E"
+  },
+  {
+   "source": "cupertino-signs",
+   "type": "stop",
+   "id": 12024750,
+   "facing": "E"
+  },
+  {
+   "source": "cupertino-signs",
+   "type": "stop",
+   "id": 12024751,
+   "facing": "E"
+  },
+  {
+   "source": "cupertino-signs",
+   "type": "stop",
+   "id": 12024760,
+   "facing": "E"
+  },
+  {
+   "source": "cupertino-signs",
+   "type": "stop",
+   "id": 12024764,
+   "facing": "S"
+  },
+  {
+   "source": "cupertino-signs",
+   "type": "stop",
+   "id": 12024767,
+   "facing": "S"
+  },
+  {
+   "source": "cupertino-signs",
+   "type": "stop",
+   "id": 12024768,
+   "facing": "E"
+  },
+  {
+   "source": "cupertino-signs",
+   "type": "stop",
+   "id": 12024777,
+   "facing": "W"
+  },
+  {
+   "source": "cupertino-signs",
+   "type": "stop",
+   "id": 12024792,
+   "facing": "W"
+  },
+  {
+   "source": "cupertino-signs",
+   "type": "stop",
+   "id": 12024793,
+   "facing": "E"
+  },
+  {
+   "source": "cupertino-signs",
+   "type": "stop",
+   "id": 12024796,
+   "facing": "S"
+  },
+  {
+   "source": "cupertino-signs",
+   "type": "stop",
+   "id": 12024803,
+   "facing": "E"
+  },
+  {
+   "source": "cupertino-signs",
+   "type": "stop",
+   "id": 12024804,
+   "facing": "E"
+  },
+  {
+   "source": "cupertino-signs",
+   "type": "stop",
+   "id": 12024809,
+   "facing": "S"
+  },
+  {
+   "source": "cupertino-signs",
+   "type": "stop",
+   "id": 12024815,
+   "facing": "W"
+  },
+  {
+   "source": "cupertino-signs",
+   "type": "stop",
+   "id": 12024816,
+   "facing": "N"
+  },
+  {
+   "source": "cupertino-signs",
+   "type": "stop",
+   "id": 12024818,
+   "facing": "S"
+  },
+  {
+   "source": "cupertino-signs",
+   "type": "stop",
+   "id": 12024819,
+   "facing": "N"
+  },
+  {
+   "source": "cupertino-signs",
+   "type": "stop",
+   "id": 12024821,
+   "facing": "S"
+  },
+  {
+   "source": "cupertino-signs",
+   "type": "stop",
+   "id": 12024824,
+   "facing": "S"
+  },
+  {
+   "source": "cupertino-signs",
+   "type": "stop",
+   "id": 12024825,
+   "facing": "N"
+  },
+  {
+   "source": "cupertino-signs",
+   "type": "stop",
+   "id": 12024827,
+   "facing": "S"
+  },
+  {
+   "source": "cupertino-signs",
+   "type": "stop",
+   "id": 12024835,
+   "facing": "S"
+  },
+  {
+   "source": "cupertino-signs",
+   "type": "stop",
+   "id": 12024838,
+   "facing": "E"
+  },
+  {
+   "source": "cupertino-signs",
+   "type": "stop",
+   "id": 12024840,
+   "facing": "W"
+  },
+  {
+   "source": "cupertino-signs",
+   "type": "stop",
+   "id": 12024841,
+   "facing": "W"
+  },
+  {
+   "source": "cupertino-signs",
+   "type": "stop",
+   "id": 12024842,
+   "facing": "E"
+  },
+  {
+   "source": "cupertino-signs",
+   "type": "stop",
+   "id": 12024843,
+   "facing": "N"
+  },
+  {
+   "source": "cupertino-signs",
+   "type": "stop",
+   "id": 12024867,
+   "facing": "W"
+  },
+  {
+   "source": "cupertino-signs",
+   "type": "stop",
+   "id": 12024868,
+   "facing": "W"
+  },
+  {
+   "source": "cupertino-signs",
+   "type": "stop",
+   "id": 12024891,
+   "facing": "W"
+  },
+  {
+   "source": "cupertino-signs",
+   "type": "stop",
+   "id": 12024913,
+   "facing": "W"
+  },
+  {
+   "source": "cupertino-signs",
+   "type": "stop",
+   "id": 12025010,
+   "facing": "W"
+  },
+  {
+   "source": "cupertino-signs",
+   "type": "stop",
+   "id": 12025013,
+   "facing": "W"
+  },
+  {
+   "source": "cupertino-signs",
+   "type": "stop",
+   "id": 12025017,
+   "facing": "SW"
+  },
+  {
+   "source": "cupertino-signs",
+   "type": "stop",
+   "id": 12025020,
+   "facing": "E"
+  },
+  {
+   "source": "cupertino-signs",
+   "type": "stop",
+   "id": 12025026,
+   "facing": "N"
+  },
+  {
+   "source": "cupertino-signs",
+   "type": "stop",
+   "id": 12025068,
+   "facing": "W"
+  },
+  {
+   "source": "cupertino-signs",
+   "type": "stop",
+   "id": 12025157,
+   "facing": "S"
+  },
+  {
+   "source": "cupertino-signs",
+   "type": "stop",
+   "id": 12025407,
+   "facing": "E"
+  },
+  {
+   "source": "cupertino-signs",
+   "type": "stop",
+   "id": 12025607,
+   "facing": "E"
+  },
+  {
+   "source": "cupertino-signs",
+   "type": "stop",
+   "id": 12025972,
+   "facing": "N"
+  },
+  {
+   "source": "cupertino-signs",
+   "type": "stop",
+   "id": 12026003,
+   "facing": "W"
+  },
+  {
+   "source": "cupertino-signs",
+   "type": "stop",
+   "id": 12026211,
+   "facing": "W"
+  },
+  {
+   "source": "cupertino-signs",
+   "type": "stop",
+   "id": 12026212,
+   "facing": "N"
+  },
+  {
+   "source": "cupertino-signs",
+   "type": "stop",
+   "id": 12026219,
+   "facing": "N"
+  },
+  {
+   "source": "cupertino-signs",
+   "type": "stop",
+   "id": 12026239,
+   "facing": "W"
+  },
+  {
+   "source": "cupertino-signs",
+   "type": "stop",
+   "id": 12026240,
+   "facing": "E"
+  },
+  {
+   "source": "cupertino-signs",
+   "type": "stop",
+   "id": 12026241,
+   "facing": "W"
+  },
+  {
+   "source": "cupertino-signs",
+   "type": "stop",
+   "id": 12026320,
+   "facing": "W"
+  },
+  {
+   "source": "cupertino-signs",
+   "type": "stop",
+   "id": 12026425,
+   "facing": "S"
+  },
+  {
+   "source": "cupertino-signs",
+   "type": "stop",
+   "id": 12026482,
+   "facing": "NE"
+  },
+  {
+   "source": "cupertino-signs",
+   "type": "stop",
+   "id": 12026565,
+   "facing": "N"
+  },
+  {
+   "source": "cupertino-signs",
+   "type": "stop",
+   "id": 12026755,
+   "facing": "SE"
+  },
+  {
+   "source": "cupertino-signs",
+   "type": "stop",
+   "id": 12027202,
+   "facing": "W"
+  },
+  {
+   "source": "cupertino-signs",
+   "type": "stop",
+   "id": 12027206,
+   "facing": "N"
+  },
+  {
+   "source": "cupertino-signs",
+   "type": "stop",
+   "id": 12027207,
+   "facing": "W"
+  },
+  {
+   "source": "cupertino-signs",
+   "type": "stop",
+   "id": 12027210,
+   "facing": "E"
+  },
+  {
+   "source": "cupertino-signs",
+   "type": "stop",
+   "id": 12027215,
+   "facing": "S"
+  },
+  {
+   "source": "cupertino-signs",
+   "type": "stop",
+   "id": 12027247,
+   "facing": "E"
+  },
+  {
+   "source": "cupertino-signs",
+   "type": "stop",
+   "id": 12027341,
+   "facing": "W"
+  },
+  {
+   "source": "cupertino-signs",
+   "type": "stop",
+   "id": 12028114,
+   "facing": "S"
+  },
+  {
+   "source": "cupertino-signs",
+   "type": "stop",
+   "id": 12028128,
+   "facing": "SW"
+  },
+  {
+   "source": "cupertino-signs",
+   "type": "stop",
+   "id": 12028321,
+   "facing": "N"
+  },
+  {
+   "source": "cupertino-signs",
+   "type": "stop",
+   "id": 12028335,
+   "facing": "E"
+  },
+  {
+   "source": "cupertino-signs",
+   "type": "stop",
+   "id": 12028392,
+   "facing": "W"
+  },
+  {
+   "source": "cupertino-signs",
+   "type": "stop",
+   "id": 12029180,
+   "facing": "N"
+  },
+  {
+   "source": "cupertino-signs",
+   "type": "stop",
+   "id": 12029213,
+   "facing": "E"
+  },
+  {
+   "source": "cupertino-signs",
+   "type": "stop",
+   "id": 12029230,
+   "facing": "W"
+  },
+  {
+   "source": "cupertino-signs",
+   "type": "stop",
+   "id": 12029282,
+   "facing": "S"
+  },
+  {
+   "source": "cupertino-signs",
+   "type": "stop",
+   "id": 12029293,
+   "facing": "S"
+  },
+  {
+   "source": "cupertino-signs",
+   "type": "stop",
+   "id": 12029326,
+   "facing": "N"
+  },
+  {
+   "source": "cupertino-signs",
+   "type": "stop",
+   "id": 12029363,
+   "facing": "W"
+  },
+  {
+   "source": "cupertino-signs",
+   "type": "stop",
+   "id": 12029435,
+   "facing": "E"
+  },
+  {
+   "source": "cupertino-signs",
+   "type": "stop",
+   "id": 12029436,
+   "facing": "N"
+  },
+  {
+   "source": "cupertino-signs",
+   "type": "stop",
+   "id": 12029439,
+   "facing": "W"
+  },
+  {
+   "source": "cupertino-signs",
+   "type": "stop",
+   "id": 12029441,
+   "facing": "S"
+  },
+  {
+   "source": "cupertino-signs",
+   "type": "stop",
+   "id": 12029445,
+   "facing": "N"
+  },
+  {
+   "source": "cupertino-signs",
+   "type": "stop",
+   "id": 12029516,
+   "facing": "W"
+  }
+ ],
+ "removed": [
+  {
+   "type": "stop",
+   "osmNodes": [
+    3714677170
+   ],
+   "lonlat": [
+    -122.510483,
+    37.765011
+   ],
+   "names": [
+    ""
+   ]
+  },
+  {
+   "type": "stop",
+   "osmNodes": [
+    4026934181
+   ],
+   "lonlat": [
+    -122.495356,
+    37.769882
+   ],
+   "names": [
+    "36th Avenue"
+   ]
+  },
+  {
+   "type": "stop",
+   "osmNodes": [
+    8692463409
+   ],
+   "lonlat": [
+    -122.493362,
+    37.734012
+   ],
+   "names": [
+    "36th Avenue"
+   ]
+  },
+  {
+   "type": "stop",
+   "osmNodes": [
+    65354843,
+    65354846,
+    2882819844
+   ],
+   "lonlat": [
+    -122.489614,
+    37.787463
+   ],
+   "names": [
+    "29th Avenue",
+    "El Camino del Mar"
+   ]
+  },
+  {
+   "type": "stop",
+   "osmNodes": [
+    4023019303,
+    6925718364,
+    13955126318
+   ],
+   "lonlat": [
+    -122.482276,
+    37.788754
+   ],
+   "names": [
+    "Bowley Street",
+    "El Camino del Mar",
+    "Lincoln Boulevard"
+   ]
+  },
+  {
+   "type": "stop",
+   "osmNodes": [
+    65329483
+   ],
+   "lonlat": [
+    -122.474596,
+    37.787833
+   ],
+   "names": [
+    "15th Avenue",
+    "Wedemeyer Street"
+   ]
+  },
+  {
+   "type": "stop",
+   "osmNodes": [
+    65359346
+   ],
+   "lonlat": [
+    -122.47445,
+    37.787015
+   ],
+   "names": [
+    "15th Avenue"
+   ]
+  },
+  {
+   "type": "stop",
+   "osmNodes": [
+    65329474
+   ],
+   "lonlat": [
+    -122.473368,
+    37.787504
+   ],
+   "names": [
+    "14th Avenue",
+    "Wedemeyer Street",
+    "Wyman Avenue"
+   ]
+  },
+  {
+   "type": "stop",
+   "osmNodes": [
+    4086112443
+   ],
+   "lonlat": [
+    -122.472883,
+    37.787617
+   ],
+   "names": [
+    "Wyman Avenue"
+   ]
+  },
+  {
+   "type": "stop",
+   "osmNodes": [
+    8272503447
+   ],
+   "lonlat": [
+    -122.472381,
+    37.719678
+   ],
+   "names": [
+    "Garfield Street"
+   ]
+  },
+  {
+   "type": "stop",
+   "osmNodes": [
+    8274993698
+   ],
+   "lonlat": [
+    -122.471703,
+    37.726808
+   ],
+   "names": [
+    "Junipero Serra Boulevard"
+   ]
+  },
+  {
+   "type": "stop",
+   "osmNodes": [
+    8260786630
+   ],
+   "lonlat": [
+    -122.470432,
+    37.709934
+   ],
+   "names": [
+    "Chester Avenue"
+   ]
+  },
+  {
+   "type": "stop",
+   "osmNodes": [
+    601349360
+   ],
+   "lonlat": [
+    -122.468126,
+    37.707612
+   ],
+   "names": [
+    "Saint Charles Avenue"
+   ]
+  },
+  {
+   "type": "stop",
+   "osmNodes": [
+    8253361916
+   ],
+   "lonlat": [
+    -122.467791,
+    37.706856
+   ],
+   "names": [
+    "De Long Street"
+   ]
+  },
+  {
+   "type": "stop",
+   "osmNodes": [
+    1172711304,
+    8253361915
+   ],
+   "lonlat": [
+    -122.467658,
+    37.706817
+   ],
+   "names": [
+    "De Long Street",
+    "Hillcrest Drive"
+   ]
+  },
+  {
+   "type": "stop",
+   "osmNodes": [
+    8274993669
+   ],
+   "lonlat": [
+    -122.467341,
+    37.725575
+   ],
+   "names": [
+    "Borica Street"
+   ]
+  },
+  {
+   "type": "stop",
+   "osmNodes": [
+    8274993657
+   ],
+   "lonlat": [
+    -122.466339,
+    37.725493
+   ],
+   "names": [
+    "Corona Street"
+   ]
+  },
+  {
+   "type": "stop",
+   "osmNodes": [
+    1777579526
+   ],
+   "lonlat": [
+    -122.466308,
+    37.725423
+   ],
+   "names": [
+    "Corona Street"
+   ]
+  },
+  {
+   "type": "stop",
+   "osmNodes": [
+    65420963
+   ],
+   "lonlat": [
+    -122.462471,
+    37.706056
+   ],
+   "names": [
+    "Hillcrest Drive",
+    "Mission Circle",
+    "Vendome Avenue"
+   ]
+  },
+  {
+   "type": "stop",
+   "osmNodes": [
+    8253363820
+   ],
+   "lonlat": [
+    -122.46194,
+    37.706764
+   ],
+   "names": [
+    "Mission Circle"
+   ]
+  },
+  {
+   "type": "stop",
+   "osmNodes": [
+    4162860843
+   ],
+   "lonlat": [
+    -122.461423,
+    37.710812
+   ],
+   "names": [
+    "Habitat Terrace"
+   ]
+  },
+  {
+   "type": "stop",
+   "osmNodes": [
+    8253363821
+   ],
+   "lonlat": [
+    -122.460579,
+    37.706803
+   ],
+   "names": [
+    "Shakespeare Street"
+   ]
+  },
+  {
+   "type": "stop",
+   "osmNodes": [
+    12114066456
+   ],
+   "lonlat": [
+    -122.459596,
+    37.738538
+   ],
+   "names": [
+    "Dalewood Way"
+   ]
+  },
+  {
+   "type": "stop",
+   "osmNodes": [
+    8253363828,
+    8253363829
+   ],
+   "lonlat": [
+    -122.459433,
+    37.707916
+   ],
+   "names": [
+    "Wilson Street"
+   ]
+  },
+  {
+   "type": "stop",
+   "osmNodes": [
+    14040243457
+   ],
+   "lonlat": [
+    -122.458687,
+    37.79008
+   ],
+   "names": [
+    "West Pacific Avenue"
+   ]
+  },
+  {
+   "type": "stop",
+   "osmNodes": [
+    8253040421,
+    8253040422
+   ],
+   "lonlat": [
+    -122.458487,
+    37.706069
+   ],
+   "names": [
+    "Irvington Street"
+   ]
+  },
+  {
+   "type": "stop",
+   "osmNodes": [
+    12114005460
+   ],
+   "lonlat": [
+    -122.458294,
+    37.729453
+   ],
+   "names": [
+    "Westwood Drive"
+   ]
+  },
+  {
+   "type": "stop",
+   "osmNodes": [
+    12114005459
+   ],
+   "lonlat": [
+    -122.458177,
+    37.729453
+   ],
+   "names": [
+    "Eastwood Drive"
+   ]
+  },
+  {
+   "type": "stop",
+   "osmNodes": [
+    8253040496
+   ],
+   "lonlat": [
+    -122.458091,
+    37.707007
+   ],
+   "names": [
+    "Wilson Street"
+   ]
+  },
+  {
+   "type": "stop",
+   "osmNodes": [
+    8253040492
+   ],
+   "lonlat": [
+    -122.457144,
+    37.707325
+   ],
+   "names": [
+    "Goethe Street"
+   ]
+  },
+  {
+   "type": "stop",
+   "osmNodes": [
+    8253040489
+   ],
+   "lonlat": [
+    -122.456726,
+    37.707386
+   ],
+   "names": [
+    "Evergreen Avenue"
+   ]
+  },
+  {
+   "type": "stop",
+   "osmNodes": [
+    8253040484
+   ],
+   "lonlat": [
+    -122.456308,
+    37.707607
+   ],
+   "names": [
+    "Rice Street"
+   ]
+  },
+  {
+   "type": "stop",
+   "osmNodes": [
+    65438932
+   ],
+   "lonlat": [
+    -122.456032,
+    37.706128
+   ],
+   "names": [
+    "Brunswick Street",
+    "Evergreen Avenue"
+   ]
+  },
+  {
+   "type": "stop",
+   "osmNodes": [
+    8253040482
+   ],
+   "lonlat": [
+    -122.455304,
+    37.707945
+   ],
+   "names": [
+    "Liebig Street"
+   ]
+  },
+  {
+   "type": "stop",
+   "osmNodes": [
+    1229920703
+   ],
+   "lonlat": [
+    -122.455063,
+    37.708026
+   ],
+   "names": [
+    "Mission Street"
+   ]
+  },
+  {
+   "type": "stop",
+   "osmNodes": [
+    8253040481,
+    8253040483
+   ],
+   "lonlat": [
+    -122.455006,
+    37.707976
+   ],
+   "names": [
+    "Mission Street",
+    "Templeton Avenue"
+   ]
+  },
+  {
+   "type": "stop",
+   "osmNodes": [
+    8253040477,
+    8253040478
+   ],
+   "lonlat": [
+    -122.454406,
+    37.707475
+   ],
+   "names": [
+    "Irvington Street"
+   ]
+  },
+  {
+   "type": "stop",
+   "osmNodes": [
+    8253040475
+   ],
+   "lonlat": [
+    -122.453991,
+    37.706048
+   ],
+   "names": [
+    "Roosevelt Avenue"
+   ]
+  },
+  {
+   "type": "stop",
+   "osmNodes": [
+    65418175
+   ],
+   "lonlat": [
+    -122.453767,
+    37.706955
+   ],
+   "names": [
+    "Brunswick Street",
+    "Templeton Avenue"
+   ]
+  },
+  {
+   "type": "stop",
+   "osmNodes": [
+    65418178
+   ],
+   "lonlat": [
+    -122.453144,
+    37.706448
+   ],
+   "names": [
+    "Templeton Avenue",
+    "Winchester Street"
+   ]
+  },
+  {
+   "type": "stop",
+   "osmNodes": [
+    8253040480
+   ],
+   "lonlat": [
+    -122.452355,
+    37.708226
+   ],
+   "names": [
+    "Irvington Street"
+   ]
+  },
+  {
+   "type": "stop",
+   "osmNodes": [
+    65455642
+   ],
+   "lonlat": [
+    -122.452031,
+    37.7076
+   ],
+   "names": [
+    "Acton Street",
+    "Brunswick Street"
+   ]
+  },
+  {
+   "type": "stop",
+   "osmNodes": [
+    65327933
+   ],
+   "lonlat": [
+    -122.451882,
+    37.769385
+   ],
+   "names": [
+    "Haight Street",
+    "Shrader Street"
+   ]
+  },
+  {
+   "type": "stop",
+   "osmNodes": [
+    65465634
+   ],
+   "lonlat": [
+    -122.451696,
+    37.707
+   ],
+   "names": [
+    "Acton Street",
+    "Winchester Street"
+   ]
+  },
+  {
+   "type": "stop",
+   "osmNodes": [
+    65465635
+   ],
+   "lonlat": [
+    -122.451373,
+    37.706371
+   ],
+   "names": [
+    "Acton Street",
+    "Hanover Street"
+   ]
+  },
+  {
+   "type": "stop",
+   "osmNodes": [
+    65288552
+   ],
+   "lonlat": [
+    -122.450837,
+    37.801175
+   ],
+   "names": [
+    "Edie Road"
+   ]
+  },
+  {
+   "type": "stop",
+   "osmNodes": [
+    13037019295
+   ],
+   "lonlat": [
+    -122.450702,
+    37.801181
+   ],
+   "names": [
+    "General Kennedy Avenue"
+   ]
+  },
+  {
+   "type": "stop",
+   "osmNodes": [
+    65342609
+   ],
+   "lonlat": [
+    -122.450248,
+    37.801043
+   ],
+   "names": [
+    "Edie Road",
+    "O'Reilly Avenue"
+   ]
+  },
+  {
+   "type": "stop",
+   "osmNodes": [
+    7415294093
+   ],
+   "lonlat": [
+    -122.449928,
+    37.801546
+   ],
+   "names": [
+    "O'Reilly Avenue"
+   ]
+  },
+  {
+   "type": "stop",
+   "osmNodes": [
+    8253154225
+   ],
+   "lonlat": [
+    -122.449543,
+    37.707739
+   ],
+   "names": [
+    "Winchester Street"
+   ]
+  },
+  {
+   "type": "stop",
+   "osmNodes": [
+    65508160
+   ],
+   "lonlat": [
+    -122.449204,
+    37.70712
+   ],
+   "names": [
+    "Hanover Street",
+    "Oliver Street"
+   ]
+  },
+  {
+   "type": "stop",
+   "osmNodes": [
+    65361886
+   ],
+   "lonlat": [
+    -122.44899,
+    37.797553
+   ],
+   "names": [
+    "Letterman Drive",
+    "Lombard Street"
+   ]
+  },
+  {
+   "type": "stop",
+   "osmNodes": [
+    8253154226
+   ],
+   "lonlat": [
+    -122.448879,
+    37.706503
+   ],
+   "names": [
+    "Risel Avenue"
+   ]
+  },
+  {
+   "type": "stop",
+   "osmNodes": [
+    65501461
+   ],
+   "lonlat": [
+    -122.448522,
+    37.705849
+   ],
+   "names": [
+    "Bellevue Avenue",
+    "Oliver Street"
+   ]
+  },
+  {
+   "type": "stop",
+   "osmNodes": [
+    65314452
+   ],
+   "lonlat": [
+    -122.448294,
+    37.797908
+   ],
+   "names": [
+    "Ruger Street"
+   ]
+  },
+  {
+   "type": "stop",
+   "osmNodes": [
+    65415865
+   ],
+   "lonlat": [
+    -122.447031,
+    37.707847
+   ],
+   "names": [
+    "Hanover Street",
+    "Whittier Street"
+   ]
+  },
+  {
+   "type": "stop",
+   "osmNodes": [
+    65415866
+   ],
+   "lonlat": [
+    -122.446346,
+    37.70659
+   ],
+   "names": [
+    "Bellevue Avenue",
+    "Whittier Street"
+   ]
+  },
+  {
+   "type": "stop",
+   "osmNodes": [
+    65436469
+   ],
+   "lonlat": [
+    -122.44418,
+    37.707328
+   ],
+   "names": [
+    "Bellevue Avenue",
+    "Lowell Street"
+   ]
+  },
+  {
+   "type": "stop",
+   "osmNodes": [
+    65436470
+   ],
+   "lonlat": [
+    -122.443752,
+    37.706536
+   ],
+   "names": [
+    "Frankfort Street",
+    "Lowell Street"
+   ]
+  },
+  {
+   "type": "stop",
+   "osmNodes": [
+    65334895
+   ],
+   "lonlat": [
+    -122.443005,
+    37.725061
+   ],
+   "names": [
+    "San Jose Avenue"
+   ]
+  },
+  {
+   "type": "stop",
+   "osmNodes": [
+    8256266408
+   ],
+   "lonlat": [
+    -122.442901,
+    37.706823
+   ],
+   "names": [
+    "Mar Vista Drive"
+   ]
+  },
+  {
+   "type": "stop",
+   "osmNodes": [
+    65488579
+   ],
+   "lonlat": [
+    -122.442009,
+    37.708067
+   ],
+   "names": [
+    "Bellevue Avenue",
+    "Guttenberg Street"
+   ]
+  },
+  {
+   "type": "stop",
+   "osmNodes": [
+    65458955
+   ],
+   "lonlat": [
+    -122.441579,
+    37.707297
+   ],
+   "names": [
+    "Frankfort Street",
+    "Guttenberg Street",
+    "Mission Hills Drive"
+   ]
+  },
+  {
+   "type": "stop",
+   "osmNodes": [
+    65501055
+   ],
+   "lonlat": [
+    -122.441147,
+    37.707238
+   ],
+   "names": [
+    "Mission Hills Drive",
+    "Pope Street"
+   ]
+  },
+  {
+   "type": "stop",
+   "osmNodes": [
+    65383540
+   ],
+   "lonlat": [
+    -122.440565,
+    37.708233
+   ],
+   "names": [
+    "Bellevue Avenue",
+    "Pope Street"
+   ]
+  },
+  {
+   "type": "stop",
+   "osmNodes": [
+    10964212127
+   ],
+   "lonlat": [
+    -122.43646,
+    37.800795
+   ],
+   "names": [
+    "Chestnut Street"
+   ]
+  },
+  {
+   "type": "stop",
+   "osmNodes": [
+    8248658555
+   ],
+   "lonlat": [
+    -122.434064,
+    37.762555
+   ],
+   "names": [
+    "Hartford Street"
+   ]
+  },
+  {
+   "type": "stop",
+   "osmNodes": [
+    13320271045,
+    13320271049
+   ],
+   "lonlat": [
+    -122.427194,
+    37.805515
+   ],
+   "names": [
+    "Franklin Street",
+    "Pope Road"
+   ]
+  },
+  {
+   "type": "stop",
+   "osmNodes": [
+    13320271048
+   ],
+   "lonlat": [
+    -122.427166,
+    37.805403
+   ],
+   "names": [
+    "Franklin Street"
+   ]
+  },
+  {
+   "type": "stop",
+   "osmNodes": [
+    10960417259
+   ],
+   "lonlat": [
+    -122.424496,
+    37.775743
+   ],
+   "names": [
+    "Octavia Street"
+   ]
+  },
+  {
+   "type": "stop",
+   "osmNodes": [
+    14018804210
+   ],
+   "lonlat": [
+    -122.423139,
+    37.727292
+   ],
+   "names": [
+    "Valmar Terrace"
+   ]
+  },
+  {
+   "type": "stop",
+   "osmNodes": [
+    12150573304
+   ],
+   "lonlat": [
+    -122.423091,
+    37.777355
+   ],
+   "names": [
+    "Ivy Street"
+   ]
+  },
+  {
+   "type": "stop",
+   "osmNodes": [
+    14018804201
+   ],
+   "lonlat": [
+    -122.421621,
+    37.728876
+   ],
+   "names": [
+    "Harvard Street"
+   ]
+  },
+  {
+   "type": "stop",
+   "osmNodes": [
+    4019097600
+   ],
+   "lonlat": [
+    -122.420779,
+    37.807587
+   ],
+   "names": [
+    "Hyde Street",
+    "Jefferson Street"
+   ]
+  },
+  {
+   "type": "stop",
+   "osmNodes": [
+    4763953364
+   ],
+   "lonlat": [
+    -122.419999,
+    37.760198
+   ],
+   "names": [
+    "San Carlos Street"
+   ]
+  },
+  {
+   "type": "stop",
+   "osmNodes": [
+    300515745
+   ],
+   "lonlat": [
+    -122.419868,
+    37.77039
+   ],
+   "names": [
+    ""
+   ]
+  },
+  {
+   "type": "stop",
+   "osmNodes": [
+    10963867186
+   ],
+   "lonlat": [
+    -122.419707,
+    37.777783
+   ],
+   "names": [
+    "Dr. Tom Waddell Place"
+   ]
+  },
+  {
+   "type": "stop",
+   "osmNodes": [
+    4766860222
+   ],
+   "lonlat": [
+    -122.417943,
+    37.748218
+   ],
+   "names": [
+    "Capp Street"
+   ]
+  },
+  {
+   "type": "stop",
+   "osmNodes": [
+    5109828067
+   ],
+   "lonlat": [
+    -122.417059,
+    37.741672
+   ],
+   "names": [
+    "Bocana Street"
+   ]
+  },
+  {
+   "type": "stop",
+   "osmNodes": [
+    5109828066,
+    7455967491
+   ],
+   "lonlat": [
+    -122.416944,
+    37.741666
+   ],
+   "names": [
+    "Powhattan Avenue",
+    "Wool Street"
+   ]
+  },
+  {
+   "type": "stop",
+   "osmNodes": [
+    10961900290
+   ],
+   "lonlat": [
+    -122.415399,
+    37.797757
+   ],
+   "names": [
+    "Vallejo Street"
+   ]
+  },
+  {
+   "type": "stop",
+   "osmNodes": [
+    259139933
+   ],
+   "lonlat": [
+    -122.414182,
+    37.718025
+   ],
+   "names": [
+    "John F Shelley Drive"
+   ]
+  },
+  {
+   "type": "stop",
+   "osmNodes": [
+    10964195623
+   ],
+   "lonlat": [
+    -122.414171,
+    37.775803
+   ],
+   "names": [
+    "Minna Street"
+   ]
+  },
+  {
+   "type": "stop",
+   "osmNodes": [
+    5619329198,
+    10962029836,
+    10962029837,
+    10962029838
+   ],
+   "lonlat": [
+    -122.414131,
+    37.799828
+   ],
+   "names": [
+    "Taylor Street",
+    "Union Street"
+   ]
+  },
+  {
+   "type": "stop",
+   "osmNodes": [
+    4186794508
+   ],
+   "lonlat": [
+    -122.413089,
+    37.764986
+   ],
+   "names": [
+    "Treat Avenue"
+   ]
+  },
+  {
+   "type": "stop",
+   "osmNodes": [
+    65495078
+   ],
+   "lonlat": [
+    -122.412942,
+    37.70705
+   ],
+   "names": [
+    "MacDonald Avenue",
+    "Schwerin Street"
+   ]
+  },
+  {
+   "type": "stop",
+   "osmNodes": [
+    11933696934
+   ],
+   "lonlat": [
+    -122.412788,
+    37.761612
+   ],
+   "names": [
+    "18th Street"
+   ]
+  },
+  {
+   "type": "stop",
+   "osmNodes": [
+    10963830368
+   ],
+   "lonlat": [
+    -122.412482,
+    37.801932
+   ],
+   "names": [
+    "Greenwich Street"
+   ]
+  },
+  {
+   "type": "stop",
+   "osmNodes": [
+    12648957421
+   ],
+   "lonlat": [
+    -122.411588,
+    37.769519
+   ],
+   "names": [
+    ""
+   ]
+  },
+  {
+   "type": "stop",
+   "osmNodes": [
+    1677798447
+   ],
+   "lonlat": [
+    -122.410833,
+    37.769019
+   ],
+   "names": [
+    "Division Street"
+   ]
+  },
+  {
+   "type": "stop",
+   "osmNodes": [
+    11933648243
+   ],
+   "lonlat": [
+    -122.41075,
+    37.768188
+   ],
+   "names": [
+    "Alameda Street"
+   ]
+  },
+  {
+   "type": "stop",
+   "osmNodes": [
+    612771300
+   ],
+   "lonlat": [
+    -122.410564,
+    37.797266
+   ],
+   "names": [
+    "Broadway"
+   ]
+  },
+  {
+   "type": "stop",
+   "osmNodes": [
+    3158864873
+   ],
+   "lonlat": [
+    -122.405616,
+    37.742477
+   ],
+   "names": [
+    "Flower Street"
+   ]
+  },
+  {
+   "type": "stop",
+   "osmNodes": [
+    65310249
+   ],
+   "lonlat": [
+    -122.404619,
+    37.730044
+   ],
+   "names": [
+    "Felton Street",
+    "San Bruno Avenue"
+   ]
+  },
+  {
+   "type": "stop",
+   "osmNodes": [
+    65293488
+   ],
+   "lonlat": [
+    -122.400267,
+    37.761068
+   ],
+   "names": [
+    "Carolina Street"
+   ]
+  },
+  {
+   "type": "stop",
+   "osmNodes": [
+    300662241
+   ],
+   "lonlat": [
+    -122.398488,
+    37.771747
+   ],
+   "names": [
+    "King Street"
+   ]
+  },
+  {
+   "type": "stop",
+   "osmNodes": [
+    293820550
+   ],
+   "lonlat": [
+    -122.394637,
+    37.768284
+   ],
+   "names": [
+    "Gene Friend Way"
+   ]
+  },
+  {
+   "type": "stop",
+   "osmNodes": [
+    6368500923
+   ],
+   "lonlat": [
+    -122.394021,
+    37.711394
+   ],
+   "names": [
+    "Candlestick Cove Way"
+   ]
+  },
+  {
+   "type": "stop",
+   "osmNodes": [
+    6368023709
+   ],
+   "lonlat": [
+    -122.393828,
+    37.712819
+   ],
+   "names": [
+    "Candlestick Cove Way"
+   ]
+  },
+  {
+   "type": "stop",
+   "osmNodes": [
+    1386838067
+   ],
+   "lonlat": [
+    -122.393263,
+    37.709078
+   ],
+   "names": [
+    ""
+   ]
+  },
+  {
+   "type": "stop",
+   "osmNodes": [
+    65286602,
+    65286605,
+    6399128641,
+    6399128642
+   ],
+   "lonlat": [
+    -122.392734,
+    37.753147
+   ],
+   "names": [
+    "",
+    "Pennsylvania Avenue"
+   ]
+  },
+  {
+   "type": "stop",
+   "osmNodes": [
+    6391323282
+   ],
+   "lonlat": [
+    -122.392629,
+    37.781435
+   ],
+   "names": [
+    "Stanford Street"
+   ]
+  },
+  {
+   "type": "stop",
+   "osmNodes": [
+    6367987693
+   ],
+   "lonlat": [
+    -122.392596,
+    37.711778
+   ],
+   "names": [
+    "Sandpiper Cove Way"
+   ]
+  },
+  {
+   "type": "stop",
+   "osmNodes": [
+    6371014729
+   ],
+   "lonlat": [
+    -122.392358,
+    37.732488
+   ],
+   "names": [
+    "Latona Street"
+   ]
+  },
+  {
+   "type": "stop",
+   "osmNodes": [
+    6382089296
+   ],
+   "lonlat": [
+    -122.391407,
+    37.772829
+   ],
+   "names": [
+    "Mission Rock Street"
+   ]
+  },
+  {
+   "type": "stop",
+   "osmNodes": [
+    6382057530,
+    6382057535
+   ],
+   "lonlat": [
+    -122.391105,
+    37.769674
+   ],
+   "names": [
+    "Nelson Rising Lane"
+   ]
+  },
+  {
+   "type": "stop",
+   "osmNodes": [
+    6382035773
+   ],
+   "lonlat": [
+    -122.390792,
+    37.766389
+   ],
+   "names": [
+    "4th Street"
+   ]
+  },
+  {
+   "type": "stop",
+   "osmNodes": [
+    1563110124,
+    6382035780
+   ],
+   "lonlat": [
+    -122.39066,
+    37.765015
+   ],
+   "names": [
+    "Hospital Street"
+   ]
+  },
+  {
+   "type": "stop",
+   "osmNodes": [
+    6382100154
+   ],
+   "lonlat": [
+    -122.389715,
+    37.771999
+   ],
+   "names": [
+    "China Basin Street"
+   ]
+  },
+  {
+   "type": "stop",
+   "osmNodes": [
+    6382100158
+   ],
+   "lonlat": [
+    -122.389508,
+    37.772012
+   ],
+   "names": [
+    "China Basin Street"
+   ]
+  },
+  {
+   "type": "stop",
+   "osmNodes": [
+    6382057529
+   ],
+   "lonlat": [
+    -122.389501,
+    37.769763
+   ],
+   "names": [
+    "Nelson Rising Lane"
+   ]
+  },
+  {
+   "type": "stop",
+   "osmNodes": [
+    11124088381
+   ],
+   "lonlat": [
+    -122.389044,
+    37.775416
+   ],
+   "names": [
+    "Dr. Maya Angelou Paseo",
+    "Dr. Maya Angelou Way",
+    "Toni Stone Crossing"
+   ]
+  },
+  {
+   "type": "stop",
+   "osmNodes": [
+    11124088383
+   ],
+   "lonlat": [
+    -122.38821,
+    37.775462
+   ],
+   "names": [
+    "Bridgeview Paseo",
+    "Bridgeview Way",
+    "Toni Stone Crossing"
+   ]
+  },
+  {
+   "type": "stop",
+   "osmNodes": [
+    54891569,
+    6376403459,
+    9634299338,
+    9634299339
+   ],
+   "lonlat": [
+    -122.387616,
+    37.76893
+   ],
+   "names": [
+    "Bridgeview Way",
+    "Warriors Way"
+   ]
+  },
+  {
+   "type": "stop",
+   "osmNodes": [
+    6376364853
+   ],
+   "lonlat": [
+    -122.387506,
+    37.775501
+   ],
+   "names": [
+    "Terry A. Francois Boulevard",
+    "Toni Stone Crossing"
+   ]
+  },
+  {
+   "type": "stop",
+   "osmNodes": [
+    6376393430
+   ],
+   "lonlat": [
+    -122.38699,
+    37.772167
+   ],
+   "names": [
+    "China Basin Street"
+   ]
+  },
+  {
+   "type": "stop",
+   "osmNodes": [
+    9409431604
+   ],
+   "lonlat": [
+    -122.386481,
+    37.759432
+   ],
+   "names": [
+    "Michigan Street"
+   ]
+  },
+  {
+   "type": "stop",
+   "osmNodes": [
+    7521749449
+   ],
+   "lonlat": [
+    -122.384931,
+    37.759788
+   ],
+   "names": [
+    "Louisiana Street"
+   ]
+  },
+  {
+   "type": "stop",
+   "osmNodes": [
+    9409431580
+   ],
+   "lonlat": [
+    -122.384784,
+    37.758213
+   ],
+   "names": [
+    "22nd Street",
+    "Louisiana Street"
+   ]
+  },
+  {
+   "type": "stop",
+   "osmNodes": [
+    65325816
+   ],
+   "lonlat": [
+    -122.384657,
+    37.749183
+   ],
+   "names": [
+    "Marin Street"
+   ]
+  },
+  {
+   "type": "stop",
+   "osmNodes": [
+    6325853021,
+    6325853022
+   ],
+   "lonlat": [
+    -122.38381,
+    37.726171
+   ],
+   "names": [
+    "Thomas Avenue"
+   ]
+  },
+  {
+   "type": "stop",
+   "osmNodes": [
+    4152326975,
+    6368833156,
+    6368833157,
+    6368833158
+   ],
+   "lonlat": [
+    -122.381026,
+    37.736787
+   ],
+   "names": [
+    "Acacia Avenue",
+    "Fairfax Avenue"
+   ]
+  },
+  {
+   "type": "stop",
+   "osmNodes": [
+    4152326955,
+    6368833159,
+    6368833164,
+    6368833165,
+    6368833166
+   ],
+   "lonlat": [
+    -122.380871,
+    37.736275
+   ],
+   "names": [
+    "Catalina Street",
+    "Fairfax Avenue"
+   ]
+  },
+  {
+   "type": "stop",
+   "osmNodes": [
+    6392012299
+   ],
+   "lonlat": [
+    -122.380147,
+    37.73528
+   ],
+   "names": [
+    "Ironwood Way"
+   ]
+  },
+  {
+   "type": "stop",
+   "osmNodes": [
+    4184781767,
+    6368038625,
+    6368038626,
+    6368038627,
+    6368038629
+   ],
+   "lonlat": [
+    -122.380138,
+    37.736274
+   ],
+   "names": [
+    "Catalina Street",
+    "Ironwood Way"
+   ]
+  },
+  {
+   "type": "stop",
+   "osmNodes": [
+    4184781768,
+    6340230486,
+    6340230487,
+    6340230488
+   ],
+   "lonlat": [
+    -122.380129,
+    37.736778
+   ],
+   "names": [
+    "Acacia Avenue",
+    "Ironwood Way"
+   ]
+  },
+  {
+   "type": "stop",
+   "osmNodes": [
+    65354408
+   ],
+   "lonlat": [
+    -122.378733,
+    37.735274
+   ],
+   "names": [
+    "Fairfax Avenue",
+    "Memory Lane"
+   ]
+  },
+  {
+   "type": "stop",
+   "osmNodes": [
+    65324985
+   ],
+   "lonlat": [
+    -122.372908,
+    37.826127
+   ],
+   "names": [
+    "11th Street",
+    "Avenue E"
+   ]
+  },
+  {
+   "type": "stop",
+   "osmNodes": [
+    6383984060
+   ],
+   "lonlat": [
+    -122.372039,
+    37.828349
+   ],
+   "names": [
+    "Avenue H"
+   ]
+  },
+  {
+   "type": "stop",
+   "osmNodes": [
+    65324987
+   ],
+   "lonlat": [
+    -122.371077,
+    37.826902
+   ],
+   "names": [
+    "11th Street"
+   ]
+  },
+  {
+   "type": "stop",
+   "osmNodes": [
+    65339143
+   ],
+   "lonlat": [
+    -122.369979,
+    37.825263
+   ],
+   "names": [
+    "9th Street",
+    "Avenue H"
+   ]
+  },
+  {
+   "type": "stop",
+   "osmNodes": [
+    8253639986
+   ],
+   "lonlat": [
+    -122.369047,
+    37.825666
+   ],
+   "names": [
+    "Avenue I"
+   ]
+  },
+  {
+   "type": "stop",
+   "osmNodes": [
+    8253639987
+   ],
+   "lonlat": [
+    -122.368865,
+    37.825744
+   ],
+   "names": [
+    "Avenue I"
+   ]
+  },
+  {
+   "type": "stop",
+   "osmNodes": [
+    8253639988
+   ],
+   "lonlat": [
+    -122.367666,
+    37.826263
+   ],
+   "names": [
+    "9th Street"
+   ]
+  },
+  {
+   "type": "stop",
+   "osmNodes": [
+    7495836614,
+    11609333128,
+    11609333129
+   ],
+   "lonlat": [
+    -122.367584,
+    37.811112
+   ],
+   "names": [
+    "Macalla Road",
+    "Old Macalla Road",
+    "Yerba Buena Road"
+   ]
+  },
+  {
+   "type": "stop",
+   "osmNodes": [
+    12694690789
+   ],
+   "lonlat": [
+    -122.367497,
+    37.810613
+   ],
+   "names": [
+    "Yerba Buena Road"
+   ]
+  },
+  {
+   "type": "stop",
+   "osmNodes": [
+    416343071
+   ],
+   "lonlat": [
+    -122.364452,
+    37.8119
+   ],
+   "names": [
+    "",
+    "Macalla Road"
+   ]
+  },
+  {
+   "type": "stop",
+   "osmNodes": [
+    10945111942
+   ],
+   "lonlat": [
+    -122.363893,
+    37.810815
+   ],
+   "names": [
+    "Treasure Island Road"
+   ]
+  },
+  {
+   "type": "stop",
+   "osmNodes": [
+    65353458
+   ],
+   "lonlat": [
+    -122.363796,
+    37.811724
+   ],
+   "names": [
+    "Macalla Road",
+    "Northgate Road",
+    "Treasure Island Road"
+   ]
+  },
+  {
+   "type": "stop",
+   "osmNodes": [
+    4224573009
+   ],
+   "lonlat": [
+    -121.949814,
+    37.251269
+   ],
+   "names": [
+    "Samaritan Court"
+   ]
+  }
+ ]
+}

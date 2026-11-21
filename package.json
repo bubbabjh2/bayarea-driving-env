@@ -16,6 +16,9 @@
     "unpack": "node tools/osm/unpack.mjs",
     "build:junctions": "node --max-old-space-size=14000 tools/build_junctions.mjs data/",
     "build:lines": "node --max-old-space-size=14000 tools/lines/build_lines.mjs data",
+    "fetch:controls": "node tools/controls/fetch.mjs",
+    "build:controls": "node tools/controls/build.mjs",
+    "validate:controls": "python3 -I tools/controls/validate.py data data/controls-src",
     "build:world-derived": "bash tools/osm/build_world.sh derive",
     "build:osm": "bash tools/osm/build_world.sh osm",
     "verify:world": "node tools/osm/verify.mjs"

@@ -1,6 +1,9 @@
 #!/usr/bin/env node
 // Check world data against the original project's hashes (tools/osm/world-manifest.json).
-//   node tools/osm/verify.mjs [--data data] [--flat data/osm/flat] [--strict]
+//   node tools/osm/verify.mjs [--data data] [--flat data/osm/flat] [--strict] [--baseline osm-only]
+// Default: the current world (OSM + the authoritative traffic-control merge, tools/controls/). --baseline osm-only
+// checks the original project's OSM-only hashes instead for the files the merge changes (controls, junctions,
+// lines); the other files are the same in both.
 // data/<file> keys are checked in --data, flat/<file> keys (the flat-ground OSM build that the elevation
 // step takes as input) in --flat. Missing files are reported and skipped unless --strict.
 import fs from 'node:fs';
@@ -11,7 +14,11 @@ const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '../..')
 const argv = process.argv.slice(2);
 const opt = (k, d) => { const i = argv.indexOf(k); return i >= 0 ? argv[i + 1] : d; };
 const dataDir = path.resolve(ROOT, opt('--data', 'data')), flatDir = path.resolve(ROOT, opt('--flat', 'data/osm/flat'));
-const M = JSON.parse(fs.readFileSync(path.join(ROOT, 'tools/osm/world-manifest.json'), 'utf8')).files;
+const MAN = JSON.parse(fs.readFileSync(path.join(ROOT, 'tools/osm/world-manifest.json'), 'utf8'));
+const base = opt('--baseline', null);
+if (base && !(MAN.baselines && MAN.baselines[base])) { console.error(`unknown baseline ${base}`); process.exit(2); }
+const M = base ? { ...MAN.files, ...MAN.baselines[base].files } : MAN.files;
+if (base) console.log(`baseline: ${base}`);
 let ok = 0, bad = 0, missing = 0;
 for (const [key, want] of Object.entries(M)) {
   const file = key.startsWith('flat/') ? path.join(flatDir, key.slice(5)) : path.join(dataDir, key);

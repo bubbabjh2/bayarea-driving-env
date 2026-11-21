@@ -1,0 +1,65 @@
+{
+ "sf-signals": {
+  "downloaded": "2026-11-21",
+  "count": 1507,
+  "sha256": "9315035311071b9d8c550d10c7b26f8a99c5e7c86cd3f00de0f539e2b8bfea2f",
+  "url": "https://data.sf.gov/resource/ybh5-27n2.geojson",
+  "licence": "ODC PDDL 1.0 (public domain dedication)"
+ },
+ "sf-stop-signs": {
+  "downloaded": "2026-11-21",
+  "count": 11179,
+  "sha256": "790e07959d1a5ed1b7ace9e72fc6367ba8d14d719cc4c02301c9d4d2ae0bc951",
+  "url": "https://data.sf.gov/resource/4542-gpa3.geojson",
+  "licence": "ODC PDDL 1.0 (public domain dedication)"
+ },
+ "sj-signals": {
+  "downloaded": "2026-11-21",
+  "count": 1295,
+  "sha256": "55bce683d35ccbc39519749611ffcfc28d22d98fb19cb3153dccdffd07382211",
+  "url": "https://geo.sanjoseca.gov/server/rest/services/OPN/OPN_OpenDataService/MapServer/506",
+  "licence": "CC BY (Creative Commons Attribution, as listed on data.sanjoseca.gov; attribution: City of San Jose)"
+ },
+ "oakland-signals": {
+  "downloaded": "2026-11-21",
+  "count": 730,
+  "sha256": "4dc9e064fabd54bd25a8a3f623db845caa2a177828be2302649f16ac669d99a3",
+  "url": "https://services.arcgis.com/9tC74aDHuml0x5Yz/arcgis/rest/services/TrafficSignals/FeatureServer/0",
+  "licence": "public ArcGIS service; no licence stated (used for verification and placement only; see README)"
+ },
+ "ssf-signals": {
+  "downloaded": "2026-11-21",
+  "count": 135,
+  "sha256": "fce67fb2d87fac5222befcb90a41623abede2b4ce103ac60c943e73b220ee074",
+  "url": "https://services5.arcgis.com/inY93B27l4TSbT7h/arcgis/rest/services/Traffic_Signals_View/FeatureServer/0",
+  "licence": "public ArcGIS service; no licence stated"
+ },
+ "emeryville-signals": {
+  "downloaded": "2026-11-21",
+  "count": 36,
+  "sha256": "466ce59abad222b3ef866d3f48057741343ef5f13e0bef8a6ae53374bc2f8787",
+  "url": "https://services3.arcgis.com/ljOdqLVbHpS7dOJQ/arcgis/rest/services/Traffic_Signals_View/FeatureServer/0",
+  "licence": "public ArcGIS service; no licence stated"
+ },
+ "mv-signals": {
+  "downloaded": "2026-11-21",
+  "count": 531,
+  "sha256": "ad3b2699a080fcf4ec37b9d4016537416ddeff599bcdd092ed22b68474a6f1c1",
+  "url": "https://maps.mountainview.gov/arcgis/rest/services/Public/Signal/MapServer/0",
+  "licence": "public ArcGIS service; (c) City of Mountain View, no licence stated"
+ },
+ "cupertino-signal-heads": {
+  "downloaded": "2026-11-21",
+  "count": 1008,
+  "sha256": "93b82d0a00f3c6d668327567c98238d63fc851061398f3f3b6dfbba3943ae75f",
+  "url": "https://gis.cupertino.org/cupgis/rest/services/Public/Traffic_Infrastructure/MapServer/3",
+  "licence": "public ArcGIS service; no licence stated"
+ },
+ "cupertino-signs": {
+  "downloaded": "2026-11-21",
+  "count": 12283,
+  "sha256": "a91aa7c4d941b7b2ae9511db1e5c79a8e0f35f0a41692731aeb31fdac466e212",
+  "url": "https://gis.cupertino.org/cupgis/rest/services/Public/Traffic_Infrastructure/MapServer/34",
+  "licence": "public ArcGIS service; no licence stated"
+ }
+}

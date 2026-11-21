@@ -75,8 +75,10 @@ Steps (`tools/elevation/build_all.mjs`):
 7. `build_compact.mjs` writes the small committed copy (below).
 8. `verify.mjs` checks the outputs against the pinned hashes.
 
-`data/controls.*` in the repo is a later stage. `tools/build_junctions.mjs` recomputes stop lines from the junction
-build, taking the patched controls from step 5 as its input. Run it after `--install` to get the committed controls.
+`data/controls.*` in the repo is a later stage: `npm run build:controls` (tools/controls/README.md) merges the
+authoritative city datasets into the flat OSM controls, runs `patch_points.mjs` on the result, and
+`tools/build_junctions.mjs` then recomputes the stop lines from the junction build. Run it after `--install` to get the
+committed controls.
 `data/crossings.json`, `data/junctions.bin` and `data/lines*.bin` were also regenerated from the terrain roads (see the
 road-data pipeline docs).
 
@@ -105,7 +107,7 @@ excluded, plus `roads` in ground10.json, which is the input path.
   equal the rebuild.
 - `stations.*` match the committed files.
 - `controls.*` from `patch_points.mjs` match the original intermediate (pre-junction-fix) controls. The committed
-  `data/controls.*` is the later `tools/build_junctions.mjs` output.
+  `data/controls.*` is the later `npm run build:controls` output (authoritative merge + `build_junctions.mjs`).
 - Live download: all 8 USGS URLs re-downloaded on 2026-11-20 reproduce the pinned sha256.
 - Compact grid: 20.4 MB heights + 1.0 MB mask. Error against ground10 (bilinear at every 10 m centre) is
   RMS 0.57 m overall and 0.67 m on land, max 45.8 m at cliffs and steep cuts.

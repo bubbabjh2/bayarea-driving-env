@@ -1,5 +1,5 @@
 {
- "doc": "sha256 of the original project's world data (2026-10-24 build). Keys: data/<file>; flat/<file> = the flat-ground (structures/2) OSM build that tools/elevation/build_heights.mjs takes as input. Check with node tools/osm/verify.mjs. *.meta.json files are not listed (they carry build timestamps).",
+ "doc": "sha256 of the world data. files = the current world: the original project's 2026-10-24 build, with the traffic controls merged with authoritative city data (tools/controls/; controls.*, junctions.bin, lines*.bin rebuilt by npm run build:controls). baselines.osm-only = the original project's OSM-only hashes for those files. Keys: data/<file>; flat/<file> = the flat-ground (structures/2) OSM build that tools/elevation/build_heights.mjs takes as input. Check with node tools/osm/verify.mjs [--baseline osm-only]. *.meta.json files are not listed (they carry build timestamps).",
  "files": {
   "water.json": {
    "sha256": "22bb6c165ba89eac3adf0d8042a3a536458c72993cd220fb2dfe35fc1c110f32",
@@ -38,20 +38,20 @@
    "bytes": 31831
   },
   "controls.bin": {
-   "sha256": "c4147186888f814e49c7c6b76afe1bff379bd6e274e1956a091d62bc6306297f",
-   "bytes": 1889684
+   "sha256": "b2ad29fa6eeacb49c5d032665ca3d1d11ed928469f06b61ceca27cae08964f52",
+   "bytes": 1989308
   },
   "controls.json": {
-   "sha256": "c04a7aa8845d32576196fb924b09755e5d345fd9fd67018a90c5e20d16ce2714",
-   "bytes": 16610762
+   "sha256": "515852fcfcf7e89da53cd9e906ff2b5db886d648d160a877d8648d72b33d39f8",
+   "bytes": 19672601
   },
   "junctions.bin": {
-   "sha256": "d87b4f3000eb1843621277a58734f1a6396e0463b36c2401ab209b1325a4459b",
-   "bytes": 197991888
+   "sha256": "8b87e98afc2db36ccbe43ecf9db5f078791e5cd5427d52a66dc815121c2c8fd0",
+   "bytes": 198090444
   },
   "lines.bin": {
-   "sha256": "4591b29ccebc45c8a48560e0909063ce091049dbb4bc185ac6791f8c655b51d6",
-   "bytes": 25088940
+   "sha256": "c8f22c2fba83dea17222d4b6691be577e0c61a7db63a5cb6b686422b6e992296",
+   "bytes": 25163784
   },
   "lines-geom.bin": {
    "sha256": "d07f0684b85d50bce470931a17aa6436f0e96c7eb895fafacbdbf702a43bc7ef",
@@ -88,6 +88,58 @@
   "flat/controls.json": {
    "sha256": "35d0d84c2bd6d7b31343b669525b17e8804986e53775323e86165b84b1059920",
    "bytes": 16479059
+  }
+ },
+ "baselines": {
+  "osm-only": {
+   "doc": "The original project's OSM-only world (2026-10-24 build), before the authoritative traffic-control merge (tools/controls/). Reproduce: node tools/controls/build.mjs --osm-only (then npm run build:controls to return to the current world).",
+   "files": {
+    "controls.bin": {
+     "sha256": "c4147186888f814e49c7c6b76afe1bff379bd6e274e1956a091d62bc6306297f",
+     "bytes": 1889684
+    },
+    "controls.json": {
+     "sha256": "c04a7aa8845d32576196fb924b09755e5d345fd9fd67018a90c5e20d16ce2714",
+     "bytes": 16610762
+    },
+    "junctions.bin": {
+     "sha256": "d87b4f3000eb1843621277a58734f1a6396e0463b36c2401ab209b1325a4459b",
+     "bytes": 197991888
+    },
+    "lines.bin": {
+     "sha256": "4591b29ccebc45c8a48560e0909063ce091049dbb4bc185ac6791f8c655b51d6",
+     "bytes": 25088940
+    },
+    "lines-geom.bin": {
+     "sha256": "d07f0684b85d50bce470931a17aa6436f0e96c7eb895fafacbdbf702a43bc7ef",
+     "bytes": 62772912
+    }
+   }
+  },
+  "osm-only-rebuild": {
+   "doc": "What node tools/controls/build.mjs --osm-only produces from data/src/flat/controls.* today. It differs from the original (baseline osm-only) in 17 approach stop lines of 14 controls (0.6-7.7 m) on edges without a junction mouth, where the original kept values from an older, since-replaced junction build; junctions.bin and lines-geom.bin are identical.",
+   "files": {
+    "controls.bin": {
+     "sha256": "550d148c635f9f1871056a1e1c9a9fc8beca6c4e0708b3f5e837eb251a04ac79",
+     "bytes": 1889684
+    },
+    "controls.json": {
+     "sha256": "b03250613731aec80aa624b8233d55fbced251f22a208930861af511e8b2955b",
+     "bytes": 16610769
+    },
+    "lines.bin": {
+     "sha256": "9bfca3fbbb1218255066fb1003d694e9bd2b52ca2f73724a9a5046dda9eacab6",
+     "bytes": 25088940
+    },
+    "junctions.bin": {
+     "sha256": "d87b4f3000eb1843621277a58734f1a6396e0463b36c2401ab209b1325a4459b",
+     "bytes": 197991888
+    },
+    "lines-geom.bin": {
+     "sha256": "d07f0684b85d50bce470931a17aa6436f0e96c7eb895fafacbdbf702a43bc7ef",
+     "bytes": 62772912
+    }
+   }
   }
  }
 }
