@@ -50,7 +50,11 @@ road load `½ρ CdA u|u| + Crr m g + m g sinθ`; body equations
 `u̇ = (Fxf cosδ − Fyf sinδ + Fxr − R)/m + v r`, `v̇ = (Fxf sinδ + Fyf cosδ + Fyr)/m − u r`,
 `ṙ = (a(Fxf sinδ + Fyf cosδ) − b Fyr)/Iz`; below 5 km/h the lateral state blends to the kinematic bicycle;
 pose `hr += r h`, `lat += (u sin hr + v cos hr) h`, `s += (u cos hr − v sin hr) h`.
-Road curvature is absorbed by the Frenet frame (the edge polylines are not smooth enough to steer along).
+Road curvature is absorbed by the Frenet frame: the car turns with the road without any tyre force. This was meant
+as a simplification (the edge polylines are not smooth enough to steer along), but it lets a car take a freeway-speed
+right angle with the wheel straight (median peak 14.6 g in `rust/docs/physics-audit.md`). The Rust host has a fix
+(`curvature_dynamics`: world heading changes by yaw only). It is off by default until the lane polylines are smoothed
+(`rust/DECISIONS.md`, entry 23).
 
 Fuel: engine power = traction power / 0.88 + accessories; flow = max(idle, P·BSFC(load)),
 `BSFC = bsfcMin·(1 + 0.9 (1 − load)³)` g/kWh.
