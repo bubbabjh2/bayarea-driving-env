@@ -17,6 +17,7 @@ fn main() {
     let world = Arc::new(bayenv_world::World::load(data).expect("world"));
     let mut o = GpuOptions { capacity: cap, start_time: start, refuel_budget_ms: f64::INFINITY, ..Default::default() };
     o.features.accidents = true;
+    o.apply_env();   // BAYENV_GPU_OPTS (e.g. cpu_connector_join=1)
     let mut sim = bayenv_gpu::env::create(world.clone(), o).expect("sim");
     let mut acts = vec![0f32; cap * 3]; for i in 0..cap { acts[3 * i + 1] = 0.3; } sim.set_actions(&acts, 0);
     if popm != "0" {

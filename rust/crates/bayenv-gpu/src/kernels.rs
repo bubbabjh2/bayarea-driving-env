@@ -47,6 +47,7 @@ pub const HOST_SOURCES: &[(&str, &str)] = &[
     ("scan4k", include_str!("../kernels/scan4k.wgsl")),
     ("patches", include_str!("../kernels/patches.wgsl")),
     ("obs_f16", include_str!("../kernels/obs_f16.wgsl")),
+    ("cpu_connector_join", include_str!("../kernels/cpu_connector_join.wgsl")),
 ];
 
 /// Lane-list-order variant of a per-car kernel (kernels/sorted.wgsl): the entry `entry` of `src` becomes the
@@ -164,6 +165,23 @@ fn sections<'a>(text: &'a str, tag: &str) -> Vec<(&'a str, String)> {
     }
     out
 }
+/// Apply a text-patch file of this crate (`//#orig id` / `//#patch id` snippet pairs, e.g. kernels/cpu_connector_join.wgsl)
+/// to a resolved kernel source; panics unless every original snippet occurs exactly once (a changed upstream kernel).
+pub fn patch_text(src: &str, file: &str) -> String {
+    let text = host_raw(file);
+    let origs = sections(text, "//#orig ");
+    let mut out = src.to_string();
+    for (name, body) in sections(text, "//#patch ") {
+        let orig = &origs.iter().find(|(n, _)| *n == name).unwrap_or_else(|| panic!("{file} {name}: no //#orig")).1;
+        assert_eq!(out.matches(orig.as_str()).count(), 1, "kernel patch {file} {name}: the original text is not in the source exactly once");
+        out = out.replacen(orig.as_str(), &body, 1);
+    }
+    out
+}
+/// Model patches selected by GpuOptions (default off: the JS kernels unchanged) for the kernel file `file`.
+pub fn model_patches(src: String, file: &str, cpu_connector_join: bool) -> String {
+    if cpu_connector_join && file == "integrate" { patch_text(&src, "cpu_connector_join") } else { src }
+}
 /// Apply kernels/patches.wgsl to a resolved kernel source: each patched function present in `src` is replaced
 /// (panics when its text differs from the original the patch was written for).
 pub fn patch(src: &str) -> String {
@@ -180,4 +198,16 @@ pub fn patch(src: &str) -> String {
         out.replace_range(a..b, &body);
     }
     out
+}
+
+#[cfg(test)]
+mod tests {
+    #[test]
+    fn cpu_connector_join_applies() {
+        let src = super::load("integrate");
+        assert_eq!(super::model_patches(src.clone(), "integrate", false), src);   // flag off: the JS kernel unchanged
+        let p = super::model_patches(src.clone(), "integrate", true);
+        assert!(p.contains("if (sArr > sIn + 0.3 && P.hasLG != 0u)") && !p.contains("if (s > sIn + 0.3 && P.hasLG != 0u)"));
+        assert_eq!(super::model_patches(super::load("contacts"), "contacts", true), super::load("contacts"));
+    }
 }
