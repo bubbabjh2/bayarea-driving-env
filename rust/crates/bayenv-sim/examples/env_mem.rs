@@ -3,10 +3,11 @@ use std::alloc::{GlobalAlloc, Layout, System};
 use std::sync::atomic::{AtomicIsize, Ordering};
 struct Count;
 static LIVE: AtomicIsize = AtomicIsize::new(0);
+static NALLOC: AtomicIsize = AtomicIsize::new(0);
 unsafe impl GlobalAlloc for Count {
-    unsafe fn alloc(&self, l: Layout) -> *mut u8 { LIVE.fetch_add(l.size() as isize, Ordering::Relaxed); unsafe { System.alloc(l) } }
+    unsafe fn alloc(&self, l: Layout) -> *mut u8 { NALLOC.fetch_add(1, Ordering::Relaxed); LIVE.fetch_add(l.size() as isize, Ordering::Relaxed); unsafe { System.alloc(l) } }
     unsafe fn dealloc(&self, p: *mut u8, l: Layout) { LIVE.fetch_sub(l.size() as isize, Ordering::Relaxed); unsafe { System.dealloc(p, l) } }
-    unsafe fn realloc(&self, p: *mut u8, l: Layout, n: usize) -> *mut u8 { LIVE.fetch_add(n as isize - l.size() as isize, Ordering::Relaxed); unsafe { System.realloc(p, l, n) } }
+    unsafe fn realloc(&self, p: *mut u8, l: Layout, n: usize) -> *mut u8 { NALLOC.fetch_add(1, Ordering::Relaxed); LIVE.fetch_add(n as isize - l.size() as isize, Ordering::Relaxed); unsafe { System.realloc(p, l, n) } }
 }
 #[global_allocator] static A: Count = Count;
 fn mb(x: isize) -> f64 { x as f64 / 1048576.0 }
@@ -20,6 +21,9 @@ fn main() {
     let l2 = LIVE.load(Ordering::Relaxed);
     let mut p = bayenv_sim::harness::Policy::new(run["policy"].as_str().unwrap(), 1.0);
     for _ in 0..steps { p.act(&mut e); e.step(1); }
+    let na = NALLOC.load(Ordering::Relaxed);
+    for _ in 0..steps { p.act(&mut e); e.step(1); }
+    println!("allocations per step (steps {steps}..{}): {:.1}", 2 * steps, (NALLOC.load(Ordering::Relaxed) - na) as f64 / steps as f64);
     let l3 = LIVE.load(Ordering::Relaxed);
     let w = e0.world.clone();
     let m = |f: &dyn Fn() -> Box<dyn std::any::Any>| { let a = LIVE.load(Ordering::Relaxed); let x = f(); let b = LIVE.load(Ordering::Relaxed); drop(x); mb(b - a) };
