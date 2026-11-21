@@ -1,1 +1,213 @@
-//! Python module `bayenv`. In progress.
+//! Python module `bayenv` (`bayenv._bayenv`): the Bay Area driving env behind one API.
+//!
+//! ```python
+//! import bayenv, numpy as np
+//! env = bayenv.Env("data", n_cars=10000, seed=11)        # backend="gpu" (wgpu: Metal / Vulkan / DX12)
+//! obs = env.observe()                                    # float32 (n_slots, obs_size), copied straight from the GPU
+//! env.act(np.tile([0.0, 0.3, 0.0], (env.n_slots, 1)).astype(np.float32))
+//! env.step(20)                                           # 20 steps in one submit, GIL released
+//! st = env.state()                                       # dict of numpy arrays per slot
+//! ```
+use bayenv_gpu::defines::ObsMode;
+use bayenv_gpu::layout::{self as L, flag, state as vstate, veh};
+use bayenv_gpu::sim::{GpuOptions, GpuSim};
+use bayenv_world::{LoadOptions, World};
+use numpy::{PyArray1, PyArray2, PyArrayMethods, PyReadonlyArray2, PyUntypedArrayMethods};
+use pyo3::exceptions::{PyNotImplementedError, PyRuntimeError, PyValueError};
+use pyo3::prelude::*;
+use pyo3::types::PyDict;
+use std::sync::Arc;
+
+enum Backend { Gpu(Box<GpuSim>) }
+
+/// Multi-agent driving env (every car is an agent; slot i = car i).
+#[pyclass(module = "bayenv._bayenv")]
+struct Env {
+    backend: Backend,
+    world: Arc<World>,
+    /// slots in use (scatter places cars in slots 0..n)
+    rows: usize,
+    obs_size: usize,
+    cap: usize,
+}
+
+fn gpu_mut(env: &mut Env) -> &mut GpuSim { match &mut env.backend { Backend::Gpu(s) => s } }
+fn gpu_ref(env: &Env) -> &GpuSim { match &env.backend { Backend::Gpu(s) => s } }
+
+#[pymethods]
+impl Env {
+    /// Env(data_dir, n_cars=10000, seed=1, backend="gpu", capacity=None, obs="v2", dt=0.05, start_time=18000.0,
+    ///     accidents=True, collisions=True, fuel=True, controls=True, junctions=True, steer="position", decide_every=1,
+    ///     keep_events=False)
+    /// Loads the world (~0.1 s warm), builds the GPU buffers and scatters `n_cars` cars at rest on random routes
+    /// (seeded; the JS GPUSim.scatter placement). Actions start at [0, 0, 0] for every slot.
+    #[new]
+    #[pyo3(signature = (data_dir, n_cars=10000, seed=1, backend="gpu", capacity=None, obs="v2", dt=0.05, start_time=18000.0,
+        accidents=true, collisions=true, fuel=true, controls=true, junctions=true, steer="position", decide_every=1, keep_events=false))]
+    #[allow(clippy::too_many_arguments)]
+    fn new(py: Python<'_>, data_dir: &str, n_cars: usize, seed: u32, backend: &str, capacity: Option<usize>, obs: &str, dt: f64, start_time: f64,
+           accidents: bool, collisions: bool, fuel: bool, controls: bool, junctions: bool, steer: &str, decide_every: u32, keep_events: bool) -> PyResult<Env> {
+        let obs_mode = match obs { "v2" => ObsMode::V2, "v3" => ObsMode::V3, "none" => ObsMode::None, _ => return Err(PyValueError::new_err("obs must be 'v2', 'v3' or 'none'")) };
+        if backend == "cpu" { return Err(PyNotImplementedError::new_err("backend='cpu': the CPU sim (crate bayenv-sim) is not merged into this build yet")); }
+        if backend != "gpu" { return Err(PyValueError::new_err("backend must be 'gpu' or 'cpu'")); }
+        // scatter fills slots 0..n_cars and nothing spawns later: size the slot pool to the cars (identical results,
+        // every per-slot kernel dispatch shrinks); pass capacity= for headroom
+        let cap = capacity.unwrap_or(((n_cars + 1023) / 1024 * 1024).max(1024)).max(n_cars);
+        let data = data_dir.to_string();
+        let steer_rate = match steer { "position" => false, "rate" => true, _ => return Err(PyValueError::new_err("steer must be 'position' or 'rate'")) };
+        let res: Result<(Arc<World>, GpuSim, usize), String> = py.detach(move || {
+            let world = Arc::new(World::load_with(&data, &LoadOptions::default()).map_err(|e| format!("world: {e}"))?);
+            let mut o = GpuOptions { capacity: cap, dt, start_time, seed, obs: obs_mode, steer_rate, decide_every, controls, junctions, keep_events, ..Default::default() };
+            o.features.accidents = accidents; o.features.collisions = collisions; o.features.fuel = fuel;
+            let mut sim = bayenv_gpu::env::create(world.clone(), o)?;
+            let info = bayenv_gpu::env::scatter(&mut sim, n_cars, seed);
+            Ok((world, sim, info.placed))
+        });
+        let (world, sim, placed) = res.map_err(PyRuntimeError::new_err)?;
+        let obs_size = sim.obs_size;
+        Ok(Env { backend: Backend::Gpu(Box::new(sim)), world, rows: placed, obs_size: if obs_mode == ObsMode::None { 0 } else { obs_size }, cap })
+    }
+
+    /// Number of slots with a car (rows of observe() / state()).
+    #[getter] fn n_slots(&self) -> usize { self.rows }
+    #[getter] fn capacity(&self) -> usize { self.cap }
+    #[getter] fn obs_size(&self) -> usize { self.obs_size }
+    #[getter] fn time(&self) -> f64 { gpu_ref(self).time }
+    #[getter] fn steps(&self) -> u64 { gpu_ref(self).step }
+    #[getter] fn dt(&self) -> f64 { gpu_ref(self).dt }
+    #[getter] fn backend(&self) -> &'static str { "gpu" }
+    #[getter] fn adapter(&self) -> String { gpu_ref(self).gpu.adapter_name() }
+
+    /// Observation vectors, float32 (n_slots, obs_size), sensed in the last step (src/gpu/README.md v2 layout).
+    /// `out`: optional preallocated C-contiguous float32 array to fill instead (no allocation).
+    #[pyo3(signature = (out=None))]
+    fn observe<'py>(&mut self, py: Python<'py>, out: Option<Bound<'py, PyArray2<f32>>>) -> PyResult<Bound<'py, PyArray2<f32>>> {
+        if self.obs_size == 0 { return Err(PyRuntimeError::new_err("created with obs='none'")); }
+        let arr = match out {
+            Some(a) => { if a.shape() != [self.rows, self.obs_size] { return Err(PyValueError::new_err("out has the wrong shape")); } a }
+            None => PyArray2::<f32>::zeros(py, [self.rows, self.obs_size], false),
+        };
+        {
+            let mut rw = arr.readwrite();
+            let sl = rw.as_slice_mut().map_err(|_| PyValueError::new_err("out must be C-contiguous"))?;
+            let sim = gpu_ref(self);
+            py.detach(|| sim.read_into("inputs", 0, bytemuck::cast_slice_mut(sl)));
+        }
+        Ok(arr)
+    }
+
+    /// Set actions: float32 (N, 3) [steer, gas, brake] for slots offset..offset+N. steer in [-1, 1] = target wheel
+    /// angle / maxSteer (steer='position') or steer rate (steer='rate'); gas, brake in [0, 1]. Held until changed.
+    #[pyo3(signature = (actions, offset=0))]
+    fn act(&mut self, actions: PyReadonlyArray2<'_, f32>, offset: usize) -> PyResult<()> {
+        if actions.shape()[1] != 3 { return Err(PyValueError::new_err("actions must have shape (N, 3)")); }
+        if offset + actions.shape()[0] > self.cap { return Err(PyValueError::new_err("more actions than slots")); }
+        let sl = actions.as_slice().map_err(|_| PyValueError::new_err("actions must be C-contiguous float32"))?;
+        gpu_mut(self).set_actions(sl, offset);
+        Ok(())
+    }
+
+    /// Advance k steps (dt each) in one GPU submit, without the GIL; events / scenes are processed after the batch.
+    #[pyo3(signature = (k=1))]
+    fn step(&mut self, py: Python<'_>, k: usize) {
+        let sim = gpu_mut(self);
+        py.detach(|| sim.run_steps(k));
+    }
+
+    /// Per-slot vehicle state as numpy arrays (one GPU readback): edge, s, speed, accel, lat, heading_rel, steer,
+    /// state (0 free, 1 driving, 2 crashed / stranded, 5 refuelling), flags, crashed, disabled, collided, lane,
+    /// route_pos, odometer, fuel, gas, brake, yaw_rate, v_lat, x, y, z, heading.
+    fn state<'py>(&mut self, py: Python<'py>) -> PyResult<Bound<'py, PyDict>> {
+        let n = self.rows; let sim = gpu_ref(self);
+        let mut vehw = vec![0u32; n * L::VEH_WORDS]; let mut pose = vec![0f32; n * 4];
+        py.detach(|| { sim.read_into("veh", 0, bytemuck::cast_slice_mut(&mut vehw)); sim.read_into("pose", 0, bytemuck::cast_slice_mut(&mut pose)); });
+        let d = PyDict::new(py);
+        let col_u = |k: usize| -> Vec<u32> { (0..n).map(|i| vehw[i * L::VEH_WORDS + k]).collect() };
+        let col_f = |k: usize| -> Vec<f32> { (0..n).map(|i| f32::from_bits(vehw[i * L::VEH_WORDS + k])).collect() };
+        for (name, k) in [("edge", veh::EDGE), ("state", veh::STATE), ("flags", veh::FLAGS), ("route_pos", veh::ROUTE_POS)] { d.set_item(name, PyArray1::from_vec(py, col_u(k)))?; }
+        for (name, k) in [("s", veh::S), ("speed", veh::SPEED), ("accel", veh::ACCEL), ("lat", veh::LAT), ("heading_rel", veh::HEADING_REL), ("steer", veh::STEER_ANGLE),
+            ("odometer", veh::ODOMETER), ("fuel", veh::FUEL), ("gas", veh::GAS), ("brake", veh::BRAKE), ("yaw_rate", veh::YAW_RATE), ("v_lat", veh::V_LAT)] {
+            d.set_item(name, PyArray1::from_vec(py, col_f(k)))?;
+        }
+        let st = col_u(veh::STATE); let fl = col_u(veh::FLAGS);
+        d.set_item("crashed", PyArray1::from_vec(py, st.iter().map(|&s| s == vstate::CRASHED).collect::<Vec<bool>>()))?;
+        d.set_item("disabled", PyArray1::from_vec(py, fl.iter().map(|&f| f & flag::DISABLED != 0).collect::<Vec<bool>>()))?;
+        d.set_item("collided", PyArray1::from_vec(py, fl.iter().map(|&f| f & flag::COLLIDED != 0).collect::<Vec<bool>>()))?;
+        d.set_item("lane", PyArray1::from_vec(py, col_u(veh::LANES).iter().map(|&w| (w & 255) as u8).collect::<Vec<u8>>()))?;
+        for (name, j) in [("x", 0), ("y", 1), ("z", 2), ("heading", 3)] { d.set_item(name, PyArray1::from_vec(py, (0..n).map(|i| pose[i * 4 + j]).collect::<Vec<f32>>()))?; }
+        Ok(d)
+    }
+
+    /// Crash flags per slot: bool (n_slots,) = crashed (stopped wreck) or disabled (own delta-v >= 10 km/h).
+    fn crash_flags<'py>(&mut self, py: Python<'py>) -> Bound<'py, PyArray1<bool>> {
+        let n = self.rows; let sim = gpu_ref(self); let mut vehw = vec![0u32; n * L::VEH_WORDS];
+        py.detach(|| sim.read_into("veh", 0, bytemuck::cast_slice_mut(&mut vehw)));
+        PyArray1::from_vec(py, (0..n).map(|i| vehw[i * L::VEH_WORDS + veh::STATE] == vstate::CRASHED || vehw[i * L::VEH_WORDS + veh::FLAGS] & flag::DISABLED != 0).collect())
+    }
+
+    /// Raw GPU buffer as uint32 words ('veh' cap x 40, 'par' cap x 20, 'pose' cap x 4 floats, ...; src/gpu/layout.js).
+    fn raw<'py>(&self, py: Python<'py>, name: &str) -> PyResult<Bound<'py, PyArray1<u32>>> {
+        let sim = gpu_ref(self);
+        if !sim.gpu.buffers.contains_key(name) { return Err(PyValueError::new_err(format!("no buffer {name}"))); }
+        let w = py.detach(|| sim.read_words(name));
+        Ok(PyArray1::from_vec(py, w))
+    }
+
+    /// Traffic signals / signs at sim time `time` (default now), per approach (stop line): edge, stop_at (m along
+    /// the edge), control, type (0 signal, 1 stop, 2 give way, 3 ramp meter, 4 crossing), state (0 green, 1 yellow,
+    /// 2 red, 3 sign, 4 dark, 255 approach not on the graph) for the through movement, time_in, time_left (s).
+    #[pyo3(signature = (time=None))]
+    fn signals<'py>(&self, py: Python<'py>, time: Option<f64>) -> PyResult<Bound<'py, PyDict>> {
+        let d = PyDict::new(py);
+        let Some(c) = self.world.controls.as_ref() else { return Ok(d) };
+        let t = time.unwrap_or(gpu_ref(self).time); let n = c.approach_count;
+        let (mut stt, mut ti, mut tl, mut ty) = (vec![0u8; n], vec![0f64; n], vec![0f64; n], vec![0i8; n]);
+        for a in 0..n { if c.ap_edge[a] < 0 { stt[a] = 255; continue; } let s = c.state_of(a, 0, t); stt[a] = s.state; ti[a] = s.time_in; tl[a] = s.time_left; ty[a] = s.ty; }
+        d.set_item("edge", PyArray1::from_vec(py, c.ap_edge.clone()))?; d.set_item("stop_at", PyArray1::from_vec(py, c.ap_stop_at.clone()))?;
+        d.set_item("control", PyArray1::from_vec(py, c.ap_control.clone()))?; d.set_item("type", PyArray1::from_vec(py, ty))?;
+        d.set_item("state", PyArray1::from_vec(py, stt))?; d.set_item("time_in", PyArray1::from_vec(py, ti))?; d.set_item("time_left", PyArray1::from_vec(py, tl))?;
+        Ok(d)
+    }
+
+    /// Aggregates: GPU stats (driving, arrived, ...) and host counters (crashes, contacts, scenes, ...).
+    fn stats<'py>(&self, py: Python<'py>) -> PyResult<Bound<'py, PyDict>> {
+        let sim = gpu_ref(self); let s = sim.stats(); let c = &sim.counters; let d = PyDict::new(py);
+        use L::stat as S;
+        for (k, v) in [("driving", s[S::LIVE_DRIVING] as u64), ("crashed_on_scene", s[S::LIVE_CRASHED] as u64), ("arrived", s[S::ARRIVED] as u64), ("spawned", s[S::SPAWNED] as u64),
+            ("stuck", s[S::STUCK] as u64), ("bumps", s[S::BUMPS] as u64), ("policy_steps", s[S::LIVE_POLICY] as u64),
+            ("crash_events", c.crash_events), ("crash_scenes", c.crashes), ("crashed_vehicles", c.crashed_vehicles), ("minor_contacts", c.minor_contacts),
+            ("stranded", c.stranded), ("towed", c.towed), ("cleared", c.cleared), ("missed_exits", c.missed_exits), ("reroutes", c.reroutes),
+            ("signal_violations", c.signal_violations), ("stop_violations", c.stop_violations), ("events_dropped", c.events_dropped)] { d.set_item(k, v)?; }
+        let drv = s[S::LIVE_DRIVING];
+        d.set_item("avg_speed", if drv > 0 { s[S::LIVE_SUMSPEED] as f64 / 100.0 / drv as f64 } else { 0.0 })?;
+        d.set_item("active_scenes", sim.active.len())?; d.set_item("time", sim.time)?;
+        Ok(d)
+    }
+
+    /// Host event log (needs keep_events=True), drained: list of (time, kind, slot, a, b).
+    fn events(&mut self) -> Vec<(f64, &'static str, i64, f64, f64)> {
+        gpu_mut(self).events.drain(..).map(|e| (e.time, e.kind, e.slot, e.a, e.b)).collect()
+    }
+
+    fn __repr__(&self) -> String { format!("bayenv.Env(backend='gpu', n_slots={}, obs_size={}, time={:.2})", self.rows, self.obs_size, gpu_ref(self).time) }
+}
+
+/// World summary without creating a sim: dict of counts.
+#[pyfunction]
+fn world_info(py: Python<'_>, data_dir: &str) -> PyResult<Py<PyDict>> {
+    let d = data_dir.to_string();
+    let w = py.detach(move || World::load(&d)).map_err(|e| PyRuntimeError::new_err(e.to_string()))?;
+    let out = PyDict::new(py);
+    out.set_item("nodes", w.graph.node_count)?; out.set_item("edges", w.graph.edge_count)?;
+    out.set_item("junction_movements", w.junctions.as_ref().map_or(0, |j| j.move_count()))?;
+    out.set_item("controls", w.controls.as_ref().map_or(0, |c| c.count))?; out.set_item("stations", w.stations.len())?;
+    Ok(out.unbind())
+}
+
+#[pymodule]
+fn _bayenv(m: &Bound<'_, PyModule>) -> PyResult<()> {
+    m.add_class::<Env>()?;
+    m.add_function(wrap_pyfunction!(world_info, m)?)?;
+    m.add("OBS_V2_SIZE", 70)?;
+    Ok(())
+}

@@ -3,10 +3,9 @@ use bayenv_gpu::layout as L;
 fn main() {
     let a: Vec<String> = std::env::args().collect();
     let (x, y) = (std::fs::read(&a[1]).unwrap(), std::fs::read(&a[2]).unwrap());
-    assert_eq!(x.len(), y.len(), "size");
-    let cap = x.len() / 4 / (L::VEH_WORDS + 4);
+    let (cx, cy) = (x.len() / 4 / (L::VEH_WORDS + 4), y.len() / 4 / (L::VEH_WORDS + 4)); let cap = cx.min(cy);
     let (vx, vy): (&[u32], &[u32]) = (bytemuck::cast_slice(&x[..cap * L::VEH_WORDS * 4]), bytemuck::cast_slice(&y[..cap * L::VEH_WORDS * 4]));
-    let (px, py): (&[f32], &[f32]) = (bytemuck::cast_slice(&x[cap * L::VEH_WORDS * 4..]), bytemuck::cast_slice(&y[cap * L::VEH_WORDS * 4..]));
+    let (px, py): (&[f32], &[f32]) = (bytemuck::cast_slice(&x[cx * L::VEH_WORDS * 4..cx * L::VEH_WORDS * 4 + cap * 16]), bytemuck::cast_slice(&y[cy * L::VEH_WORDS * 4..cy * L::VEH_WORDS * 4 + cap * 16]));
     let active: Vec<usize> = (0..cap).filter(|&i| vx[i * L::VEH_WORDS + 7] != 0 || vy[i * L::VEH_WORDS + 7] != 0).collect();
     let mut identical_cars = 0;
     for &i in &active { if vx[i * 40..i * 40 + 40] == vy[i * 40..i * 40 + 40] && px[i * 4..i * 4 + 4] == py[i * 4..i * 4 + 4] { identical_cars += 1; } }

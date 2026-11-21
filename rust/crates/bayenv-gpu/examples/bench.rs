@@ -1,0 +1,26 @@
+//! ms/step on the real world, test/gpu/bench.html protocol: scatter n (seed 11), constant gas 0.3, 100 warm-up
+//! steps, then `steps` steps in batches of 20.   cargo run --release -p bayenv-gpu --example bench -- ../data 10000,100000 400 [v2|v3|none]
+use bayenv_gpu::{defines::ObsMode, sim::GpuOptions};
+use std::{sync::Arc, time::Instant};
+fn main() {
+    let a: Vec<String> = std::env::args().collect();
+    let data = a.get(1).cloned().unwrap_or("../data".into());
+    let sizes: Vec<usize> = a.get(2).map_or("10000,100000".into(), |s| s.clone()).split(',').map(|s| s.parse().unwrap()).collect();
+    let steps: usize = a.get(3).map_or(400, |s| s.parse().unwrap());
+    let obs = match a.get(4).map(|s| s.as_str()) { Some("v3") => ObsMode::V3, Some("none") => ObsMode::None, _ => ObsMode::V2 };
+    let batch: usize = a.get(5).map_or(20, |s| s.parse().unwrap());
+    let t = Instant::now(); let world = Arc::new(bayenv_world::World::load(&data).unwrap()); println!("world load {:.0} ms", t.elapsed().as_secs_f64() * 1e3);
+    for n in sizes {
+        let t = Instant::now();
+        let cap = match std::env::var("BAYENV_CAP").as_deref() { Ok("auto") => (n + 1023) / 1024 * 1024, Ok(v) => v.parse().unwrap(), Err(_) => 131072usize.max(n) };
+        let mut o = GpuOptions { capacity: cap, obs, ..Default::default() }; o.features.accidents = true;
+        let mut sim = bayenv_gpu::env::create(world.clone(), o).unwrap();
+        let acts: Vec<f32> = (0..sim.cap * 3).map(|i| if i % 3 == 1 { 0.3 } else { 0.0 }).collect(); sim.set_actions(&acts, 0);
+        let info = bayenv_gpu::env::scatter(&mut sim, n, 11);
+        let setup = t.elapsed().as_secs_f64() * 1e3;
+        for _ in 0..(100 / batch).max(1) { sim.run_steps(batch); }
+        let t = Instant::now(); let mut k = 0; while k < steps { sim.run_steps(batch); k += batch; }
+        let ms = t.elapsed().as_secs_f64() * 1e3 / steps as f64;
+        println!("n {n} placed {} setup {setup:.0} ms: {ms:.3} ms/step ({:.0} steps/s, batch {batch}), driving {}, contacts {}", info.placed, 1000.0 / ms, sim.stats()[32], sim.counters.crash_events);
+    }
+}

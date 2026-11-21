@@ -62,6 +62,7 @@ dependencies = [
  "bayenv-gpu",
  "bayenv-sim",
  "bayenv-world",
+ "bytemuck",
  "numpy",
  "pyo3",
 ]

@@ -42,6 +42,8 @@ pub struct GpuOptions {
     pub reroute: bool,
     /// keep a host log of events (crash / arrive / ...)
     pub keep_events: bool,
+    /// size the contact-resolve rounds by the contacts found (indirect dispatch; identical results). JS: off
+    pub indirect_resolve: bool,
 }
 #[derive(Clone, Copy, Debug)]
 pub struct Features { pub lane_changes: bool, pub accidents: bool, pub fuel: bool, pub collisions: bool, pub yield_: bool, pub policy: bool, pub zip_fix: bool, pub empty: bool }
@@ -57,7 +59,7 @@ impl Default for GpuOptions {
     fn default() -> Self {
         GpuOptions { capacity: 131072, dt: 0.05, start_time: 5.0 * 3600.0, seed: 1, obs: ObsMode::V2, steer_rate: false, decide_every: 1, features: Features::default(),
             controls: true, junctions: true, table_bits: 18, contact_cap: 131072, ev_cap: 16384, spawn_queue: 16384, op_cap: 16384, max_blocks: 4096, route_slack: 1 << 22,
-            resolve_rounds: 12, progress_weight: 1.0, jerk_weight: 0.5, jerk_reward: false, grade_obs: true, squeeze_delay: 15.0 * 60.0, deadlock_break: 0, reroute: true, keep_events: false }
+            resolve_rounds: 12, progress_weight: 1.0, jerk_weight: 0.5, jerk_reward: false, grade_obs: true, squeeze_delay: 15.0 * 60.0, deadlock_break: 0, reroute: true, keep_events: false, indirect_resolve: true }
     }
 }
 
@@ -97,8 +99,6 @@ pub struct Counters { pub minor_contacts: u64, pub crash_events: u64, pub crashe
     pub towed_to_shoulder: u64, pub hauled_away: u64, pub missed_exits: u64, pub stuck_labels: u64, pub reroutes: u64, pub reroute_failed: u64, pub no_route: u64,
     pub by_severity: [u64; 4] }
 
-/// A router for reroutes / refuel detours: (from node, goal node, avoid edges, traffic penalty) -> edge path.
-pub type RouterFn = Box<dyn FnMut(usize, usize, Option<&HashSet<u32>>, Option<&HashMap<u32, f64>>) -> Option<Vec<u32>> + Send>;
 
 struct ScanLevel { n: usize, blocks: usize }
 
@@ -146,7 +146,10 @@ pub struct GpuSim {
     pub traffic_penalty: HashMap<u32, f64>, penalty_order: Vec<u32>,
     pending_penalty: Option<(HashMap<u32, f64>, Vec<u32>)>,
     next_traffic: f64,
-    pub router: Option<RouterFn>,
+    /// A* router (route.js makeRouter, weight 1.25) for missed-exit / closure reroutes; built on first use
+    pub router: Option<bayenv_world::nav::Router>,
+    /// route-word packer (packRoutes with the per-hop maneuver table)
+    pub packer: Option<Arc<crate::pack::RoutePacker>>,
     staging: wgpu::Buffer,
     io_host: Vec<u32>,
 }
@@ -216,6 +219,8 @@ impl GpuSim {
         gpu.storage("telemetry", 256 * 4, None, wgpu::BufferUsages::empty());
         let jm = if use_j { blob.j_m.unwrap() } else { 0 };
         gpu.storage("ctl", ((cap * L::CTL_WORDS + if use_j { jm + blob.e + (blob.e + 31) / 32 + blob.e } else { 0 } + 1) * 4) as u64, None, wgpu::BufferUsages::empty());
+        gpu.buffer("cargs", 16, wgpu::BufferUsages::STORAGE | wgpu::BufferUsages::INDIRECT | wgpu::BufferUsages::COPY_DST, Some(bytemuck::cast_slice(&[1024u32, 1, 1, 0])));
+        gpu.uniform("contactArgsP", 16); gpu.write("contactArgsP", bytemuck::cast_slice(&[opts.contact_cap as u32, 0, 0, 0]), 0);
         let staging = gpu.device.create_buffer(&wgpu::BufferDescriptor { label: Some("staging"), size: (io_words * 4) as u64, usage: wgpu::BufferUsages::MAP_READ | wgpu::BufferUsages::COPY_DST, mapped_at_creation: false });
         let mut sim = GpuSim {
             world, cap, dt: opts.dt, time: opts.start_time, step: 0, rng_state: { let r = jsmath::to_u32(opts.seed as f64 * 2654435761.0); if r == 0 { 1 } else { r } },
@@ -226,7 +231,7 @@ impl GpuSim {
             refuel_queue: Vec::new(), reroute_queue: Default::default(), last_reroute: HashMap::new(), lot: 0, new_pose: false, crashes: Vec::new(), active: Vec::new(),
             counters: Counters::default(), gpu_stats: [0; 64], events: Vec::new(), closed_key: None, closed_n: 0, closed_edges: Vec::new(),
             edge_speed_ema: HashMap::new(), edge_speed_order: Vec::new(), traffic_penalty: HashMap::new(), penalty_order: Vec::new(), pending_penalty: None, next_traffic: -1e9,
-            router: None, staging, io_host: vec![0; io_words], blob, gpu, opts,
+            router: None, packer: None, staging, io_host: vec![0; io_words], blob, gpu, opts,
         };
         if !use_j { sim.blob.j_m = None; }
         sim.ensure_routes(1 << 16);
@@ -248,6 +253,7 @@ impl GpuSim {
             hs.into_iter().map(|h| h.join().unwrap()).collect()
         });
         for (sp, k) in specs.iter().zip(out) { self.k.insert(sp.label, k?); }
+        self.k.insert("contactArgs", self.gpu.kernel("contactArgs", include_str!("../kernels/contact_args.wgsl"), "main")?);
         Ok(())
     }
 
@@ -257,7 +263,7 @@ impl GpuSim {
         for (k, n) in [("P", "params"), ("io", "io"), ("world", "world"), ("routes", "routes"), ("veh", "veh"), ("par", "par"), ("ring", "ring"), ("pose", "pose"),
             ("counts", "counts"), ("starts", "counts"), ("items", "items"), ("order", "order"), ("vidx", "vidx"), ("claim", "claim"), ("laneClaim", "laneClaim"),
             ("queue", "queue"), ("ops", "ops"), ("inputs", "inputs"), ("actions", "actions"), ("agents", "agents"), ("edgeCount", "edgeCount"), ("edgeSpeed", "edgeSpeed"),
-            ("telemetry", "telemetry"), ("ctl", "ctl"), ("hcounts", "hcounts"), ("hstarts", "hcounts"), ("hitems", "hitems"), ("hidx", "hidx"), ("contacts", "contacts")] { r.insert(k, b(n)); }
+            ("telemetry", "telemetry"), ("ctl", "ctl"), ("CA", "contactArgsP"), ("cargs", "cargs"), ("hcounts", "hcounts"), ("hstarts", "hcounts"), ("hitems", "hitems"), ("hidx", "hidx"), ("contacts", "contacts")] { r.insert(k, b(n)); }
         r
     }
 
@@ -362,9 +368,7 @@ impl GpuSim {
         let n = (self.cap * self.obs_size).min(out.len());
         self.read_into("inputs", 0, bytemuck::cast_slice_mut(&mut out[..n]));
     }
-    pub fn read_into(&self, name: &str, offset: u64, out: &mut [u8]) {
-        let v = self.gpu.read(name, offset, out.len() as u64); out.copy_from_slice(&v[..out.len()]);
-    }
+    pub fn read_into(&self, name: &str, offset: u64, out: &mut [u8]) { self.gpu.read_into(name, offset, out); }
     /// Raw buffer words (veh: cap x 40, par: cap x 20, pose: cap x 4, ...).
     pub fn read_words(&self, name: &str) -> Vec<u32> { let b = self.gpu.get(name); bytemuck::cast_slice(&self.gpu.read(name, 0, b.size())).to_vec() }
 
@@ -375,7 +379,7 @@ impl GpuSim {
     fn stages(&mut self, step_index: u64, first: bool, op_count: usize) -> Vec<(&'static str, String, u32)> {
         let cap = self.cap as u32; let f = self.opts.features; let mut d: Vec<(&'static str, String, u32)> = Vec::new();
         let g = |n: usize, wg: usize| ((n + wg - 1) / wg).max(1) as u32;
-        let mut push = |k: &'static str, bg: &str, x: u32| d.push((k, bg.to_string(), x.max(1)));
+        let mut push = |k: &'static str, bg: &str, x: u32| d.push((k, bg.to_string(), x));
         push("build.tick", "build.tick", 1);
         if first && op_count > 0 { push("ops", "ops", g(op_count, 64)); }
         let fresh = first && self.new_pose;
@@ -392,7 +396,7 @@ impl GpuSim {
             push("hash.hscatter", "hash.hscatter", g(cap as usize, 256));
             push("contacts.barrier", "contacts.barrier", g(cap as usize, 128));
             push("contacts.detect", "contacts.detect", g(cap as usize, 128));
-            let wg = g(self.opts.contact_cap, 128);
+            let wg = if self.opts.indirect_resolve { push("contactArgs", "contactArgs", 1); 0 } else { g(self.opts.contact_cap, 128) };
             for _ in 0..self.opts.resolve_rounds { push("contacts.ownClear", "contacts.ownClear", wg); push("contacts.ownMin", "contacts.ownMin", wg); push("contacts.resolveRound", "contacts.resolveRound", wg); }
             push("contacts.resolve", "contacts.resolve", 1);
         }
@@ -424,18 +428,20 @@ impl GpuSim {
         for k in 0..n {
             let si = self.step + k as u64 + 1;
             let st = self.stages(si, k == 0, op_count);
+            let cargs = self.gpu.get("cargs");
             let mut pass = enc.begin_compute_pass(&wgpu::ComputePassDescriptor { label: None, timestamp_writes: None });
             for (kn, bgn, x) in &st {
                 pass.set_pipeline(&self.k[kn].pipeline);
                 for (gi, b) in self.bg[bgn.as_str()].iter().enumerate() { pass.set_bind_group(gi as u32, b, &[]); }
-                pass.dispatch_workgroups(*x, 1, 1);
+                if *x == 0 { pass.dispatch_workgroups_indirect(&cargs, 0); } else { pass.dispatch_workgroups(*x, 1, 1); }
             }
         }
     }
 
     /// The dispatch list (kernel, x) of the next step (diagnostics / oracle comparison).
     pub fn peek_stages(&mut self, first: bool, op_count: usize) -> Vec<(&'static str, u32)> {
-        let np = self.new_pose; let v = self.stages(self.step + 1, first, op_count).into_iter().map(|(k, _, x)| (k, x)).collect(); self.new_pose = np; v
+        let np = self.new_pose; let wg = ((self.opts.contact_cap + 127) / 128) as u32;
+        let v = self.stages(self.step + 1, first, op_count).into_iter().filter(|(k, _, _)| *k != "contactArgs").map(|(k, _, x)| (k, if x == 0 { wg } else { x })).collect(); self.new_pose = np; v
     }
 
     /// Run n sim steps in one submit, then read back stats + events and process them (host side).
@@ -755,12 +761,12 @@ impl GpuSim {
             let g = &self.world.graph;
             let goal = g.to[(route[route.len() - 1] & 0xFFFFF) as usize] as usize; let from = g.to[r.edge as usize] as usize;
             if from == goal { if r.missed { self.apply_reroute(r, Some(Vec::new())); } continue; }
-            let path = if let Some(router) = self.router.as_mut() {
-                if r.missed { router(from, goal, None, None) } else {
-                    let avoid: Option<HashSet<u32>> = if self.closed_edges.is_empty() { None } else { Some(self.closed_edges.iter().cloned().collect()) };
-                    router(from, goal, avoid.as_ref(), if self.traffic_penalty.is_empty() { None } else { Some(&self.traffic_penalty) })
-                }
-            } else { None };
+            if self.router.is_none() { self.router = Some(bayenv_world::nav::Router::new(&self.world.graph, &bayenv_world::nav::RouterOpts { weight: 1.25, ..Default::default() })); }
+            let router = self.router.as_mut().unwrap();
+            let path = if r.missed || (self.closed_edges.is_empty() && self.traffic_penalty.is_empty()) { router.route(from, goal) } else {
+                let pen: Vec<(u32, f64)> = self.penalty_order.iter().map(|e| (*e, self.traffic_penalty[e])).collect();
+                router.route_with(from, goal, &bayenv_world::nav::RouteQuery { avoid: &self.closed_edges, penalty: &pen })
+            };
             self.apply_reroute(r, path);
         }
         if self.last_reroute.len() > 300000 { self.last_reroute.clear(); }
@@ -768,10 +774,27 @@ impl GpuSim {
     fn apply_reroute(&mut self, r: Reroute, path: Option<Vec<u32>>) {
         if self.slot_trip[r.slot as usize] != r.trip { return; }
         let closed: HashSet<u32> = if r.missed { HashSet::new() } else { self.closed_edges.iter().cloned().collect() };
+        if r.slow { if let Some(p) = &path {
+            let g = &self.world.graph; let pen = &self.traffic_penalty;
+            let cost = |x: &[u32]| x.iter().fold(0.0, |t, &e| { let e = (e & 0xFFFFF) as usize; t + g.length[e] / g.speed_limit[e] + pen.get(&(e as u32)).copied().unwrap_or(0.0) });
+            let cur = self.route_of(r.slot); let rest: &[u32] = if (r.rp as usize + 1) <= cur.len() { &cur[r.rp as usize + 1..] } else { &[] };
+            if cost(p) > cost(rest) - 60.0 { return; }
+        } }
         let Some(path) = path else { self.counters.reroute_failed += 1; return };
         if (path.is_empty() && !r.missed) || path.iter().any(|x| closed.contains(x)) { self.counters.reroute_failed += 1; return; }
-        // packing a new route needs the guidance port (crate::pack); until then the car keeps its route
-        self.counters.reroute_failed += 1;
+        let g = &self.world.graph; let pre = if r.prefix >= 0 { 1 } else { 0 };
+        let mut edges: Vec<i32> = Vec::with_capacity(pre + 1 + path.len());
+        if pre == 1 { edges.push(r.prefix as i32); }
+        edges.push(r.edge as i32); edges.extend(path.iter().map(|&e| e as i32));
+        let total = edges.iter().fold(0.0, |s, &e| s + g.length[e as usize]);
+        let packer = self.packer.get_or_insert_with(|| Arc::new(crate::pack::RoutePacker::new(&self.world.graph))).clone();
+        let words = packer.pack_route(&self.world.graph, &edges);
+        let mut block = Vec::with_capacity(words.len() + 1); block.push(f32bits(total)); block.extend_from_slice(&words);
+        let off = self.append_route(&block) + 1;
+        self.op(op::SET_ROUTE, r.slot, off as u32, edges.len() as u32);
+        self.slot_route[2 * r.slot as usize] = off as u32; self.slot_route[2 * r.slot as usize + 1] = edges.len() as u32;
+        self.counters.reroutes += 1;
+        self.event("reroute", r.slot as i64, 0.0, 0.0);
     }
 
     // ------------------------------------------------------------------ state readback
