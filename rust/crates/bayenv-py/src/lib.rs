@@ -616,7 +616,7 @@ impl VecEnv {
             None => numpy::PyArray3::<f32>::zeros(py, [e, r, d], false),
         };
         { let mut rw = arr.readwrite(); let sl = rw.as_slice_mut().map_err(|_| PyValueError::new_err("out must be C-contiguous"))?; let c = &mut self.cpu;
-          if r > 0 { py.detach(|| { use rayon::prelude::*; sl.par_chunks_mut(r * d).zip(c.par_iter_mut()).for_each(|(o, e)| { let e = e.get_mut().unwrap(); let n = e.n_slots(); o.fill(0.0); e.observe_into(&mut o[..n * d]); }); }); } }
+          if r > 0 { py.detach(|| { use rayon::prelude::*; sl.par_chunks_mut(r * d).zip(c.par_iter_mut()).for_each(|(o, e)| { let e = e.get_mut().unwrap(); let n = e.n_slots(); o[n * d..].fill(0.0); e.observe_into(&mut o[..n * d]); }); }); } }
         cpu_finish(py, arr.into_any(), out, fmt)
     }
     /// k steps (0: readback only) in every env with the readback into the next ring slot; lazy: leave it pending.
