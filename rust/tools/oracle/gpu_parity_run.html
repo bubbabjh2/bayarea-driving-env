@@ -1,0 +1,45 @@
+<!doctype html><html><head><meta charset="utf-8"><title>gpu parity run</title></head><body><pre id="out"></pre>
+<script type="module">
+// JS GPU sim reference run for the Rust host's population / obstacle paths (rust/tools/oracle/compare_parity.sh):
+// GPUSim on the real world with a commuter population (pop pack served at /__in/pop.{json,bin}, written by
+// gpu_parity_mock.mjs) and/or training obstacles, constant actions (steer 0, gas, brake 0), `steps` steps in awaited
+// runSteps(batch) calls; refuel plans on the main thread with no time budget (fuelWorkers 0), so the run is
+// deterministic. Then veh + pose PUT to /__out/<name>.bin, host state + counters to /__out/<name>.json.
+// Query: ?steps=4000&batch=10&gas=0.3&cap=32768&start=25200&pop=1&obstacles=0&oseed=3&name=js
+import { GPUSim } from '../../../src/gpu/gpuSim.js';
+import { initGPU } from '../../../src/gpu/device.js';
+import { loadWorld } from '../../../src/sim/data.js';
+import { loadPopulationPack } from '../../../src/gpu/popPack.js';
+const q = new URLSearchParams(location.search);
+const steps = +(q.get('steps') || 4000), batch = +(q.get('batch') || 10), gas = +(q.get('gas') || 0.3), cap = +(q.get('cap') || 32768);
+const start = +(q.get('start') || 25200), usePop = q.get('pop') !== '0', obstacles = +(q.get('obstacles') || 0), oseed = +(q.get('oseed') || 3), name = q.get('name') || 'js';
+const log = (s) => { console.log(s); document.getElementById('out').textContent += s + '\n'; };
+const res = { ok: false };
+try {
+  const world = await loadWorld({ base: new URL('../../../data/', location.href) });
+  const gpu = await initGPU();
+  const sim = await GPUSim.create(world.graph, { gpu, capacity: cap, obs: 'v2', startTime: start, features: { accidents: true, fuel: true, collisions: true, laneChanges: true }, controls: world.controls, fuelWorkers: 0, refuelBudgetMs: 1e12 });
+  const A = new Float32Array(sim.cap * 3); for (let i = 0; i < sim.cap; i++) A[3 * i + 1] = gas; sim.setActions(A);
+  if (usePop) { const pop = await loadPopulationPack(new URL('/__in/pop', location.href).href); pop.meta = {}; sim.setPopulation(pop, { stations: world.stations }); }
+  if (obstacles) res.placed = sim.placeObstacles({ count: obstacles, seed: oseed }).length;
+  const t0 = performance.now();
+  for (let k = 0; k < steps; k += batch) await sim.runSteps(Math.min(batch, steps - k));
+  await sim.sync();
+  res.msPerStep = (performance.now() - t0) / steps;
+  const st = await sim.readState();
+  const vb = new Uint8Array(st.veh.u.buffer), pb = new Uint8Array(st.pose.buffer);
+  const all = new Uint8Array(vb.length + pb.length); all.set(vb); all.set(pb, vb.length);
+  await fetch(`/__out/${name}.bin`, { method: 'PUT', body: all });
+  const s = sim.getStats(), c = sim.counters;
+  res.stats = { driving: s.driving, spawned: s.spawned, arrived: s.arrived, crashes: s.crashes, crashScenes: s.crashScenes, activeCrashes: s.activeCrashes, stranded: s.stranded,
+    refuelPlanned: c.refuelPlanned, refuelPlanFailed: c.refuelPlanFailed, refuelled: c.refuelled, reentered: c.reentered, minorContacts: c.minorContacts, missedExits: c.missedExits || 0,
+    reroutes: c.reroutes || 0, counterSpawned: c.spawned, noRoute: c.noRoute, lot: sim.lot, queueHigh: sim.queueHigh, tripPtr: sim.tripPtr, free: sim.free.length, time: sim.time, step: sim.step };
+  res.slotTrip = Array.from(sim.slotTrip); res.slotStation = Array.from(sim.slotStation);
+  res.outcome = sim.outcome ? Array.from(sim.outcome) : []; res.fuelLeft = sim.fuelLeft ? Array.from(sim.fuelLeft) : [];
+  const ag = await sim.readAgents(); res.agentOutcome = Array.from(ag.outcome.subarray(0, 64));
+  res.adapter = gpu.adapterName; res.ok = true;
+  await fetch(`/__out/${name}.json`, { method: 'PUT', body: JSON.stringify(res) });
+  log(JSON.stringify(res.stats));
+} catch (e) { res.error = String(e && e.stack || e); log('ERROR ' + res.error); }
+window.__result = { ok: res.ok, stats: res.stats, msPerStep: res.msPerStep, error: res.error }; window.__done = true; document.title = res.ok ? 'PASS' : 'FAIL';
+</script></body></html>

@@ -3,7 +3,7 @@
 //! bit-identical.
 //!   cargo run --release -p bayenv-gpu --example parity_check -- <data> <oracleDir> [native-pop]
 use bayenv_gpu::layout as L;
-use bayenv_gpu::sim::{GpuOptions, GpuPopulation, ObstacleKind, ObstacleSpec, Snapshot, StaticObstacle};
+use bayenv_gpu::sim::{CommuterTable, GpuOptions, GpuPopulation, ObstacleKind, ObstacleSpec, Snapshot, StaticObstacle};
 use std::{path::Path, sync::Arc, time::Instant};
 
 struct Dump { meta: serde_json::Value, bin: Vec<u8> }
@@ -47,7 +47,45 @@ fn main() {
     println!("world {:.0} ms", t.elapsed().as_secs_f64() * 1e3);
     let m = Dump::open(&dir.join("mock"));
     let mut bad = 0;
-    if !m.meta["refuelRequests"].is_null() {
+    if !m.meta["tableMs"].is_null() {
+        // ---------------------------------------------------------------- streaming (CommuterTable + RouteProvider + arena)
+        let (n, cap, start) = (m.u("n") as usize, m.u("cap") as usize, m.f("start"));
+        let t = Instant::now();
+        let table = CommuterTable::generate(&world, n, m.u("seed") as f64).expect("table");
+        println!("CommuterTable {n}: {:.0} ms (JS buildCommuterTable {} ms)", t.elapsed().as_secs_f64() * 1e3, m.u("tableMs"));
+        let b = |v: &[f32]| v.iter().map(|x| x.to_bits()).collect::<Vec<u32>>();
+        let iu = |v: &[i32]| v.iter().map(|&x| x as u32).collect::<Vec<u32>>();
+        cmp("table home", &m.words("t_home"), &iu(&table.home), &mut bad); cmp("table work", &m.words("t_work"), &iu(&table.work), &mut bad);
+        cmp("table depart", &m.words("t_depart"), &b(&table.depart), &mut bad); cmp("table workStart", &m.words("t_workStart"), &b(&table.work_start), &mut bad);
+        cmp("table reactionTime", &m.words("t_reactionTime"), &b(&table.reaction_time), &mut bad); cmp("table fuelFill", &m.words("t_fuelFill"), &b(&table.fuel_fill), &mut bad);
+        cmp("table vehicleType", &m.words("t_vehicleType"), &table.vehicle_type.iter().map(|&x| x as u32).collect::<Vec<_>>(), &mut bad);
+        cmp("table order", &m.words("t_order"), &table.order, &mut bad); cmp("table sortedDepart", &m.words("t_sortedDepart"), &b(&table.sorted_depart), &mut bad);
+        let mut sim = bayenv_gpu::env::create(world.clone(), opts(cap, start)).expect("sim");
+        sim.set_streaming(Arc::new(table), true, None);
+        eq("nAgents", m.u("nAgents") as usize, sim.n_agents(), &mut bad);
+        let frame = |sim: &mut bayenv_gpu::sim::GpuSim| { let t_end = sim.time + 10.0 * sim.dt; let t = Instant::now(); sim.enqueue_spawns(t_end); let ms = t.elapsed().as_secs_f64() * 1e3; sim.write_params_now(0); sim.time = t_end; sim.step += 10; ms };
+        let ms = frame(&mut sim);
+        println!("enqueue (routes at departure) {} entries {:.0} ms (JS {} ms)", sim.queue_high(), ms, m.u("enqueueMs"));
+        eq("queueHigh", m.u("queueHigh") as usize, sim.queue_high(), &mut bad);
+        eq("route words", m.u("routeWords1") as usize, sim.route_words, &mut bad);
+        cmp("spawn queue", &m.words("queue1"), &sim.read_words("queue")[..sim.queue_high() * L::SPAWN_WORDS], &mut bad);
+        cmp("arena routes", &m.words("routes1"), &sim.route_mirror[..sim.route_words], &mut bad);
+        cmp("slotTrip", &m.words("slotTrip1"), &sim.slot_trip.iter().map(|&x| x as u32).collect::<Vec<_>>(), &mut bad);
+        cmp("slotRoute", &m.words("slotRoute1"), &sim.slot_route, &mut bad);
+        cmp("params", &m.words("params1"), &sim.params_words()[..], &mut bad);
+        let qh = sim.queue_high() as u32;
+        sim.ingest_events(&(0..qh).map(|q| [L::ev::SPAWN, 0, q, 0]).collect::<Vec<_>>());
+        let arr: Vec<[u32; 4]> = m.words("arriveEv").chunks(4).map(|c| [c[0], c[1], c[2], c[3]]).collect();
+        sim.ingest_events(&arr);
+        sim.time += 1800.0; frame(&mut sim);
+        eq("queueHigh / route words / free", (m.u("queueHigh2") as usize, m.u("routeWords2") as usize, m.u("free2") as usize), (sim.queue_high(), sim.route_words, sim.free_len()), &mut bad);
+        cmp("spawn queue (arena reuse)", &m.words("queue2"), &sim.read_words("queue")[..sim.queue_high() * L::SPAWN_WORDS], &mut bad);
+        cmp("arena routes", &m.words("routes2"), &sim.route_mirror[..sim.route_words], &mut bad);
+        cmp("slotTrip", &m.words("slotTrip2"), &sim.slot_trip.iter().map(|&x| x as u32).collect::<Vec<_>>(), &mut bad);
+        cmp("slotRoute", &m.words("slotRoute2"), &sim.slot_route, &mut bad);
+        cmp("fuelLeft", &m.words("fuelLeft2"), &sim.x.fuel_left.iter().map(|x| x.to_bits()).collect::<Vec<_>>(), &mut bad);
+        cmp("outcome", &m.words("outcome2"), &sim.x.outcome.iter().map(|&x| x as u32).collect::<Vec<_>>(), &mut bad);
+    } else if !m.meta["refuelRequests"].is_null() {
         // ---------------------------------------------------------------- population scenario
         let (n, cap, start) = (m.u("n") as usize, m.u("cap") as usize, m.f("start"));
         let mut sim = bayenv_gpu::env::create(world.clone(), opts(cap, start)).expect("sim");
