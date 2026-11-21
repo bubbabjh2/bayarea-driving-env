@@ -3,7 +3,7 @@
 use crate::jm;
 use crate::sim::Router;
 use crate::world::World;
-use std::collections::{HashMap, HashSet};
+use crate::fx::{HashMap, HashSet};
 use std::sync::Arc;
 
 pub struct AStar { g: Arc<World>, e_time: Vec<f64>, g_score: Vec<f64>, came: Vec<i32>, stamp: Vec<i32>, closed: Vec<u8>, gen: i32, max_speed: f64, weight: f64, junction_penalty: f64,
@@ -15,7 +15,7 @@ impl AStar {
         let e_time = (0..g.edge_count).map(|e| g.e_length[e] / g.e_speed[e]).collect();
         let mut ms: f64 = g.max_speed;
         if ms == 0.0 { for e in 0..g.edge_count { if g.e_speed[e] > ms { ms = g.e_speed[e]; } } }
-        AStar { e_time, g_score: vec![0.0; n], came: vec![0; n], stamp: vec![0; n], closed: vec![0; n], gen: 0, max_speed: jm::max(1.0, ms), weight, junction_penalty: 2.0, cache: HashMap::new(), cache_max: 50000, g }
+        AStar { e_time, g_score: vec![0.0; n], came: vec![0; n], stamp: vec![0; n], closed: vec![0; n], gen: 0, max_speed: jm::max(1.0, ms), weight, junction_penalty: 2.0, cache: HashMap::default(), cache_max: 50000, g }
     }
 }
 

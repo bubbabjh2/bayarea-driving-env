@@ -8,7 +8,7 @@ use crate::rng::Rng;
 use crate::spatial::{LaneIndex, SpatialHash};
 use crate::vehicle::*;
 use crate::world::{Conflict, World};
-use std::collections::{HashMap, HashSet};
+use crate::fx::{HashMap, HashSet};
 use std::sync::Arc;
 
 pub const FAIL_PENDING: u8 = 0;
@@ -31,6 +31,8 @@ pub struct SimOpts {
     pub default_action: Action,
     pub fuel_cfg: crate::fuel::FuelCfg,
     pub slot_pool: usize,
+    /// run the per-car physics of a step on the rayon pool (results identical; worth it above ~1k moving cars)
+    pub parallel: bool,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -43,7 +45,7 @@ impl Default for SimOpts {
             cell_size: 25.0, table_bits: 18, leader_lookahead: 250.0, merge_lookahead: 80.0, lane_end_lookahead: 450.0, control_lookahead: 250.0,
             reroute: true, reroute_sight: 2000.0, squeeze_delay: 900.0, squeeze_speed: 3.0, density_interval: 60.0, path_sight: 0.0,
             deadlock_break: 0.0, spawn_lane_route: 0.0, junction_sight: 0.0, position_mode: true, traffic_mode: TrafficMode::Full, fuel: true,
-            seed: 1.0, wrecks: 0, default_action: Action { steer: Some(0.0), steer_rate: None, gas: 0.0, brake: 0.3 }, fuel_cfg: Default::default(), slot_pool: 0 }
+            seed: 1.0, wrecks: 0, default_action: Action { steer: Some(0.0), steer_rate: None, gas: 0.0, brake: 0.3 }, fuel_cfg: Default::default(), slot_pool: 0, parallel: false }
     }
 }
 
@@ -140,11 +142,11 @@ pub struct Sim {
     pub(crate) spawned_keys: HashSet<i64>,
     pub(crate) pair_event: HashMap<i64, f64>,
     pub(crate) stuck_labelled: HashMap<usize, f32>,
-    pub(crate) conn_cars: HashMap<usize, Vec<usize>>,
-    pub(crate) node_conn: HashMap<usize, Vec<usize>>,
-    pub(crate) passers: HashMap<i32, Vec<usize>>,
+    pub(crate) conn_cars: crate::fx::ListMap<usize>,
+    pub(crate) node_conn: crate::fx::ListMap<usize>,
+    pub(crate) passers: crate::fx::ListMap<i32>,
     pub(crate) conflict_with: HashMap<usize, usize>,
-    pub(crate) off_lane: HashMap<i32, Vec<usize>>,
+    pub(crate) off_lane: crate::fx::ListMap<i32>,
     pub(crate) touch: HashSet<i64>,
     pub(crate) barrier_touch: HashSet<usize>, pub(crate) barrier_now: HashSet<usize>,
     pub(crate) conf_cache: HashMap<usize, Arc<Vec<Conflict>>>,
@@ -160,12 +162,21 @@ pub struct Sim {
     pub(crate) near_buf: Vec<usize>,
     pub static_obstacles: Vec<usize>,
     pub obstacles: Vec<(usize, &'static str, i32, f64)>,
+    /// per-phase wall time (ns) when `profile` is set: spawn, hash, contacts, lanes, leaders, controls, drive, integrate, scenes, traffic+reroute+density
+    pub profile: bool,
+    pub phase_ns: [u64; 10],
 }
 
 #[inline(always)] pub(crate) fn f(x: f32) -> f64 { x as f64 }
 #[inline(always)] pub(crate) fn r32(x: f64) -> f32 { x as f32 }
 
 impl Sim {
+    /// The world without an Arc clone (an atomic refcount bump on a cache line shared by every env of a VecEnv).
+    /// Sound because `g` is set at construction and never replaced, and the reference never outlives the call.
+    #[inline(always)]
+    pub fn gw(&self) -> &'static World { unsafe { &*Arc::as_ptr(&self.g) } }
+    #[inline(always)]
+    pub fn popw(&self) -> &'static Population { unsafe { &*Arc::as_ptr(&self.pop) } }
     pub fn new(g: Arc<World>, pop: Arc<Population>, opts: SimOpts, router: Box<dyn Router>) -> Sim {
         let n_c = pop.n;
         let mut rng = Rng::new(opts.seed);
@@ -191,13 +202,13 @@ impl Sim {
             hash: SpatialHash::new(opts.cell_size, opts.table_bits, cap), lanes: LaneIndex::new(ne, cap), drivers: vec![Driver::None; cap], actions: vec![None; cap],
             routes: crate::fuel::RouteStore::new(&pop), stations, learners, outcome: vec![0; n_c], outcome_back: vec![0; n_c], commuter_fuel,
             fitness: vec![0.0; n_c], actual_arrival: vec![-1.0; n_c], late_by: vec![0.0; n_c], early_by: vec![0.0; n_c],
-            trips, trip_ptr: 0, pending: Vec::new(), lot: Vec::new(), crashes: Vec::new(), active: Vec::new(), edge_crashes: HashMap::new(), edge_has_crash: vec![0; ne],
+            trips, trip_ptr: 0, pending: Vec::new(), lot: Vec::new(), crashes: Vec::new(), active: Vec::new(), edge_crashes: HashMap::default(), edge_has_crash: vec![0; ne],
             counters: Counters::default(), accum: Accum::default(), live: Live::default(), density: Density::default(), obstacle_rng: None, brake_every: (15.0, 40.0),
-            spawned_keys: HashSet::new(), pair_event: HashMap::new(), stuck_labelled: HashMap::new(), conn_cars: HashMap::new(), node_conn: HashMap::new(),
-            passers: HashMap::new(), conflict_with: HashMap::new(), off_lane: HashMap::new(), touch: HashSet::new(), barrier_touch: HashSet::new(), barrier_now: HashSet::new(),
-            conf_cache: HashMap::new(), mv_into: None, yield_by: None, creep_until: Vec::new(), creep_ignore: Vec::new(), edge_speed: HashMap::new(), traffic_penalty: None,
-            last_reroute: HashMap::new(), next_traffic: 0.0, next_reroute: 0.0, next_density: start, edge_count_scratch: vec![0; ne], fwy, fwy_lane_km, seen_j: -1,
-            near_buf: Vec::new(), static_obstacles: Vec::new(), obstacles: Vec::new(),
+            spawned_keys: HashSet::default(), pair_event: HashMap::default(), stuck_labelled: HashMap::default(), conn_cars: Default::default(), node_conn: Default::default(),
+            passers: Default::default(), conflict_with: HashMap::default(), off_lane: Default::default(), touch: HashSet::default(), barrier_touch: HashSet::default(), barrier_now: HashSet::default(),
+            conf_cache: HashMap::default(), mv_into: None, yield_by: None, creep_until: Vec::new(), creep_ignore: Vec::new(), edge_speed: HashMap::default(), traffic_penalty: None,
+            last_reroute: HashMap::default(), next_traffic: 0.0, next_reroute: 0.0, next_density: start, edge_count_scratch: vec![0; ne], fwy, fwy_lane_km, seen_j: -1,
+            near_buf: Vec::new(), static_obstacles: Vec::new(), obstacles: Vec::new(), profile: std::env::var("BAYENV_PROFILE").is_ok(), phase_ns: [0; 10],
             empty: opts.traffic_mode == TrafficMode::Empty, time: start, dt: opts.dt, step_count: 0, vs, rng, router, g, pop, opts,
         };
         if sim.opts.traffic_mode == TrafficMode::Sparse && sim.opts.wrecks > 0 { sim.place_wrecks(sim.opts.wrecks); }
@@ -211,20 +222,24 @@ impl Sim {
         let dt = self.dt;
         self.time += dt;
         self.step_count += 1;
-        self.spawn();
-        self.hash.rebuild(&self.vs);
-        self.contacts();
-        self.lanes.rebuild(&self.vs);
-        self.find_leaders();
-        if self.g.controls.is_some() { self.control_obs(); }
+        let prof = self.profile;
+        let mut t = if prof { Some(std::time::Instant::now()) } else { None };
+        macro_rules! lap { ($k:expr) => { if let Some(t0) = t { let n = std::time::Instant::now(); self.phase_ns[$k] += (n - t0).as_nanos() as u64; t = Some(n); } }; }
+        self.spawn(); lap!(0);
+        self.hash.rebuild(&self.vs); lap!(1);
+        self.contacts(); lap!(2);
+        self.lanes.rebuild(&self.vs); lap!(3);
+        self.find_leaders(); lap!(4);
+        if self.g.controls.is_some() { self.control_obs(); } lap!(5);
         if let Some(yb) = &mut self.yield_by { yb.iter_mut().for_each(|x| *x = -1); }
-        self.drive(dt);
-        self.integrate_all(dt);
+        self.drive(dt); lap!(6);
+        self.integrate_all(dt); lap!(7);
         if !self.vs.missed.is_empty() { self.missed_exits(); }
-        self.scenes();
+        self.scenes(); lap!(8);
         if self.time >= self.next_traffic { self.traffic_sample(); self.next_traffic = self.time + 60.0; }
         if self.opts.reroute && self.time >= self.next_reroute { self.reroute_blocked(); self.next_reroute = self.time + 2.0; }
         if self.time >= self.next_density { self.sample_density(); self.next_density = self.time + self.opts.density_interval; }
+        lap!(9);
     }
 
     // ---------------------------------------------------------------- spawning
@@ -306,7 +321,7 @@ impl Sim {
             self.set_outcome(c, trip.leg, FAIL_NOROUTE);
             return true;
         }
-        let pop = self.pop.clone();
+        let pop = self.popw();
         let route = &pop.route_flat[o0..o1];
         let vt = pop.vehicle_type[c] as usize;
         let vlen = VEHICLE_PARAMS[if vt < 4 { vt } else { 0 }].length;
@@ -318,7 +333,7 @@ impl Sim {
         self.spawned_keys.insert(route[0] as i64 * 8 + lane as i64);
         let learner = self.learners[c] == 1;
         let traits = self.traits_of(c);
-        let g = self.g.clone();
+        let g = self.gw();
         let slot = self.vs.alloc(&g, AllocArgs { type_idx: pop.vehicle_type[c], traits, route, commuter: c as i32, leg: trip.leg, time: self.time, learner, dt: self.dt, step: self.step_count, lane });
         self.vs.set_reaction_time(slot, traits.reaction_time, self.dt);
         self.vs.route_off[slot] = self.routes.pop_offset(k);
@@ -430,16 +445,40 @@ impl Sim {
 
     // ---------------------------------------------------------------- motion
     fn integrate_all(&mut self, dt: f64) {
-        let g = self.g.clone();
+        let g = self.gw();
         let high = self.vs.high;
         let fuel_on = self.opts.fuel;
+        // phase A (pure per-car physics + pose), in parallel when enabled: identical results, written back in slot order
+        let mut pre: Vec<Option<(Car, CarOut, i32, Car)>> = Vec::new();
+        let par = self.opts.parallel && high >= 512 && self.vs.missed_t.len() + high <= 100000;
+        if par {
+            use rayon::prelude::*;
+            let vs = &self.vs;
+            let (time, step, pm) = (self.time, self.step_count, vs.position_mode);
+            pre = (0..high).into_par_iter().with_min_len(64).map(|i| {
+                let st = vs.state[i];
+                let locked = if st == STATE_DRIVING { false } else if st == STATE_CRASHED && (vs.speed[i] > 0.01 || jm::abs(f(vs.v_lat[i])) > 0.01 || jm::abs(f(vs.yaw_rate[i])) > 0.01) { true } else { return None };
+                let mut c = vs.gather(i);
+                if !locked && !fuel_on { c.fuel = vs.tank[i]; }
+                let mut out = CarOut::default();
+                let ret = VehicleStore::integrate_car(&mut c, &vs.routes[i], &vs.ctrl_ring[i * 120..(i + 1) * 120], vs.missed_t.get(&i).copied(), pm, &mut out, dt, time, &g, step, locked);
+                let mut pc = c; pc.update_pose(&g);
+                Some((c, out, ret, pc))
+            }).collect();
+        }
         let (mut driving, mut crashed, mut refueling, mut sum_speed) = (0u64, 0u64, 0u64, 0.0f64);
         let (mut speeding_sec, mut speeding_km, mut total_sec, mut total_km) = (0.0f64, 0.0f64, 0.0f64, 0.0f64);
         let check_every = self.opts.fuel_cfg.check_interval;
+        macro_rules! pose { ($i:expr) => { match pre.get($i).and_then(|p| p.as_ref()) { Some((_, _, _, pc)) => { let v = &mut self.vs; v.x[$i] = pc.x; v.y[$i] = pc.y; v.z[$i] = pc.z; v.heading[$i] = pc.heading; v.seg[$i] = pc.seg; } None => self.vs.update_pose($i, &g) } }; }
         for i in 0..high {
             let st = self.vs.state[i];
             if st == STATE_CRASHED {
                 crashed += 1;
+                if par {
+                    self.vs.save_pose(i);
+                    if let Some((c, out, _, _)) = &pre[i] { self.vs.scatter(i, c, out); pose!(i); }
+                    continue;
+                }
                 let vs = &mut self.vs;
                 if vs.speed[i] > 0.01 || jm::abs(f(vs.v_lat[i])) > 0.01 || jm::abs(f(vs.yaw_rate[i])) > 0.01 {
                     vs.save_pose(i); vs.integrate(i, dt, self.time, &g, self.step_count, true); vs.update_pose(i, &g);
@@ -448,9 +487,17 @@ impl Sim {
             }
             if st == STATE_REFUELING { refueling += 1; continue; }
             if st != STATE_DRIVING { continue; }
-            if !fuel_on { self.vs.fuel[i] = self.vs.tank[i]; }
-            self.vs.save_pose(i);
-            let mut done = self.vs.integrate(i, dt, self.time, &g, self.step_count, false);
+            let mut done;
+            if par {
+                self.vs.save_pose(i);
+                let (c, out, ret, _) = pre[i].as_ref().unwrap();
+                self.vs.scatter(i, c, out);
+                done = *ret;
+            } else {
+                if !fuel_on { self.vs.fuel[i] = self.vs.tank[i]; }
+                self.vs.save_pose(i);
+                done = self.vs.integrate(i, dt, self.time, &g, self.step_count, false);
+            }
             let e = self.vs.edge[i] as usize;
             let lim = g.e_speed[e];
             let sp = f(self.vs.speed[i]);
@@ -463,8 +510,8 @@ impl Sim {
                 if (rp + 1 >= self.vs.routes[i].len() || stop_here) && (rem < 2.5 || (rem < 8.0 && sp < 0.3)) { done = if stop_here { 2 } else { 1 }; }
             }
             if done == 1 { self.arrive(i); continue; }
-            if done == 2 { self.vs.update_pose(i, &g); self.enter_station(i); refueling += 1; continue; }
-            if self.vs.fuel[i] <= 0.0 && sp < 0.05 { self.vs.update_pose(i, &g); self.strand(i); crashed += 1; continue; }
+            if done == 2 { pose!(i); self.enter_station(i); refueling += 1; continue; }
+            if self.vs.fuel[i] <= 0.0 && sp < 0.05 { pose!(i); self.strand(i); crashed += 1; continue; }
             let ss = self.vs.stopped_since[i];
             if ss >= 0.0 && self.time - f(ss) > self.opts.stuck_timeout && self.stuck_labelled.get(&i) != Some(&ss) {
                 self.stuck_labelled.insert(i, ss);
@@ -473,7 +520,7 @@ impl Sim {
                 *self.counters.stuck_by.entry(k).or_insert(0) += 1;
             }
             if self.stations.is_some() && self.time - f(self.vs.last_fuel_check[i]) > check_every { self.check_fuel(i, false); }
-            self.vs.update_pose(i, &g);
+            pose!(i);
             driving += 1; sum_speed += f(self.vs.speed[i]);
         }
         self.live = Live { driving, crashed, refueling, sum_speed };

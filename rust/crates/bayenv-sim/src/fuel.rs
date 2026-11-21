@@ -6,7 +6,7 @@ use crate::population::Population;
 use crate::sim::Router;
 use crate::vehicle::{VehicleStore, STATE_FREE};
 use crate::world::World;
-use std::collections::HashMap;
+use crate::fx::HashMap;
 
 #[derive(Clone, Debug)]
 pub struct FuelCfg { pub low_fraction: f64, pub reserve_km: f64, pub plan_speed: f64, pub plan_factor: f64, pub pump_min: f64, pub pump_max: f64,
@@ -136,7 +136,7 @@ impl RouteStore {
             for k in 0..vs.high { if vs.state[k] != STATE_FREE && vs.route_off[k] >= 0 && vs.route_off[k] as usize >= self.base_len { keep.push((k, vs.route_off[k], vs.route_len[k])); } }
             let mut total = self.base_len; for &(_, _, l) in &keep { total += l as usize; }
             let cap = self.flat_len.max(total + n + (1 << 18));
-            let mut moved: HashMap<i32, i32> = HashMap::new();
+            let mut moved: HashMap<i32, i32> = HashMap::default();
             let mut p = self.base_len as i32;
             for (slot, off, len) in keep {
                 let no = *moved.entry(off).or_insert_with(|| { let q = p; p += len; q });

@@ -7,7 +7,7 @@
 //! arithmetic sees the same numbers as V8.
 use crate::jm;
 use crate::pack::Pack;
-use std::collections::{HashMap, HashSet};
+use crate::fx::{HashMap, HashSet};
 
 pub const LANE_WIDTH: f64 = 3.7;
 const TAPER_M: f64 = 90.0;
@@ -400,7 +400,7 @@ impl World {
         let st_x = p.f64s("stX");
         let st_z = p.f64s("stZ");
         let stations = (0..st_node.len()).map(|k| Station { node: st_node[k], pumps: st_pumps[k], x: st_x[k], z: st_z[k] }).collect();
-        let mut banned_hops: HashMap<i64, Vec<i32>> = HashMap::new();
+        let mut banned_hops: HashMap<i64, Vec<i32>> = HashMap::default();
         if p.has("bannedHops") {
             let t = p.i32s("bannedHops");
             for c in t.chunks_exact(3) { banned_hops.entry(c[0] as i64 * 4194304 + c[1] as i64).or_default().push(c[2]); }

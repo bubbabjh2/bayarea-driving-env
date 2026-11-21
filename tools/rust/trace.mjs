@@ -7,6 +7,9 @@
 //     --n      agents (synthetic / real)        --mode full|sparse|empty     --opts '{"pathSight":1}' (sim opts JSON)
 //     --policy idle | const | random | cruise | cruisenoise
 //     --every  record every k-th step (default 1)  --fields all | pose (a compact subset)
+//     --obs 1  also record env.observe({v3: true}) on every recorded step (after the step, before the next actions):
+//              sections obs.n (agents per recorded step), obs.slot, obs.scalars (f64 rows of OBS_FIELDS, the
+//              rust/crates/bayenv-sim/src/obs.rs flat layout), obs.v3 (f32 rows of 358)
 // Writes <out>/world.pack, <out>/pop.pack, <out>/run.json, <out>/trace.pack.
 import fs from 'node:fs';
 import { createTrainingEnv } from '../../src/sim/env.js';
@@ -15,6 +18,7 @@ import { makeSynthGraph } from '../../src/sim/synthGraph.js';
 import { synthAxis } from '../../src/sim/population.js';
 import { makeRng } from '../../src/sim/rng.js';
 import { STATE_DRIVING } from '../../src/sim/vehicle.js';
+import { VEHICLE_PARAMS } from '../../src/sim/physics/params.js';
 import { PackWriter } from './pack.mjs';
 import { exportWorld, exportPopulation } from './export.mjs';
 
@@ -64,12 +68,37 @@ export function makePolicy(name, seed) {
   };
 }
 
+/** obs scalar row: same order as OBS_FIELDS in rust/crates/bayenv-sim/src/obs.rs */
+export const OBS_FIELDS = ['slot', 'agent', 'x', 'z', 'heading', 'speed', 'laneIndex', 'laneCount', 'laneWidth', 'laneOffset', 'onConnector', 'laneHeading',
+  'speedLimit', 'roadId', 'routeDistance', 'steerAngle', 'steerTarget', 'gas', 'brake', 'actionMode', 'maxSteerAngle', 'headingRel', 'lat',
+  'laneEndDistance', 'laneEndSide', 'maxSteer', 'maxSteerRate', 'wheelbase', 'width', 'length', 'mass', 'vehicleType', 'vLat', 'yawRate',
+  'control.type', 'control.state', 'control.distance', 'control.timeInState', 'control.timeToChange', 'control.movement', 'control.stopped', 'control.yieldRequired',
+  ...Array.from({ length: 12 }, (_, k) => `neighbors.${k}`),
+  'lead2.gap', 'lead2.rel', 'lead2.stopped', 'pullOver', 'oncoming.gap', 'oncoming.closing',
+  'junction.mouthDistance', 'junction.inBox', 'junction.distance', 'junction.timeToConflict', 'junction.stopped', 'passingWreck',
+  'grade.0', 'grade.1', 'grade.2', 'leaderId',
+  'signals.collision', 'signals.stranded', 'signals.harshBraking', 'signals.timeToWorkStart', 'signals.remainingRouteDistance', 'signals.fuelFraction', 'signals.refuelPlanned'];
+const getPath = (o, p) => { for (const k of p.split('.')) o = o == null ? undefined : o[k]; return o; };
+let obsUndefined = 0;
+export function obsRow(it) {
+  const o = it.obs;
+  return OBS_FIELDS.map((f) => {
+    let v;
+    if (f === 'slot') v = it.slot; else if (f === 'agent') v = it.agent;
+    else if (f === 'actionMode') v = o.actionMode === 'position' ? 1 : 0;
+    else if (f === 'vehicleType') v = VEHICLE_PARAMS.findIndex((p) => p.name === o.vehicleType);
+    else v = getPath(o, f);
+    if (v === undefined) { obsUndefined++; return NaN; }
+    return typeof v === 'boolean' ? (v ? 1 : 0) : +v;
+  });
+}
+
 const POSE = ['state', 'flags', 'edge', 's', 'lat', 'headingRel', 'speed', 'vLat', 'yawRate', 'x', 'y', 'z', 'heading', 'leader', 'gap', 'conn'];
 
 async function main() {
   const world = arg('world', 'synthetic'), n = +arg('n', 300), seed = +arg('seed', 1), mode = arg('mode', 'full');
   const steps = +arg('steps', 600), every = +arg('every', 1), policy = arg('policy', 'cruise'), out = arg('out', 'trace-out');
-  const opts = JSON.parse(arg('opts', '{}')), fieldSet = arg('fields', 'all');
+  const opts = JSON.parse(arg('opts', '{}')), fieldSet = arg('fields', 'all'), withObs = +arg('obs', 0) === 1;
   fs.mkdirSync(out, { recursive: true });
   const t0 = Date.now();
   const { env, stations, controls, obstacles } = await buildEnv({ world, n, seed, mode, opts });
@@ -78,7 +107,7 @@ async function main() {
   exportPopulation(env.population, `${out}/pop.pack`);
   const simOpts = {};
   for (const [k, v] of Object.entries(sim.opts)) if (typeof v === 'number' || typeof v === 'string' || typeof v === 'boolean') simOpts[k] = Number.isFinite(v) || typeof v !== 'number' ? v : (v > 0 ? 'Infinity' : '-Infinity');
-  const run = { world, n, seed, mode, steps, every, policy, opts, simOpts, obstacles, startTime: sim.opts.startTime, wrecks: sim.opts.wrecks ?? 0,
+  const run = { world, n, seed, mode, steps, every, policy, opts, obs: withObs, simOpts, obstacles, startTime: sim.opts.startTime, wrecks: sim.opts.wrecks ?? 0,
     defaultAction: sim.defaultAction, obstaclesSpec: sim.opts.obstacles || null, staticObstacles: sim.opts.staticObstacles || null };
   fs.writeFileSync(`${out}/run.json`, JSON.stringify(run, null, 1));
   const tLoad = Date.now() - t0;
@@ -87,6 +116,7 @@ async function main() {
   const fields = Object.keys(vs0).filter((k) => ArrayBuffer.isView(vs0[k]) && vs0[k].length % vs0.capacity === 0 && (fieldSet === 'all' || POSE.includes(k)));
   const chunks = Object.fromEntries(fields.map((k) => [k, []]));
   const highs = [], scal = [];
+  const obsN = [], obsSlot = [], obsScal = [], obsV3 = []; let obsNs = 0, obsAgents = 0;
   const t1 = Date.now();
   for (let k = 1; k <= steps; k++) {
     act(env);
@@ -98,20 +128,33 @@ async function main() {
     const c = env.sim.counters;
     scal.push(env.sim.time, env.sim.stepCount, vs.count, c.spawned, c.arrived, c.crashes, c.disablingCrashes, c.minorContacts, c.touches, c.repeatContacts,
       env.sim.crashes.length, env.sim.activeCrashes.length, c.stuck, c.stranded, c.refuelPlanned, c.reroutes || 0, c.missedExits || 0, env.sim.pendingSpawns.length);
+    if (withObs) {
+      const tq = process.hrtime.bigint();
+      const items = env.observe({ v3: true });
+      obsNs += Number(process.hrtime.bigint() - tq); obsAgents += items.length;
+      obsN.push(items.length);
+      for (const it of items) { obsSlot.push(it.slot); for (const v of obsRow(it)) obsScal.push(v); obsV3.push(it.obs.v3); }
+    }
   }
   const wall = (Date.now() - t1) / 1000;
   const w = new PackWriter();
   w.add('high', Uint32Array.from(highs)).add('scalars', Float64Array.from(scal));
+  if (withObs) {
+    const v3 = new Float32Array(obsV3.length * 358); obsV3.forEach((a, k) => v3.set(a, k * 358));
+    w.add('obs.n', Uint32Array.from(obsN)).add('obs.slot', Int32Array.from(obsSlot)).add('obs.scalars', Float64Array.from(obsScal)).add('obs.v3', v3);
+  }
   for (const f of fields) {
     const parts = chunks[f], C = parts.length ? parts[0].constructor : Float32Array;
     let L = 0; for (const p of parts) L += p.length;
     const all = new C(L); let o = 0; for (const p of parts) { all.set(p, o); o += p.length; }
     w.add('vs.' + f, all);
   }
-  w.meta = { kind: 'trace', fields, strides: Object.fromEntries(fields.map((f) => [f, vs0[f].length / vs0.capacity])), scalarNames: ['time', 'stepCount', 'count', 'spawned', 'arrived', 'crashes', 'disablingCrashes', 'minorContacts', 'touches', 'repeatContacts', 'crashRecords', 'activeCrashes', 'stuck', 'stranded', 'refuelPlanned', 'reroutes', 'missedExits', 'pending'], every, steps };
+  w.meta = { kind: 'trace', fields, strides: Object.fromEntries(fields.map((f) => [f, vs0[f].length / vs0.capacity])), scalarNames: ['time', 'stepCount', 'count', 'spawned', 'arrived', 'crashes', 'disablingCrashes', 'minorContacts', 'touches', 'repeatContacts', 'crashRecords', 'activeCrashes', 'stuck', 'stranded', 'refuelPlanned', 'reroutes', 'missedExits', 'pending'], every, steps,
+    ...(withObs ? { obsFields: OBS_FIELDS, obsUndefined } : {}) };
   w.write(`${out}/trace.pack`);
   const st = env.stats();
-  console.log(JSON.stringify({ world, policy, steps, loadMs: tLoad, stepsPerSec: +(steps / wall).toFixed(1), clock: st.clock, active: st.active, arrived: st.arrivedOutbound, crashes: st.crashes, out }));
+  console.log(JSON.stringify({ world, policy, steps, loadMs: tLoad, stepsPerSec: +(steps / wall).toFixed(1), clock: st.clock, active: st.active, arrived: st.arrivedOutbound, crashes: st.crashes, out,
+    ...(withObs ? { observeNsPerAgent: +(obsNs / Math.max(1, obsAgents)).toFixed(0), obsAgents, obsUndefined } : {}) }));
 }
 
 if (import.meta.url === `file://${process.argv[1]}`) await main();

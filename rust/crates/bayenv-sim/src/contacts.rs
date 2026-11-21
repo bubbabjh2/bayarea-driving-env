@@ -49,9 +49,9 @@ pub(crate) fn frame_end(g: &World, vs: &VehicleStore, i: usize) -> f64 {
 
 impl Sim {
     pub(crate) fn contacts(&mut self) {
-        let g = self.g.clone();
+        let g = self.gw();
         let high = self.vs.high;
-        let mut now: std::collections::HashSet<i64> = std::collections::HashSet::new();
+        let mut now: crate::fx::HashSet<i64> = std::collections::HashSet::default();
         let layer = self.opts.layer_gap;
         let mut cand = std::mem::take(&mut self.near_buf);
         for i in 0..high {
@@ -103,7 +103,7 @@ impl Sim {
 
     pub(crate) fn write_back(&mut self, i: usize, b: &Body) {
         if b.inv_mass == 0.0 { return; }
-        let g = self.g.clone();
+        let g = self.gw();
         let vs = &mut self.vs;
         let e = vs.edge[i] as usize;
         let yaw = f(vs.heading[i]);
@@ -123,7 +123,7 @@ impl Sim {
     }
 
     pub(crate) fn barrier(&mut self, i: usize) {
-        let g = self.g.clone();
+        let g = self.gw();
         let vs = &self.vs;
         let e = vs.edge[i] as usize;
         let s = f(vs.s[i]);
@@ -280,7 +280,7 @@ impl Sim {
     }
 
     fn move_off_lanes(&mut self, ri: usize) {
-        let g = self.g.clone();
+        let g = self.gw();
         let vehicles = self.crashes[ri].vehicles.clone();
         for s in vehicles {
             if self.vs.state[s] != STATE_CRASHED || self.crashes[ri].gone.contains(&s) { continue; }
