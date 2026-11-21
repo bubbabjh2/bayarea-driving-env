@@ -85,6 +85,7 @@ dependencies = [
 name = "bayenv-world"
 version = "0.1.0"
 dependencies = [
+ "bayenv-world",
  "bytemuck",
  "flate2",
  "libm",

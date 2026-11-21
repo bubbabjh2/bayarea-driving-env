@@ -10,11 +10,14 @@
 //! So the maneuver at a node depends on the (in-edge, out-edge) pair only, plus the same-side keep coalescing along
 //! the route: [`ManeuverTable`] precomputes the code of every hop once and [`pack_route_words`] packs a route in O(n).
 pub mod router;
+/// The pre-optimisation router, kept as the equality oracle (tests / benches: feature `router-ref`).
+#[cfg(feature = "router-ref")]
+pub mod router_ref;
 
 use crate::graph::SimGraph;
 use std::f64::consts::PI;
 
-pub use router::{RouteQuery, Router, RouterOpts};
+pub use router::{OdCache, RouteQuery, Router, RouterGraph, RouterOpts, SearchState, PLAIN};
 
 /// `MANEUVER_TYPES` order.
 pub const MANEUVER_TYPES: [&str; 9] = ["continue", "exit", "merge", "turn-left", "turn-right", "keep-left", "keep-right", "arrive", "refuel"];
