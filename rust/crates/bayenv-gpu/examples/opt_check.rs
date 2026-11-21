@@ -9,7 +9,7 @@ use std::sync::Arc;
 
 fn opts(cap: usize, var: &str, js: bool) -> GpuOptions {
     // both sims on the legacy model (= the JS kernels) unless a flag list sets cpu_connector_join / contact_tangent
-    let mut o = GpuOptions { capacity: cap, cpu_connector_join: false, contact_tangent: false, deterministic_contacts: false, deterministic_spawn: false, deterministic_events: false, deterministic_leaders: false, ..Default::default() }; o.features.accidents = true;
+    let mut o = GpuOptions { capacity: cap, deterministic_contacts: false, deterministic_spawn: false, deterministic_events: false, deterministic_leaders: false, ..GpuOptions::default().js_model() }; o.features.accidents = true;
     if js { for f in ["indirect_resolve", "fused_resolve", "sorted_order", "fast_scan", "fast_search"] { o.set_flag(f, false).unwrap(); } o.zero_init_workgroup = true; }
     if let Ok(v) = std::env::var(var) { for kv in v.split(',').filter(|x| !x.is_empty()) {
         let (k, b) = kv.split_once('=').unwrap_or((kv, "1")); o.set_flag(k.trim(), b.trim() != "0").unwrap(); } }
