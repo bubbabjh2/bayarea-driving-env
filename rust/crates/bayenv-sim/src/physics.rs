@@ -35,6 +35,12 @@ pub const VEHICLE_TYPE_WEIGHTS: [f64; 4] = [0.62, 0.30, 0.06, 0.02];
 pub const RHO_AIR: f64 = 1.225;
 pub const G: f64 = 9.81;
 pub const PHYS_DT: f64 = 0.01;
+/// brake deceleration of trucks and buses with SimOpts::heavy_brakes (the JS: 6.5 m/s^2, 100-0 in 58 m; real loaded
+/// heavy vehicles need about 80 m, FMVSS 121)
+pub const HEAVY_BRAKE_DECEL: f64 = 4.7;
+/// Model fixes inside step_dynamics (all false = the JS)
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct Fixes { pub hold: bool, pub heavy_brakes: bool, pub reverse: bool }
 pub const KIN_BLEND_LO: f64 = 0.7;
 pub const KIN_BLEND_HI: f64 = 1.4;
 pub const ABS_LONG: f64 = 0.95;
@@ -65,7 +71,12 @@ pub struct Surf { pub pk: f64, pub sk: f64, pub crr: f64 }
 
 /// dynamics.js stepDynamics (h0 = PHYS_DT). `position` = actionMode 'position'.
 pub fn step_dynamics(st: &mut DynState, steer_rate: f64, gas: f64, brake: f64, p: &VehicleParams, dt: f64, grade: f64, locked: bool, position: bool, surf: Option<Surf>) {
-    let (mut d, n) = Dyn::new(st, steer_rate, gas, brake, p, dt, grade, locked, position, surf);
+    step_dynamics_h(st, steer_rate, gas, brake, p, dt, grade, locked, position, surf, Fixes::default())
+}
+/// step_dynamics with the brake-hold model fix selectable (`hold`)
+#[allow(clippy::too_many_arguments)]
+pub fn step_dynamics_h(st: &mut DynState, steer_rate: f64, gas: f64, brake: f64, p: &VehicleParams, dt: f64, grade: f64, locked: bool, position: bool, surf: Option<Surf>, fx: Fixes) {
+    let (mut d, n) = Dyn::new(st, steer_rate, gas, brake, p, dt, grade, locked, position, surf, fx);
     for _ in 0..n { d.substep(); }
     d.finish(st);
 }
@@ -73,23 +84,23 @@ pub fn step_dynamics(st: &mut DynState, steer_rate: f64, gas: f64, brake: f64, p
 /// step_dynamics for two cars with the same dt (same substep count), their substeps interleaved: the two dependency
 /// chains are independent, so the core overlaps them. Each car's operations and their order are step_dynamics' own.
 #[allow(clippy::type_complexity)]
-pub fn step_dynamics2(a: (&mut DynState, f64, f64, f64, &VehicleParams, f64, bool, Option<Surf>), b: (&mut DynState, f64, f64, f64, &VehicleParams, f64, bool, Option<Surf>), dt: f64, position: bool) {
+pub fn step_dynamics2(a: (&mut DynState, f64, f64, f64, &VehicleParams, f64, bool, Option<Surf>), b: (&mut DynState, f64, f64, f64, &VehicleParams, f64, bool, Option<Surf>), dt: f64, position: bool, fx: Fixes) {
     let (sa, sra, ga, ba, pa, gra, la, sfa) = a;
     let (sb, srb, gb, bb, pb, grb, lb, sfb) = b;
-    let (mut da, n) = Dyn::new(sa, sra, ga, ba, pa, dt, gra, la, position, sfa);
-    let (mut db, _) = Dyn::new(sb, srb, gb, bb, pb, dt, grb, lb, position, sfb);
+    let (mut da, n) = Dyn::new(sa, sra, ga, ba, pa, dt, gra, la, position, sfa, fx);
+    let (mut db, _) = Dyn::new(sb, srb, gb, bb, pb, dt, grb, lb, position, sfb, fx);
     for _ in 0..n { da.substep(); db.substep(); }
     da.finish(sa); db.finish(sb);
 }
 
 /// step_dynamics for four cars (same dt), substeps interleaved as in step_dynamics2.
 #[allow(clippy::type_complexity)]
-pub fn step_dynamics4(c: [(&mut DynState, f64, f64, f64, &VehicleParams, f64, bool, Option<Surf>); 4], dt: f64, position: bool) {
+pub fn step_dynamics4(c: [(&mut DynState, f64, f64, f64, &VehicleParams, f64, bool, Option<Surf>); 4], dt: f64, position: bool, fx: Fixes) {
     let [(s0, r0, g0, b0, p0, gr0, l0, f0), (s1, r1, g1, b1, p1, gr1, l1, f1), (s2, r2, g2, b2, p2, gr2, l2, f2), (s3, r3, g3, b3, p3, gr3, l3, f3)] = c;
-    let (mut d0, n) = Dyn::new(s0, r0, g0, b0, p0, dt, gr0, l0, position, f0);
-    let (mut d1, _) = Dyn::new(s1, r1, g1, b1, p1, dt, gr1, l1, position, f1);
-    let (mut d2, _) = Dyn::new(s2, r2, g2, b2, p2, dt, gr2, l2, position, f2);
-    let (mut d3, _) = Dyn::new(s3, r3, g3, b3, p3, dt, gr3, l3, position, f3);
+    let (mut d0, n) = Dyn::new(s0, r0, g0, b0, p0, dt, gr0, l0, position, f0, fx);
+    let (mut d1, _) = Dyn::new(s1, r1, g1, b1, p1, dt, gr1, l1, position, f1, fx);
+    let (mut d2, _) = Dyn::new(s2, r2, g2, b2, p2, dt, gr2, l2, position, f2, fx);
+    let (mut d3, _) = Dyn::new(s3, r3, g3, b3, p3, dt, gr3, l3, position, f3, fx);
     for _ in 0..n { d0.substep(); d1.substep(); d2.substep(); d3.substep(); }
     d0.finish(s0); d1.finish(s1); d2.finish(s2); d3.finish(s3);
 }
@@ -98,7 +109,7 @@ pub fn step_dynamics4(c: [(&mut DynState, f64, f64, f64, &VehicleParams, f64, bo
 #[derive(Clone, Copy)]
 struct Dyn<'a> {
     h: f64, m: f64, iz: f64, a: f64, b: f64, l: f64, hcg: f64, cf: f64, cr: f64, mu: f64, k_slide: f64, crr_mul: f64,
-    sr: f64, g_: f64, b_: f64, cos_g: f64, sin_g: f64, wg: f64, tgt: f64, k_lag: f64, slew: f64, locked: bool, position: bool,
+    sr: f64, g_: f64, b_: f64, cos_g: f64, sin_g: f64, wg: f64, tgt: f64, k_lag: f64, slew: f64, locked: bool, position: bool, hold: bool, rev: bool, bd: f64,
     p: &'a VehicleParams, grade: f64,
     u: f64, v: f64, r: f64, steer: f64, ax: f64, hr: f64, lat: f64, s: f64, sl: f64, fuel: f64, power: f64,
     m_steer: f64, m_cd: f64, m_sd: f64, m_hr: f64, m_ch: f64, m_sh: f64,
@@ -107,7 +118,10 @@ struct Dyn<'a> {
 impl<'a> Dyn<'a> {
     #[allow(clippy::too_many_arguments)]
     #[inline(always)]
-    fn new(st: &DynState, steer_rate: f64, gas: f64, brake: f64, p: &'a VehicleParams, dt: f64, grade: f64, locked: bool, position: bool, surf: Option<Surf>) -> (Dyn<'a>, i64) {
+    fn new(st: &DynState, steer_rate: f64, gas: f64, brake: f64, p: &'a VehicleParams, dt: f64, grade: f64, locked: bool, position: bool, surf: Option<Surf>, fx: Fixes) -> (Dyn<'a>, i64) {
+    let (hold, rev) = (fx.hold, fx.reverse);
+    // heavy-vehicle brake calibration (SimOpts::heavy_brakes): trucks / buses 100-0 km/h in about 80 m (FMVSS 121)
+    let bd = if fx.heavy_brakes && p.m > 5000.0 { HEAVY_BRAKE_DECEL } else { p.brake_decel };
     let n = jm::max(1.0, jm::ceil(dt / PHYS_DT - 1e-9));
     let h = dt / n;
     let n = n as i64;
@@ -129,13 +143,13 @@ impl<'a> Dyn<'a> {
     // memo of cos/sin(steer): the same input gives the same bits, so reuse while the wheel angle is unchanged
     let (mut m_steer, mut m_cd, mut m_sd) = (f64::NAN, 0.0, 0.0);
     let (mut m_hr, mut m_ch, mut m_sh) = (f64::NAN, 0.0, 0.0);
-        (Dyn { h, m, iz, a, b, l, hcg, cf, cr, mu, k_slide, crr_mul, sr, g_, b_, cos_g, sin_g, wg, tgt, k_lag, slew, locked, position, p, grade, u, v, r, steer, ax, hr, lat, s, sl, fuel, power, m_steer, m_cd, m_sd, m_hr, m_ch, m_sh }, n)
+        (Dyn { h, m, iz, a, b, l, hcg, cf, cr, mu, k_slide, crr_mul, sr, g_, b_, cos_g, sin_g, wg, tgt, k_lag, slew, locked, position, hold, rev, bd, p, grade, u, v, r, steer, ax, hr, lat, s, sl, fuel, power, m_steer, m_cd, m_sd, m_hr, m_ch, m_sh }, n)
     }
 
     #[inline(always)]
     #[allow(unused_assignments)]
     fn substep(&mut self) {
-        let Dyn { h, m, iz, a, b, l, hcg, cf, cr, mu, k_slide, crr_mul, sr, g_, b_, cos_g, sin_g, wg, tgt, k_lag, slew, locked, position, p, grade, .. } = *self;
+        let Dyn { h, m, iz, a, b, l, hcg, cf, cr, mu, k_slide, crr_mul, sr, g_, b_, cos_g, sin_g, wg, tgt, k_lag, slew, locked, position, hold, rev, bd, p, grade, .. } = *self;
         let Dyn { mut u, mut v, mut r, mut steer, mut ax, mut hr, mut lat, mut s, mut sl, mut fuel, mut power, mut m_steer, mut m_cd, mut m_sd, mut m_hr, mut m_ch, mut m_sh, .. } = *self;
         if !locked {
             if position { sl += (tgt - sl) * k_lag; let d = sl - steer; steer += if d > slew { slew } else if d < -slew { -slew } else { d }; }
@@ -149,7 +163,7 @@ impl<'a> Dyn<'a> {
         if fzr < fl { fzr = fl; }
         let fd = if locked || u >= p.vmax { 0.0 } else { g_ * jm::min(p.f0, p.pmax / jm::max(u, 0.1)) };
         let moving = u > 0.02;
-        let fb = (if locked { 1.0 } else { b_ }) * m * p.brake_decel;
+        let fb = (if locked { 1.0 } else { b_ }) * m * bd;
         let (mut fxf, mut fxr) = match p.drive { Drive::Front => (fd, 0.0), Drive::Rear => (0.0, fd), Drive::All => { let f = fd * fzf / (fzf + fzr); (f, fd - f) } };
         let mut share_f = p.brake_front;
         if !locked { let ideal = fzf / (fzf + fzr) + EBD_MARGIN; if ideal > share_f { share_f = if ideal > 0.95 { 0.95 } else { ideal }; } }
@@ -206,10 +220,23 @@ impl<'a> Dyn<'a> {
         let (cd, sd) = (m_cd, m_sd);
         let fx_body = fxf * cd - fyf * sd + fxr - res;
         let fy_body = fxf * sd + fyf * cd + fyr;
-        let du = (fx_body / m + v * r) * h;
-        let mut un = u + du;
-        if un < 0.0 { un = 0.0; }
-        let mut vn = v + (fy_body / m - u * r) * h;
+        // impact_reverse wrecks (locked, u may be < 0): the body-frame rotation terms (v r, -u r) are applied as an exact
+        // rotation. Explicit Euler grows |(u, v)| by sqrt(1 + (r h)^2) per sub-step, which a spinning wreck (r ~ 15 rad/s)
+        // turns into a runaway; the JS's u >= 0 clamp used to hide it.
+        let exact = rev && locked;
+        let (ur, vr) = if exact { let (c, sn) = (jm::cos(r * h), jm::sin(r * h)); (u * c + v * sn, -u * sn + v * c) } else { (u, v) };
+        let du = if exact { 0.0 } else { (fx_body / m + v * r) * h };
+        let mut un = if exact { ur + fx_body / m * h } else { u + du };
+        // impact_reverse: a wreck (locked wheels) may slide backwards after an impact; else no reverse (the JS)
+        if un < 0.0 && !(rev && locked) { un = 0.0; }
+        // brake hold (SimOpts::brake_hold): JS brakes only cancel the drive below 0.02 m/s, so a residual speed creeps
+        if hold && !locked && u <= 0.05 {
+            // the brake plus rolling resistance (which the JS switches off below 0.05 m/s) hold the car at 0 whenever
+            // they exceed the drive minus grade force (static friction)
+            let roll = p.crr * crr_mul * m * G * cos_g;
+            if fb + roll >= jm::abs(fd - wg) && un <= 0.05 { un = 0.0; }
+        }
+        let mut vn = if exact { vr + fy_body / m * h } else { v + (fy_body / m - u * r) * h };
         let mut rn = r + ((a * (fxf * sd + fyf * cd) - b * fyr) / iz) * h;
         if un < KIN_BLEND_HI && !locked {
             let lam = if un <= KIN_BLEND_LO { 0.0 } else { (un - KIN_BLEND_LO) / (KIN_BLEND_HI - KIN_BLEND_LO) };
@@ -218,7 +245,7 @@ impl<'a> Dyn<'a> {
             rn = lam * rn + (1.0 - lam) * rk;
             vn = lam * vn + (1.0 - lam) * vk;
         }
-        if locked && un < 0.05 && jm::abs(vn) < 0.05 { un = 0.0; vn = 0.0; rn *= 0.5; if jm::abs(rn) < 0.01 { rn = 0.0; } }
+        if locked && (if rev { jm::abs(un) } else { un }) < 0.05 && jm::abs(vn) < 0.05 { un = 0.0; vn = 0.0; rn *= 0.5; if jm::abs(rn) < 0.01 { rn = 0.0; } }
         ax = (un - u) / h;
         u = un; v = vn; r = rn;
         hr += r * h;

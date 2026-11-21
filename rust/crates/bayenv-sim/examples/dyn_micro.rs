@@ -13,7 +13,7 @@ fn main() {
     let t1 = t.elapsed().as_secs_f64() / n as f64;
     let t = Instant::now();
     for _ in 0..n / 4 { let (mut a, mut b, mut c, mut d) = (st(0), st(1), st(2), st(3));
-        step_dynamics4([(&mut a, 0.01, 0.3, 0.0, p, 0.0, false, None), (&mut b, 0.01, 0.3, 0.0, p, 0.0, false, None), (&mut c, 0.01, 0.3, 0.0, p, 0.0, false, None), (&mut d, 0.01, 0.3, 0.0, p, 0.0, false, None)], 0.1, true); acc += a.u + d.u; }
+        step_dynamics4([(&mut a, 0.01, 0.3, 0.0, p, 0.0, false, None), (&mut b, 0.01, 0.3, 0.0, p, 0.0, false, None), (&mut c, 0.01, 0.3, 0.0, p, 0.0, false, None), (&mut d, 0.01, 0.3, 0.0, p, 0.0, false, None)], 0.1, true, Default::default()); acc += a.u + d.u; }
     let t4 = t.elapsed().as_secs_f64() / n as f64;
     // the transcendental calls of one car-step: 10 substeps x (2 atan + 2 tanh + cos + sin)
     let m = n * 10;

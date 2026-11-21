@@ -166,7 +166,9 @@ impl Env {
     /// Env(data_dir, n_cars=10000, seed=1, backend="gpu" | "cpu", capacity=None, obs="v2", dt=0.05, start_time=None (gpu 05:00, cpu first departure - 60 s),
     ///     accidents=True, collisions=True, fuel=True, controls=True, junctions=True, steer="position", decide_every=1,
     ///     keep_events=False, population=None, pop_seed=42, streaming=False, return_trips=True, stations=True,
-    ///     refuel_budget_ms=None, cpu_connector_join=True, contact_tangent=True, route_threads=None)
+    ///     refuel_budget_ms=None, cpu_connector_join=True, contact_tangent=True, replan_at_missed_event=True, wreck_real_mass=True,
+    ///     curvature_dynamics=False, wreck_end_stop=True, contact_episodes=True, connector_barrier=True, brake_hold=True,
+    ///     heavy_brakes=True, barrier_soft_push=True, impact_reverse=True, route_threads=None)
     /// Loads the world (~0.1 s warm), builds the GPU buffers and scatters `n_cars` cars at rest on random routes
     /// (seeded; the JS GPUSim.scatter placement). Actions start at [0, 0, 0] for every slot.
     /// population=N (gpu): instead of the scatter, N commuters (src/sim/population.js, seed pop_seed, generated natively,
@@ -184,14 +186,21 @@ impl Env {
     /// (SimOpts::replan_at_missed_event, rust/docs/crash-divergence.md cause A). False = the JS CPU sim's model.
     /// route_threads (streaming): worker threads that route departures up to 300 sim s ahead (default: the machine's
     /// cores; 0 = serial A* at departure). Every value gives the same routes and the same spawn steps.
+    /// wreck_real_mass, curvature_dynamics, wreck_end_stop, contact_episodes, connector_barrier, brake_hold, heavy_brakes,
+    /// barrier_soft_push, impact_reverse (cpu and gpu, default True except curvature_dynamics=False): the physics-audit model fixes
+    /// (rust/docs/physics-audit.md; SimOpts / GpuOptions fields of the same name). All False (and cpu_connector_join =
+    /// contact_tangent = False on the gpu) = the JS model. dt must be finite and > 0.
     #[new]
     #[pyo3(signature = (data_dir, n_cars=10000, seed=1, backend="gpu", capacity=None, obs="v2", dt=0.05, start_time=None,
         accidents=true, collisions=true, fuel=true, controls=true, junctions=true, steer="position", decide_every=1, keep_events=false,
-        population=None, pop_seed=42.0, streaming=false, return_trips=true, stations=true, refuel_budget_ms=None, crash_share=false, missed_at_out_edge=false, cpu_connector_join=true, contact_tangent=true, replan_at_missed_event=true, route_threads=None))]
+        population=None, pop_seed=42.0, streaming=false, return_trips=true, stations=true, refuel_budget_ms=None, crash_share=false, missed_at_out_edge=false, cpu_connector_join=true, contact_tangent=true, replan_at_missed_event=true, wreck_real_mass=true, curvature_dynamics=false, wreck_end_stop=true, contact_episodes=true, connector_barrier=true, brake_hold=true, heavy_brakes=true, barrier_soft_push=true, impact_reverse=true, route_threads=None))]
     #[allow(clippy::too_many_arguments)]
     fn new(py: Python<'_>, data_dir: &str, n_cars: usize, seed: u32, backend: &str, capacity: Option<usize>, obs: &str, dt: f64, start_time: Option<f64>,
            accidents: bool, collisions: bool, fuel: bool, controls: bool, junctions: bool, steer: &str, decide_every: u32, keep_events: bool,
-           population: Option<usize>, pop_seed: f64, streaming: bool, return_trips: bool, stations: bool, refuel_budget_ms: Option<f64>, crash_share: bool, missed_at_out_edge: bool, cpu_connector_join: bool, contact_tangent: bool, replan_at_missed_event: bool, route_threads: Option<usize>) -> PyResult<Env> {
+           population: Option<usize>, pop_seed: f64, streaming: bool, return_trips: bool, stations: bool, refuel_budget_ms: Option<f64>, crash_share: bool, missed_at_out_edge: bool, cpu_connector_join: bool, contact_tangent: bool, replan_at_missed_event: bool,
+           wreck_real_mass: bool, curvature_dynamics: bool, wreck_end_stop: bool, contact_episodes: bool, connector_barrier: bool, brake_hold: bool, heavy_brakes: bool, barrier_soft_push: bool, impact_reverse: bool, route_threads: Option<usize>) -> PyResult<Env> {
+        check_dt(dt)?;
+        let fx = PhysFixes { wreck_real_mass, curvature_dynamics, wreck_end_stop, contact_episodes, connector_barrier, brake_hold, heavy_brakes, barrier_soft_push, impact_reverse };
         if backend == "cpu" {
             let cobs = match obs { "v2" => CpuObs::V2, "v3" => CpuObs::V3, "flat" => CpuObs::Flat, "none" => CpuObs::None, _ => return Err(PyValueError::new_err("obs must be 'v2', 'v3', 'flat' or 'none'")) };
             // CPU reference sim (crate bayenv-sim): commuter population (population.js, n_cars commuters, seed),
@@ -201,7 +210,7 @@ impl Env {
                 let world = Arc::new(World::load(&data).map_err(|e| format!("world: {e}"))?);
                 let sw = Arc::new(bayenv_sim::world::World::from_bayenv(&world));
                 let pop = Arc::new(bayenv_sim::population::Population::generate_like_env(&sw, "real", n_cars, seed as f64, Some(std::path::Path::new(&data)))?);
-                let mut opts = bayenv_sim::sim::SimOpts::default(); opts.dt = dt; opts.seed = seed as f64; opts.fuel = fuel_on; opts.replan_at_missed_event = replan_at_missed_event;
+                let mut opts = bayenv_sim::sim::SimOpts::default(); opts.dt = dt; opts.seed = seed as f64; opts.fuel = fuel_on; opts.replan_at_missed_event = replan_at_missed_event; fx.sim(&mut opts);
                 let cfg = bayenv_sim::env::EnvConfig { opts, start_time, static_obstacles: Vec::new(), scenario_obstacles: Vec::new(), obstacles: None };
                 let env = bayenv_sim::env::Env::new(sw, pop, cfg, Box::new(|w| bayenv_sim::harness::router_for(&w)));
                 Ok((world, env))
@@ -225,6 +234,7 @@ impl Env {
             let mut o = GpuOptions { capacity: cap, dt, start_time: start_time.unwrap_or(18000.0), seed, obs: obs_mode, steer_rate, decide_every, controls, junctions, keep_events, record_share: crash_share, missed_at_out_edge,
                 return_trips, refuel_budget_ms: refuel_budget_ms.unwrap_or(f64::INFINITY), cpu_connector_join, contact_tangent, ..Default::default() };
             if let Some(t) = route_threads { o.route_threads = t; }
+            fx.gpu(&mut o);
             o.features.accidents = accidents; o.features.collisions = collisions; o.features.fuel = fuel;
             let mut sim = bayenv_gpu::env::create(world.clone(), o)?;
             match population {
@@ -634,10 +644,13 @@ impl VecEnv {
 #[pymethods]
 impl VecEnv {
     #[new]
-    #[pyo3(signature = (data_dir, n_envs, n_cars=1000, seed=1, capacity=None, obs="v2", dt=0.05, start_time=None, accidents=true, collisions=true, fuel=true, backend="gpu", cpu_connector_join=true, contact_tangent=true))]
+    #[pyo3(signature = (data_dir, n_envs, n_cars=1000, seed=1, capacity=None, obs="v2", dt=0.05, start_time=None, accidents=true, collisions=true, fuel=true, backend="gpu", cpu_connector_join=true, contact_tangent=true, wreck_real_mass=true, curvature_dynamics=false, wreck_end_stop=true, contact_episodes=true, connector_barrier=true, brake_hold=true, heavy_brakes=true, barrier_soft_push=true, impact_reverse=true))]
     #[allow(clippy::too_many_arguments)]
     fn new(py: Python<'_>, data_dir: &str, n_envs: usize, n_cars: usize, seed: u32, capacity: Option<usize>, obs: &str, dt: f64, start_time: Option<f64>,
-           accidents: bool, collisions: bool, fuel: bool, backend: &str, cpu_connector_join: bool, contact_tangent: bool) -> PyResult<VecEnv> {
+           accidents: bool, collisions: bool, fuel: bool, backend: &str, cpu_connector_join: bool, contact_tangent: bool,
+           wreck_real_mass: bool, curvature_dynamics: bool, wreck_end_stop: bool, contact_episodes: bool, connector_barrier: bool, brake_hold: bool, heavy_brakes: bool, barrier_soft_push: bool, impact_reverse: bool) -> PyResult<VecEnv> {
+        check_dt(dt)?;
+        let fx = PhysFixes { wreck_real_mass, curvature_dynamics, wreck_end_stop, contact_episodes, connector_barrier, brake_hold, heavy_brakes, barrier_soft_push, impact_reverse };
         if backend == "cpu" {
             let cobs = match obs { "v2" => CpuObs::V2, "v3" => CpuObs::V3, "flat" => CpuObs::Flat, "none" => CpuObs::None, _ => return Err(PyValueError::new_err("obs must be 'v2', 'v3', 'flat' or 'none'")) };
             let data = data_dir.to_string();
@@ -645,7 +658,7 @@ impl VecEnv {
                 let world = World::load(&data).map_err(|e| format!("world: {e}"))?;
                 let sw = Arc::new(bayenv_sim::world::World::from_bayenv(&world));
                 use rayon::prelude::*;
-                (0..n_envs).into_par_iter().map(|i| make_cpu_env(&sw, &data, n_cars, (seed + i as u32) as f64, dt, start_time, fuel)).collect()
+                (0..n_envs).into_par_iter().map(|i| make_cpu_env(&sw, &data, n_cars, (seed + i as u32) as f64, dt, start_time, fuel, fx)).collect()
             });
             let envs = res.map_err(PyRuntimeError::new_err)?;
             let _ = (capacity, accidents, collisions);
@@ -658,6 +671,7 @@ impl VecEnv {
         let res: Result<(Vec<GpuSim>, usize), String> = py.detach(move || {
             let world = Arc::new(World::load(&data).map_err(|e| format!("world: {e}"))?);
             let mut o = GpuOptions { capacity: cap, dt, start_time, obs: obs_mode, cpu_connector_join, contact_tangent, ..Default::default() };
+            fx.gpu(&mut o);
             o.features.accidents = accidents; o.features.collisions = collisions; o.features.fuel = fuel;
             let mut sims = bayenv_gpu::env::create_many(world, &o, n_envs)?;
             let mut placed = usize::MAX;
@@ -707,6 +721,16 @@ impl VecEnv {
         if self.obs_size == 0 { return Err(PyRuntimeError::new_err("created with obs='none'")); }
         let fmt = parse_fmt(dtype)?;
         if lag > 1 { return Err(PyValueError::new_err("lag must be 0 or 1")); }
+        if !self.cpu.is_empty() && lag == 0 {
+            // CPU: each env applies its actions and steps in its own pool task (no serial act pass)
+            if let Some(a) = actions {
+                let sh = a.shape(); if sh[0] != self.cpu.len() || sh[2] != 3 { return Err(PyValueError::new_err("actions must have shape (n_envs, N, 3)")); }
+                let sl = a.as_slice().map_err(|_| PyValueError::new_err("actions must be C-contiguous float32"))?; let per = sh[1] * 3;
+                use rayon::prelude::*; let c = &mut self.cpu;
+                py.detach(|| c.par_iter_mut().enumerate().for_each(|(i, e)| { let e = e.get_mut().unwrap(); e.env.act_rows(&sl[i * per..(i + 1) * per], 0); e.step(k); }));
+            } else { self.step(py, k); }
+            return self.cpu_obs(py, out, fmt);
+        }
         if let Some(a) = actions { self.act(a)?; }
         if !self.cpu.is_empty() {
             let o = if lag == 1 { Some(self.cpu_obs(py, None, fmt)?) } else { None };
@@ -770,9 +794,25 @@ impl VecEnv {
 }
 
 /// One CPU env on a shared (converted) world: population.js commuters (n, seed), external actions.
-fn make_cpu_env(sw: &Arc<bayenv_sim::world::World>, data: &str, n_cars: usize, seed: f64, dt: f64, start_time: Option<f64>, fuel: bool) -> Result<bayenv_sim::env::Env, String> {
+/// The physics-audit model fixes (rust/docs/physics-audit.md), one kwarg each, default True, the same name on both
+/// backends: bayenv-sim SimOpts / bayenv-gpu GpuOptions fields of the same name.
+#[derive(Clone, Copy)]
+struct PhysFixes { wreck_real_mass: bool, curvature_dynamics: bool, wreck_end_stop: bool, contact_episodes: bool, connector_barrier: bool, brake_hold: bool, heavy_brakes: bool, barrier_soft_push: bool, impact_reverse: bool }
+impl PhysFixes {
+    fn sim(&self, o: &mut bayenv_sim::sim::SimOpts) {
+        o.wreck_real_mass = self.wreck_real_mass; o.curvature_dynamics = self.curvature_dynamics; o.wreck_end_stop = self.wreck_end_stop; o.contact_episodes = self.contact_episodes;
+        o.connector_barrier = self.connector_barrier; o.brake_hold = self.brake_hold; o.heavy_brakes = self.heavy_brakes; o.barrier_soft_push = self.barrier_soft_push; o.impact_reverse = self.impact_reverse;
+    }
+    fn gpu(&self, o: &mut GpuOptions) {
+        o.wreck_real_mass = self.wreck_real_mass; o.curvature_dynamics = self.curvature_dynamics; o.wreck_end_stop = self.wreck_end_stop; o.contact_episodes = self.contact_episodes;
+        o.connector_barrier = self.connector_barrier; o.brake_hold = self.brake_hold; o.heavy_brakes = self.heavy_brakes; o.barrier_soft_push = self.barrier_soft_push; o.impact_reverse = self.impact_reverse;
+    }
+}
+fn check_dt(dt: f64) -> PyResult<()> { if dt.is_finite() && dt > 0.0 { Ok(()) } else { Err(PyValueError::new_err(format!("dt must be finite and > 0 (got {dt})"))) } }
+
+fn make_cpu_env(sw: &Arc<bayenv_sim::world::World>, data: &str, n_cars: usize, seed: f64, dt: f64, start_time: Option<f64>, fuel: bool, fx: PhysFixes) -> Result<bayenv_sim::env::Env, String> {
     let pop = Arc::new(bayenv_sim::population::Population::generate_like_env(sw, "real", n_cars, seed, Some(std::path::Path::new(data)))?);
-    let mut opts = bayenv_sim::sim::SimOpts::default(); opts.dt = dt; opts.seed = seed; opts.fuel = fuel;
+    let mut opts = bayenv_sim::sim::SimOpts::default(); opts.dt = dt; opts.seed = seed; opts.fuel = fuel; fx.sim(&mut opts);
     let cfg = bayenv_sim::env::EnvConfig { opts, start_time, static_obstacles: Vec::new(), scenario_obstacles: Vec::new(), obstacles: None };
     Ok(bayenv_sim::env::Env::new(sw.clone(), pop, cfg, Box::new(|w| bayenv_sim::harness::router_for(&w))))
 }

@@ -94,6 +94,32 @@ pub struct GpuOptions {
     /// courtesy_order, junction_order, jyield_order, hash_order; rust/docs/determinism.md). Default ON; false = the JS
     /// kernels. JS: off
     pub deterministic_leaders: bool,
+    /// MODEL fix (default ON; false = the JS kernels; kernels/model_contacts.wgsl): a crashed car at rest keeps its real
+    /// mass and inertia in car-car contacts (the JS made it immovable). bayenv-sim SimOpts::wreck_real_mass
+    pub wreck_real_mass: bool,
+    /// MODEL fix (default OFF, opt-in; kernels/model_integrate.wgsl): the world heading changes by the car's own yaw only
+    /// (the JS road frame turned cars through every curve). SimOpts::curvature_dynamics (also default off)
+    pub curvature_dynamics: bool,
+    /// MODEL fix (default ON; kernels/model_integrate.wgsl): a sliding wreck clamped at the end of its edge / connector
+    /// gets speed 0. SimOpts::wreck_end_stop
+    pub wreck_end_stop: bool,
+    /// MODEL fix (default ON; kernels/model_contacts.wgsl): contact events per impact step of a contact episode, with the
+    /// episode's accumulated delta-v (the JS reported the first touch only). SimOpts::contact_episodes
+    pub contact_episodes: bool,
+    /// MODEL fix (default ON; kernels/model_contacts.wgsl): junction connectors have the in-edge's kerbs as lateral
+    /// walls. SimOpts::connector_barrier
+    pub connector_barrier: bool,
+    /// MODEL fix (default ON; kernels/model_integrate.wgsl): brakes + rolling resistance hold a car at 0 below 0.05 m/s.
+    /// SimOpts::brake_hold
+    pub brake_hold: bool,
+    /// MODEL fix (default ON; kernels/model_integrate.wgsl): vehicles over 5 t brake at 4.7 m/s^2. SimOpts::heavy_brakes
+    pub heavy_brakes: bool,
+    /// MODEL fix (default ON; kernels/model_contacts.wgsl): barrier position correction <= 0.25 m per step.
+    /// SimOpts::barrier_soft_push
+    pub barrier_soft_push: bool,
+    /// MODEL fix (default ON; kernels/model_contacts.wgsl + model_integrate.wgsl): wrecks keep backward speed after an
+    /// impact (a driving car only if the contact disables it). SimOpts::impact_reverse
+    pub impact_reverse: bool,
     /// lane / hash-cell starts with kernels/scan4k.wgsl (4096 per workgroup, the count clears folded into the
     /// scan: 12 -> 6 dispatches; identical starts). JS: off
     pub fast_scan: bool,
@@ -130,6 +156,9 @@ impl GpuOptions {
     /// Set a host optimisation flag by name (indirect_resolve, fused_resolve, sorted_order, profile).
     pub fn set_flag(&mut self, name: &str, on: bool) -> Result<(), String> {
         match name { "indirect_resolve" => self.indirect_resolve = on, "fused_resolve" => self.fused_resolve = on, "sorted_order" => self.sorted_order = on, "fast_scan" => self.fast_scan = on, "fast_search" => self.fast_search = on, "zero_init_workgroup" => self.zero_init_workgroup = on, "cpu_connector_join" => self.cpu_connector_join = on, "contact_tangent" => self.contact_tangent = on, "deterministic_contacts" => self.deterministic_contacts = on, "deterministic_spawn" => self.deterministic_spawn = on, "deterministic_events" => self.deterministic_events = on, "deterministic_leaders" => self.deterministic_leaders = on,
+            "wreck_real_mass" => self.wreck_real_mass = on, "curvature_dynamics" => self.curvature_dynamics = on, "wreck_end_stop" => self.wreck_end_stop = on,
+            "contact_episodes" => self.contact_episodes = on, "connector_barrier" => self.connector_barrier = on, "brake_hold" => self.brake_hold = on,
+            "heavy_brakes" => self.heavy_brakes = on, "barrier_soft_push" => self.barrier_soft_push = on, "impact_reverse" => self.impact_reverse = on,
             "profile" => self.profile = on, _ => return Err(format!("unknown GpuOptions flag {name}")) }
         Ok(())
     }
@@ -138,6 +167,18 @@ impl GpuOptions {
         if let Ok(v) = std::env::var("BAYENV_GPU_OPTS") { for kv in v.split(',').filter(|x| !x.is_empty()) {
             let (k, b) = kv.split_once('=').unwrap_or((kv, "1")); self.set_flag(k.trim(), b.trim() != "0").unwrap();
         } }
+    }
+    /// The model-fix flags (kernels.rs `model_patches`).
+    pub fn model_fixes(&self) -> kernels::ModelFixes {
+        kernels::ModelFixes { cpu_connector_join: self.cpu_connector_join, contact_tangent: self.contact_tangent, wreck_real_mass: self.wreck_real_mass,
+            curvature_dynamics: self.curvature_dynamics, wreck_end_stop: self.wreck_end_stop, contact_episodes: self.contact_episodes, connector_barrier: self.connector_barrier,
+            brake_hold: self.brake_hold, heavy_brakes: self.heavy_brakes, barrier_soft_push: self.barrier_soft_push, impact_reverse: self.impact_reverse }
+    }
+    /// Every model fix off: the JS kernels (oracle checks, legacy checkpoints).
+    pub fn js_model(mut self) -> GpuOptions {
+        self.cpu_connector_join = false; self.contact_tangent = false; self.wreck_real_mass = false; self.curvature_dynamics = false; self.wreck_end_stop = false;
+        self.contact_episodes = false; self.connector_barrier = false; self.brake_hold = false; self.heavy_brakes = false; self.barrier_soft_push = false; self.impact_reverse = false;
+        self
     }
     /// Optional device features these options use (timestamp queries when profiling).
     pub fn gpu_features(&self) -> wgpu::Features {
@@ -148,7 +189,7 @@ impl Default for GpuOptions {
     fn default() -> Self {
         GpuOptions { capacity: 131072, dt: 0.05, start_time: 5.0 * 3600.0, seed: 1, obs: ObsMode::V2, steer_rate: false, decide_every: 1, features: Features::default(),
             controls: true, junctions: true, table_bits: 18, contact_cap: 131072, ev_cap: 16384, spawn_queue: 16384, op_cap: 16384, max_blocks: 4096, route_slack: 1 << 22,
-            resolve_rounds: 12, progress_weight: 1.0, jerk_weight: 0.5, jerk_reward: false, grade_obs: true, squeeze_delay: 15.0 * 60.0, deadlock_break: 0, reroute: true, keep_events: false, record_events: true, record_share: false, missed_at_out_edge: false, indirect_resolve: true, fused_resolve: true, sorted_order: true, fast_scan: true, fast_search: true, cpu_connector_join: true, contact_tangent: true, deterministic_contacts: true, deterministic_spawn: true, deterministic_events: true, deterministic_leaders: true, zero_init_workgroup: false, profile: false, return_trips: true, refuel_budget_ms: f64::INFINITY,
+            resolve_rounds: 12, progress_weight: 1.0, jerk_weight: 0.5, jerk_reward: false, grade_obs: true, squeeze_delay: 15.0 * 60.0, deadlock_break: 0, reroute: true, keep_events: false, record_events: true, record_share: false, missed_at_out_edge: false, indirect_resolve: true, fused_resolve: true, sorted_order: true, fast_scan: true, fast_search: true, cpu_connector_join: true, contact_tangent: true, deterministic_contacts: true, deterministic_spawn: true, deterministic_events: true, deterministic_leaders: true, wreck_real_mass: true, curvature_dynamics: false, wreck_end_stop: true, contact_episodes: true, connector_barrier: true, brake_hold: true, heavy_brakes: true, barrier_soft_push: true, impact_reverse: true, zero_init_workgroup: false, profile: false, return_trips: true, refuel_budget_ms: f64::INFINITY,
             route_threads: std::thread::available_parallelism().map_or(1, |n| n.get()), route_ahead: 300.0, route_cache: 0 }
     }
 }
@@ -307,10 +348,14 @@ fn bf(u: u32) -> f64 { f32::from_bits(u) as f64 }
 
 impl GpuSim {
     /// Build on the given world + packed blob (see `crate::pack::build_world_blob`).
-    pub fn with_blob(world: Arc<World>, blob: WorldBlob, opts: GpuOptions) -> Result<GpuSim, String> { Self::with_blob_on(Gpu::new_with(opts.gpu_features())?, world, blob, opts) }
+    pub fn with_blob(world: Arc<World>, blob: WorldBlob, opts: GpuOptions) -> Result<GpuSim, String> {
+        if !(opts.dt.is_finite() && opts.dt > 0.0) { return Err(format!("GpuSim: dt must be finite and > 0 (got {})", opts.dt)); }
+        Self::with_blob_on(Gpu::new_with(opts.gpu_features())?, world, blob, opts)
+    }
 
     /// As `with_blob` on a given context (e.g. `other_sim.gpu.share()`: several sims on one device).
     pub fn with_blob_on(gpu: Gpu, world: Arc<World>, blob: WorldBlob, opts: GpuOptions) -> Result<GpuSim, String> {
+        if !(opts.dt.is_finite() && opts.dt > 0.0) { return Err(format!("GpuSim: dt must be finite and > 0 (got {})", opts.dt)); }
         let mut gpu = gpu;
         let cap = opts.capacity;
         let obs_size = opts.obs.size();
@@ -330,7 +375,9 @@ impl GpuSim {
         gpu.storage("hcounts", ((t_size + 1) * 4) as u64, None, wgpu::BufferUsages::empty());
         gpu.storage("hitems", (cap * 4) as u64, None, wgpu::BufferUsages::empty());
         gpu.storage("hidx", (cap * 8) as u64, None, wgpu::BufferUsages::empty());
-        gpu.storage("contacts", ((4 + opts.contact_cap * 8 + 262144 * 4 + cap) * 4) as u64, None, wgpu::BufferUsages::empty());
+        // + contact_episodes accumulators (kernels/model_contacts.wgsl epBase: cap barrier words, 2 per pair-table entry)
+        let ep_words = if opts.contact_episodes { cap + 262144 * 2 } else { 0 };
+        gpu.storage("contacts", ((4 + opts.contact_cap * 8 + 262144 * 4 + cap + ep_words) * 4) as u64, None, wgpu::BufferUsages::empty());
         // deterministic_spawn: + bids (K), lane choices per slot (cap) and per queue entry (spawn_queue); kernels/spawn_order.wgsl
         let lc_words = if opts.deterministic_spawn { 2 * blob.k + cap + opts.spawn_queue } else { blob.k };
         gpu.storage("laneClaim", (lc_words.max(1) * 4) as u64, None, wgpu::BufferUsages::empty());
@@ -426,15 +473,15 @@ impl GpuSim {
         // compile in parallel (naga + Metal pipeline creation), results in spec order
         let gpu = &self.gpu; let obs = self.opts.obs; let cap = self.cap;
         let out: Vec<Result<Kernel, String>> = std::thread::scope(|s| {
-            let zi = self.opts.zero_init_workgroup; let fsr = self.fast_search_ok; let cj = self.opts.cpu_connector_join; let ct = self.opts.contact_tangent; let oo = &self.opts;
-            let hs: Vec<_> = specs.iter().map(|sp| s.spawn(move || { let src = kernels::order_patches(kernels::model_patches(kernels::source(sp, obs, cap), sp.file, cj, ct), sp.file, oo); gpu.kernel_with(sp.label, &if fsr { kernels::patch(&src) } else { src }, sp.entry, zi) })).collect();
+            let zi = self.opts.zero_init_workgroup; let fsr = self.fast_search_ok; let mf = self.opts.model_fixes(); let oo = &self.opts;
+            let hs: Vec<_> = specs.iter().map(|sp| s.spawn(move || { let src = kernels::order_patches(kernels::model_patches(kernels::source(sp, obs, cap), sp.file, &mf), sp.file, oo); gpu.kernel_with(sp.label, &if fsr { kernels::patch(&src) } else { src }, sp.entry, zi) })).collect();
             hs.into_iter().map(|h| h.join().unwrap()).collect()
         });
         for (sp, k) in specs.iter().zip(out) { self.k.insert(sp.label, k?); }
         if self.opts.deterministic_spawn {
             for (l, e) in [("spawnClaim", "spawnClaim"), ("spawnCommit", "spawnCommit"), ("leaveClaim", "leaveClaim"), ("leaveCommit", "leaveCommit")] {
                 let spec = kernels::KernelSpec { label: l, file: "spawn", entry: e, defines: true };
-                let src = self.patched(kernels::order_patches(kernels::model_patches(kernels::source(&spec, self.opts.obs, self.cap), "spawn", false, false), "spawn", &self.opts));
+                let src = self.patched(kernels::order_patches(kernels::model_patches(kernels::source(&spec, self.opts.obs, self.cap), "spawn", &kernels::ModelFixes::default()), "spawn", &self.opts));
                 self.k.insert(l, self.gpu.kernel_with(l, &src, e, self.opts.zero_init_workgroup)?);
             }
         }
@@ -458,7 +505,7 @@ impl GpuSim {
                 if !only.as_ref().map_or(on, |o| o.split(',').any(|x| x == l)) { continue; }
                 if !self.k.contains_key(l) { continue; }
                 let spec = kernels::KernelSpec { label: sl, file: self.kernel_file(file), entry, defines: true };
-                let src = kernels::sorted_source(&self.patched(kernels::order_patches(kernels::model_patches(kernels::source(&spec, self.opts.obs, self.cap), spec.file, self.opts.cpu_connector_join, self.opts.contact_tangent), spec.file, &self.opts)), entry, sorted_wg(l, wg));
+                let src = kernels::sorted_source(&self.patched(kernels::order_patches(kernels::model_patches(kernels::source(&spec, self.opts.obs, self.cap), spec.file, &self.opts.model_fixes()), spec.file, &self.opts)), entry, sorted_wg(l, wg));
                 self.k.insert(sl, self.gpu.kernel_with(sl, &src, &format!("{entry}_sorted"), self.opts.zero_init_workgroup)?);
             }
         }
@@ -466,7 +513,7 @@ impl GpuSim {
             for (l, e) in [("scan4k.first", "scanFirst"), ("scan4k.inPlace", "scanInPlace"), ("scan4k.add", "addSums")] { self.k.insert(l, self.gpu.kernel_with(l, kernels::host_raw("scan4k"), e, false)?); }
         }
         if self.opts.fused_resolve {
-            let src = defines::prefix(self.opts.obs, self.cap) + &format!("const RF_ROUNDS: u32 = {}u;\n", self.opts.resolve_rounds) + &self.patched(kernels::order_patches(kernels::model_patches(kernels::resolve_includes(kernels::host_raw("resolve_fused")), "contacts", false, self.opts.contact_tangent), "contacts", &GpuOptions { deterministic_spawn: false, deterministic_leaders: false, ..self.opts.clone() }));
+            let src = defines::prefix(self.opts.obs, self.cap) + &format!("const RF_ROUNDS: u32 = {}u;\n", self.opts.resolve_rounds) + &self.patched(kernels::order_patches(kernels::model_patches(kernels::resolve_includes(kernels::host_raw("resolve_fused")), "contacts", &self.opts.model_fixes()), "contacts", &GpuOptions { deterministic_spawn: false, deterministic_leaders: false, ..self.opts.clone() }));
             self.k.insert("contacts.resolveFused", self.gpu.kernel_with("contacts.resolveFused", &src, "resolveFused", self.opts.zero_init_workgroup)?);
         }
         Ok(())
@@ -593,7 +640,11 @@ impl GpuSim {
     /// External actions [steer, gas, brake] per slot from `offset_slots`.
     pub fn set_actions(&mut self, actions: &[f32], offset_slots: usize) {
         assert!(offset_slots + actions.len() / 3 <= self.cap, "set_actions: more actions than slots");
-        self.gpu.write("actions", bytemuck::cast_slice(actions), (offset_slots * 12) as u64);
+        // NaN components -> 0 as the CPU (jm::or); WGSL clamp(NaN) is indeterminate (Metal: the lower bound, full left lock)
+        if actions.iter().any(|a| a.is_nan()) {
+            let clean: Vec<f32> = actions.iter().map(|&a| if a.is_nan() { 0.0 } else { a }).collect();
+            self.gpu.write("actions", bytemuck::cast_slice(&clean), (offset_slots * 12) as u64);
+        } else { self.gpu.write("actions", bytemuck::cast_slice(actions), (offset_slots * 12) as u64); }
     }
     /// Observation vectors of every slot (cap x obs_size), into `out`.
     pub fn read_obs_into(&self, out: &mut [f32]) {

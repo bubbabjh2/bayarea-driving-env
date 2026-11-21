@@ -44,7 +44,8 @@ so the condition is a bug, not a deliberate GPU simplification.
 * **Strict-hop `mapLat`**, the barrier geometry (`contacts.wgsl barrier` vs `sim.js _barrier`) and the strike
   reporting (F_WALL / F_WALL_PREV vs `_barrierTouch`).
 * **Road-frame integration**: on both backends `headingRel` is relative to the lane direction, and the frame absorbs
-  the road curvature on straight edges, curved edges and connectors alike.
+  the road curvature on straight edges, curved edges and connectors alike. (In the JS models. The later `curvature_dynamics` model fix, off by default for now, stops
+  the frame turning the car: `docs/physics-audit.md`.)
 
 With the patched connector entry, a single car on the GPU matches the CPU to f32 noise over 19 edges and 3,000 steps
 (next section), so none of the terms above differ.

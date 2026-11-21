@@ -111,9 +111,15 @@ rem_pio2, spatial-hash queries, lead_base, lane geometry (offset_point, y_along,
   synchronised loop), and step_observe(k > 1) where the policy repeats actions. A Python profile of 14 x 2k shows
   ~57 % of all thread samples waiting (rayon idle / spin) for the same reason.
 
+* **Current figures** (2026-11-21, best of 3 under the bench lock, load 5-17): single thread real 2k 4,920 steps/s,
+  real 20k 222, real 100k parallel 127; VecEnv (each env runs its steps in one task) 14 x 2k 9.17 M, 28 x 2k 10.0 M,
+  14 x 20k 5.32 M agent-steps/s; synchronised per step (BENCH_SYNC=1, the RL loop) 14 x 2k 5.55 M, 28 x 2k 8.78 M,
+  14 x 20k 3.79 M. Python VecEnv(cpu, v2) step_observe(actions) 14 x 2k 1.42-1.97 ms, 28 x 2k 2.69-3.21 ms.
+
 | training-path change | result |
 |---|---|
 | CPU v2 observation rows kept for driving cars only (no full n_slots x 70 zero-fill + copy per step; no double zeroing in VecEnv.observe) | neutral within noise (identical Python results: sha256 of obs + events) |
+| Python VecEnv.step_observe(actions): each env applies its actions inside its step task (no serial act pass) | step_observe 14 x 2k mean 1.98 -> 1.75 ms, 28 x 2k 3.21 -> 3.06 ms (3 alternating runs, load 15-20) |
 | rejected: many-env step in three pool passes (every env's step_begin, the physics of all envs as one flat list of 64-car chunks, every env's step_end) to keep efficiency cores from setting the batch time | 2-3x slower (14 x 2k 7.8-9.0 -> 2.0-3.4 M agent-steps/s): three barriers and the phase-A results moving between passes cost more than the imbalance |
 | rejected: Python VecEnv encoding all envs on the shared pool after all envs stepped (nested parallel encode_batch) | ~8 % slower (min of 3 alternating runs: step_observe 1.46 -> 1.60 ms) |
 | rejected: bitset pre-check before the connector-car map lookups (yield / box / converge) | neutral (encode 367 / 409 vs 352 / 414 ns per agent) |
