@@ -571,6 +571,17 @@ impl Env {
         let sim = gpu_mut(self); sim.sync(); PyArray1::from_slice(py, &sim.x.outcome)
     }
 
+    /// Opt-in lane-heading preview (cpu backend): float64 (n_slots, 4), the change of the road frame's heading (rad)
+    /// 5, 10, 20 and 40 m ahead along each driving car's planned path (bayenv-sim obs::heading_preview); zeros for
+    /// slots that are not driving. Not part of the obs vectors (obs v1 / v2 stay as in the JS).
+    fn heading_preview<'py>(&mut self, py: Python<'py>) -> PyResult<Bound<'py, PyArray2<f64>>> {
+        let Some(e) = cpu_only(self) else { return Err(PyNotImplementedError::new_err("heading_preview: cpu backend only")) };
+        let rows = e.heading_preview_rows();
+        let n = rows.len() / 4;
+        let a = ndarray::Array2::from_shape_vec((n, 4), rows).map_err(|e| PyValueError::new_err(e.to_string()))?;
+        Ok(PyArray2::from_owned_array(py, a))
+    }
+
     /// Per-agent day results from the GPU (GPUSim.readAgents): dict of reward_sum, outcome, outcome_back, progress,
     /// trip_time, crashes (one row per agent), plus fuel_left (litres after the commuter's last finished leg, -1 none).
     fn agents<'py>(&mut self, py: Python<'py>) -> PyResult<Bound<'py, PyDict>> {
