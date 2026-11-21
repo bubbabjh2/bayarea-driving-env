@@ -181,11 +181,11 @@ impl Env {
     #[new]
     #[pyo3(signature = (data_dir, n_cars=10000, seed=1, backend="gpu", capacity=None, obs="v2", dt=0.05, start_time=None,
         accidents=true, collisions=true, fuel=true, controls=true, junctions=true, steer="position", decide_every=1, keep_events=false,
-        population=None, pop_seed=42.0, streaming=false, return_trips=true, stations=true, refuel_budget_ms=None, crash_share=false, cpu_connector_join=true))]
+        population=None, pop_seed=42.0, streaming=false, return_trips=true, stations=true, refuel_budget_ms=None, crash_share=false, missed_at_out_edge=false, cpu_connector_join=true))]
     #[allow(clippy::too_many_arguments)]
     fn new(py: Python<'_>, data_dir: &str, n_cars: usize, seed: u32, backend: &str, capacity: Option<usize>, obs: &str, dt: f64, start_time: Option<f64>,
            accidents: bool, collisions: bool, fuel: bool, controls: bool, junctions: bool, steer: &str, decide_every: u32, keep_events: bool,
-           population: Option<usize>, pop_seed: f64, streaming: bool, return_trips: bool, stations: bool, refuel_budget_ms: Option<f64>, crash_share: bool, cpu_connector_join: bool) -> PyResult<Env> {
+           population: Option<usize>, pop_seed: f64, streaming: bool, return_trips: bool, stations: bool, refuel_budget_ms: Option<f64>, crash_share: bool, missed_at_out_edge: bool, cpu_connector_join: bool) -> PyResult<Env> {
         if backend == "cpu" {
             let cobs = match obs { "v2" => CpuObs::V2, "v3" => CpuObs::V3, "flat" => CpuObs::Flat, "none" => CpuObs::None, _ => return Err(PyValueError::new_err("obs must be 'v2', 'v3', 'flat' or 'none'")) };
             // CPU reference sim (crate bayenv-sim): commuter population (population.js, n_cars commuters, seed),
@@ -216,7 +216,7 @@ impl Env {
         let steer_rate = match steer { "position" => false, "rate" => true, _ => return Err(PyValueError::new_err("steer must be 'position' or 'rate'")) };
         let res: Result<(Arc<World>, GpuSim, usize), String> = py.detach(move || {
             let world = Arc::new(World::load_with(&data, &LoadOptions::default()).map_err(|e| format!("world: {e}"))?);
-            let mut o = GpuOptions { capacity: cap, dt, start_time: start_time.unwrap_or(18000.0), seed, obs: obs_mode, steer_rate, decide_every, controls, junctions, keep_events, record_share: crash_share,
+            let mut o = GpuOptions { capacity: cap, dt, start_time: start_time.unwrap_or(18000.0), seed, obs: obs_mode, steer_rate, decide_every, controls, junctions, keep_events, record_share: crash_share, missed_at_out_edge,
                 return_trips, refuel_budget_ms: refuel_budget_ms.unwrap_or(f64::INFINITY), cpu_connector_join, ..Default::default() };
             o.features.accidents = accidents; o.features.collisions = collisions; o.features.fuel = fuel;
             let mut sim = bayenv_gpu::env::create(world.clone(), o)?;
@@ -398,6 +398,7 @@ impl Env {
         d.set_item("collided", PyArray1::from_vec(py, (0..n).map(|i| cf[2 * i + 1] != 0).collect::<Vec<bool>>()))?;
         d.set_item("collided_steps", PyArray1::from_vec(py, (0..n).map(|i| cf[2 * i]).collect::<Vec<u32>>()))?;
         d.set_item("lane", PyArray1::from_vec(py, col_u(veh::LANES).iter().map(|&w| (w & 255) as u8).collect::<Vec<u8>>()))?;
+        d.set_item("leader", PyArray1::from_vec(py, col_u(veh::LEADER).iter().map(|&w| w as i32).collect::<Vec<i32>>()))?;
         // speed limit (m/s) of each car's current edge (reward.js normalises route progress by it)
         let g = &self.world.graph;
         d.set_item("speed_limit", PyArray1::from_vec(py, col_u(veh::EDGE).iter().zip(&st).map(|(&e, &s)| if s != 0 && (e as usize) < g.edge_count { g.speed_limit[e as usize] as f32 } else { f32::NAN }).collect::<Vec<f32>>()))?;
