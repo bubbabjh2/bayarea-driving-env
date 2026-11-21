@@ -215,6 +215,7 @@ impl Sim {
                 _ => 0.5,
             };
             let driving = self.vs.state[sl] == STATE_DRIVING;
+            self.collided_last.push(sl);
             if driving { self.events.crashed.push(crate::sim::CrashedEv { slot: sl, agent: self.vs.commuter[sl], dv_kmh: kmh[k], share, disabled: kmh[k] >= DISABLE_KMH }); }
             // one row per car of the event: CRASHED = disabled by it (driving, own delta-v >= 10 km/h), else CONTACT
             let (other, odv) = if slots.len() == 2 { (slots[1 - k] as i32, kmh[1 - k] as f32) } else { (-1, f32::NAN) };

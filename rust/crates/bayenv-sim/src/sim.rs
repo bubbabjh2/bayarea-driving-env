@@ -121,7 +121,7 @@ pub struct StepEvents { pub arrived: Vec<ArrivedEv>, pub crashed: Vec<CrashedEv>
 /// 4 STRANDED, 5 CLEARED (wreck towed / hauled away: slot freed), 6 SPAWNED, 7 MISSED_EXIT, 8 SIGNAL_VIOLATION.
 /// Within a step events are sorted by (slot, kind), stable.
 #[derive(Clone, Copy, Debug)]
-pub struct Event { pub time: f64, pub kind: u8, pub slot: i32, pub agent: i64, pub other: i32, pub dv_kmh: f32, pub other_dv_kmh: f32, pub share: f32,
+pub struct Event { pub step: u64, pub time: f64, pub kind: u8, pub slot: i32, pub agent: i64, pub other: i32, pub dv_kmh: f32, pub other_dv_kmh: f32, pub share: f32,
     pub late_by: f32, pub progress_m: f32, pub trip_m: f32, pub trip_s: f32 }
 pub const EV_ARRIVED: u8 = 1; pub const EV_CRASHED: u8 = 2; pub const EV_CONTACT: u8 = 3; pub const EV_STRANDED: u8 = 4;
 pub const EV_CLEARED: u8 = 5; pub const EV_SPAWNED: u8 = 6; pub const EV_MISSED_EXIT: u8 = 7; pub const EV_SIGNAL_VIOLATION: u8 = 8;
@@ -192,6 +192,8 @@ pub struct Sim {
     pub profile: bool,
     pub events: StepEvents,
     pub event_log: Vec<Event>,
+    /// slots in a crash event (contact >= touchKmh) during the last step
+    pub collided_last: Vec<usize>,
     pub batch_policy: Option<BatchPolicy>,
     pub phase_ns: [u64; 10],
 }
@@ -237,7 +239,7 @@ impl Sim {
             passers: Default::default(), conflict_with: HashMap::default(), off_lane: Default::default(), touch: HashSet::default(), barrier_touch: HashSet::default(), barrier_now: HashSet::default(),
             conf_cache: HashMap::default(), mv_into: None, yield_by: None, creep_until: Vec::new(), creep_ignore: Vec::new(), edge_speed: HashMap::default(), traffic_penalty: None,
             last_reroute: HashMap::default(), next_traffic: 0.0, next_reroute: 0.0, next_density: start, edge_count_scratch: vec![0; ne], fwy, fwy_lane_km, seen_j: -1,
-            near_buf: Vec::new(), static_obstacles: Vec::new(), obstacles: Vec::new(), profile: std::env::var("BAYENV_PROFILE").is_ok(), phase_ns: [0; 10], events: StepEvents::default(), event_log: Vec::new(), batch_policy: None,
+            near_buf: Vec::new(), static_obstacles: Vec::new(), obstacles: Vec::new(), profile: std::env::var("BAYENV_PROFILE").is_ok(), phase_ns: [0; 10], events: StepEvents::default(), event_log: Vec::new(), collided_last: Vec::new(), batch_policy: None,
             empty: opts.traffic_mode == TrafficMode::Empty, time: start, dt: opts.dt, step_count: 0, vs, rng, router, g, pop, opts,
         };
         if sim.opts.traffic_mode == TrafficMode::Sparse && sim.opts.wrecks > 0 { sim.place_wrecks(sim.opts.wrecks); }
@@ -249,7 +251,7 @@ impl Sim {
         let vs = &self.vs;
         let c = vs.commuter[i];
         let (trip_m, trip_s) = if kind == EV_ARRIVED { (vs.odometer[i], (self.time - f(vs.spawn_time[i])) as f32) } else { (f32::NAN, f32::NAN) };
-        self.event_log.push(Event { time: self.time, kind, slot: i as i32, agent: if c >= 0 { 2 * c as i64 + vs.leg[i] as i64 } else { -1 }, other,
+        self.event_log.push(Event { step: self.step_count as u64, time: self.time, kind, slot: i as i32, agent: if c >= 0 { 2 * c as i64 + vs.leg[i] as i64 } else { -1 }, other,
             dv_kmh: dv, other_dv_kmh: odv, share, late_by: late, progress_m: vs.route_dist[i], trip_m, trip_s });
     }
 
@@ -258,6 +260,7 @@ impl Sim {
     // ---------------------------------------------------------------- step
     pub fn step(&mut self) {
         let ev0 = self.event_log.len();
+        self.collided_last.clear();
         self.step_inner();
         self.event_log[ev0..].sort_by_key(|e| (e.slot, e.kind));
     }
