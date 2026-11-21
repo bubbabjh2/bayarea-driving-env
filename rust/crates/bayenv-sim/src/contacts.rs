@@ -209,15 +209,16 @@ impl Sim {
         let tl = incident_timeline(severity, &mut self.rng);
         let (crash_type, maneuver) = self.classify_crash(slots, c, pre.as_ref());
         for (k, &sl) in slots.iter().enumerate() {
-            if self.vs.state[sl] != STATE_DRIVING { continue; }
             let share = match (slots.len(), pre) {
                 (2, Some(p)) => crash_share(p.speed[k], p.heading[k], p.speed[1 - k], p.heading[1 - k], p.nx, p.nz),
                 (_, Some(p)) => crash_share(p.speed[0], p.heading[0], 0.0, 0.0, p.nx, p.nz),
                 _ => 0.5,
             };
-            self.events.crashed.push(crate::sim::CrashedEv { slot: sl, agent: self.vs.commuter[sl], dv_kmh: kmh[k], share, disabled: kmh[k] >= DISABLE_KMH });
+            let driving = self.vs.state[sl] == STATE_DRIVING;
+            if driving { self.events.crashed.push(crate::sim::CrashedEv { slot: sl, agent: self.vs.commuter[sl], dv_kmh: kmh[k], share, disabled: kmh[k] >= DISABLE_KMH }); }
+            // one row per car of the event: CRASHED = disabled by it (driving, own delta-v >= 10 km/h), else CONTACT
             let (other, odv) = if slots.len() == 2 { (slots[1 - k] as i32, kmh[1 - k] as f32) } else { (-1, f32::NAN) };
-            self.emit(if kmh[k] >= DISABLE_KMH { crate::sim::EV_CRASHED } else { crate::sim::EV_CONTACT }, sl, other, kmh[k] as f32, odv, share as f32, f32::NAN);
+            self.emit(if driving && kmh[k] >= DISABLE_KMH { crate::sim::EV_CRASHED } else { crate::sim::EV_CONTACT }, sl, other, kmh[k] as f32, odv, share as f32, f32::NAN);
         }
         // the involved drivers step once (collision signal); only the braking prop has state
         for &s in slots { if self.vs.state[s] == STATE_DRIVING && matches!(self.drivers[s], Driver::PropBraking { .. }) { let _ = self.driver_cmd(s); } }

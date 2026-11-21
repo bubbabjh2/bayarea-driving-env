@@ -111,6 +111,16 @@ impl Env {
     }
     /// events(): drain the per-slot event log (Sim::event_log, `sim::Event`) since the last call.
     pub fn events(&mut self) -> Vec<crate::sim::Event> { std::mem::take(&mut self.sim.event_log) }
+    /// The event log as bayenv_world::events::EventLog (same shape as the GPU host), drained.
+    pub fn take_records(&mut self) -> bayenv_world::events::EventLog {
+        let mut log = bayenv_world::events::EventLog::default();
+        for e in std::mem::take(&mut self.sim.event_log) {
+            log.push(e.time, e.kind, e.slot as u32, e.agent, e.other as i64, e.dv_kmh, e.other_dv_kmh, e.share);
+            let k = log.len() - 1;
+            log.late_by[k] = e.late_by; log.progress_m[k] = e.progress_m; log.trip_m[k] = e.trip_m; log.trip_s[k] = e.trip_s;
+        }
+        log
+    }
     /// state()["progress_m"]: route distance per slot.
     pub fn progress_m(&self) -> Vec<f32> { self.sim.vs.route_dist[..self.sim.vs.high].to_vec() }
 
@@ -159,9 +169,14 @@ impl Env {
         let vs = &self.sim.vs;
         let h = vs.high;
         macro_rules! col { ($($n:literal => $f:ident),*) => { vec![$(($n, (0..h).map(|i| vs.$f[i] as f64).collect::<Vec<f64>>())),*] }; }
-        col!("edge" => edge, "state" => state, "flags" => flags, "route_pos" => route_pos, "s" => s, "speed" => speed, "accel" => accel, "lat" => lat,
+        let cols: Vec<(&'static str, Vec<f64>)> = col!("edge" => edge, "state" => state, "flags" => flags, "route_pos" => route_pos, "s" => s, "speed" => speed, "accel" => accel, "lat" => lat,
             "heading_rel" => heading_rel, "steer" => steer_angle, "odometer" => odometer, "fuel" => fuel, "gas" => gas, "brake" => brake, "yaw_rate" => yaw_rate,
-            "v_lat" => v_lat, "lane" => lane, "x" => x, "y" => y, "z" => z, "heading" => heading, "commuter" => commuter, "leader" => leader, "gap" => gap)
+            "v_lat" => v_lat, "lane" => lane, "x" => x, "y" => y, "z" => z, "heading" => heading, "commuter" => commuter, "leader" => leader, "gap" => gap, "progress_m" => route_dist);
+        let mut cols = cols;
+        let g = &self.world;
+        cols.push(("speed_limit", (0..h).map(|i| if vs.edge[i] >= 0 && (vs.edge[i] as usize) < g.edge_count { g.e_speed[vs.edge[i] as usize] } else { 0.0 }).collect()));
+        cols.push(("collided", (0..h).map(|i| if vs.flags[i] & crate::vehicle::FLAG_COLLIDED != 0 { 1.0 } else { 0.0 }).collect()));
+        cols
     }
     /// stats(): counters (same keys as the GPU backend where they exist).
     pub fn stats(&self) -> Vec<(&'static str, f64)> {
