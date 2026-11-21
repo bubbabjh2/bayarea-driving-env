@@ -32,8 +32,18 @@ pub fn raw(name: &str) -> &'static str {
 }
 
 /// `loadKernelSource(name)`: the file with every `// #include <file>` line replaced (recursively).
-pub fn load(name: &str) -> String {
-    raw(name).split('\n').map(|line| {
+pub fn load(name: &str) -> String { resolve_includes(raw(name)) }
+
+/// Kernels of this crate (`crates/bayenv-gpu/kernels/`): modified copies / helpers, see the header of each file.
+pub const HOST_SOURCES: &[(&str, &str)] = &[
+    ("contact_args", include_str!("../kernels/contact_args.wgsl")),
+    ("resolve_fused", include_str!("../kernels/resolve_fused.wgsl")),
+];
+pub fn host_raw(name: &str) -> &'static str { HOST_SOURCES.iter().find(|(k, _)| *k == name).map(|(_, s)| *s).unwrap_or_else(|| panic!("no host kernel {name}")) }
+
+/// `// #include <file>` lines of `text` replaced by the files of `src/gpu/kernels/` (recursively).
+pub fn resolve_includes(text: &str) -> String {
+    text.split('\n').map(|line| {
         let t = line.trim_start();
         if let Some(rest) = t.strip_prefix("//") { let r = rest.trim_start(); if let Some(f) = r.strip_prefix("#include") {
             let f = f.trim(); if !f.is_empty() && f.split_whitespace().count() >= 1 { return load(f.split_whitespace().next().unwrap()); } } }
