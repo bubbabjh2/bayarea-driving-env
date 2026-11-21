@@ -132,6 +132,14 @@ impl Env {
         }
     }
     pub fn outcomes(&self) -> &[u8] { &self.sim.outcome }
+    /// Opt-in lane-heading preview (obs::heading_preview): frame heading change at 5, 10, 20, 40 m along the planned
+    /// path for each slot (rows of 4; zeros for slots that are not driving).
+    pub fn heading_preview_rows(&self) -> Vec<f64> {
+        let vs = &self.sim.vs;
+        let mut out = vec![0.0; 4 * vs.high];
+        for i in 0..vs.high { if vs.state[i] == crate::vehicle::STATE_DRIVING { out[4 * i..4 * i + 4].copy_from_slice(&crate::obs::heading_preview(&self.sim, i)); } }
+        out
+    }
 }
 
 /// Python-facing (bayenv-py `Env`) helpers: the same shapes as the GPU backend. Rows = slots 0..n_slots().
