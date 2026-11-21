@@ -47,6 +47,11 @@ pub struct GpuOptions {
     pub reroute: bool,
     /// keep a host log of events (crash / arrive / ...)
     pub keep_events: bool,
+    /// per-slot event records (`events::EventLog`, drained by `take_records`)
+    pub record_events: bool,
+    /// crash fault shares in the records: runs contacts.wgsl's reward-v2 crash charge with zero penalties (P.crashOn;
+    /// only veh.eventTime of crashing cars and the reward sums are touched) to get its per-car share (1/255 steps)
+    pub record_share: bool,
     /// size the contact-resolve rounds by the contacts found (indirect dispatch; identical results). JS: off
     pub indirect_resolve: bool,
     /// contact resolve in one dispatch (kernels/resolve_fused.wgsl: one workgroup runs the rounds with barriers
@@ -104,7 +109,7 @@ impl Default for GpuOptions {
     fn default() -> Self {
         GpuOptions { capacity: 131072, dt: 0.05, start_time: 5.0 * 3600.0, seed: 1, obs: ObsMode::V2, steer_rate: false, decide_every: 1, features: Features::default(),
             controls: true, junctions: true, table_bits: 18, contact_cap: 131072, ev_cap: 16384, spawn_queue: 16384, op_cap: 16384, max_blocks: 4096, route_slack: 1 << 22,
-            resolve_rounds: 12, progress_weight: 1.0, jerk_weight: 0.5, jerk_reward: false, grade_obs: true, squeeze_delay: 15.0 * 60.0, deadlock_break: 0, reroute: true, keep_events: false, indirect_resolve: true, fused_resolve: true, sorted_order: true, fast_scan: true, fast_search: true, zero_init_workgroup: false, profile: false, return_trips: true, refuel_budget_ms: 4.0 }
+            resolve_rounds: 12, progress_weight: 1.0, jerk_weight: 0.5, jerk_reward: false, grade_obs: true, squeeze_delay: 15.0 * 60.0, deadlock_break: 0, reroute: true, keep_events: false, record_events: true, record_share: false, indirect_resolve: true, fused_resolve: true, sorted_order: true, fast_scan: true, fast_search: true, zero_init_workgroup: false, profile: false, return_trips: true, refuel_budget_ms: 4.0 }
     }
 }
 
@@ -226,6 +231,8 @@ pub struct GpuSim {
     pub packer: Option<Arc<crate::pack::RoutePacker>>,
     staging: wgpu::Buffer,
     out_staging: Option<wgpu::Buffer>,
+    /// per-slot event records (opts.record_events)
+    pub rec: crate::events::EventLog,
     /// a submitted batch whose readback / events are processed lazily (`run_steps_async`, `sync`)
     pending: Option<Pending>,
     io_host: Vec<u32>,
@@ -342,7 +349,7 @@ impl GpuSim {
             refuel_queue: Vec::new(), reroute_queue: Default::default(), last_reroute: HashMap::new(), lot: 0, new_pose: false, crashes: Vec::new(), active: Vec::new(),
             counters: Counters::default(), gpu_stats: [0; 64], events: Vec::new(), closed_key: None, closed_n: 0, closed_edges: Vec::new(),
             edge_speed_ema: HashMap::new(), edge_speed_order: Vec::new(), traffic_penalty: HashMap::new(), penalty_order: Vec::new(), pending_penalty: None, next_traffic: -1e9,
-            router: None, packer: None, out_staging: None, pending: None, staging, io_host: vec![0; io_words], profiler: None, js_stages: false, fast_search_ok: false, x: Default::default(), blob, gpu, opts,
+            router: None, packer: None, out_staging: None, rec: Default::default(), pending: None, staging, io_host: vec![0; io_words], profiler: None, js_stages: false, fast_search_ok: false, x: Default::default(), blob, gpu, opts,
         };
         if !use_j { sim.blob.j_m = None; }
         if sim.opts.fast_search { sim.fast_search_ok = sim.polylines_monotone(); if !sim.fast_search_ok { eprintln!("bayenv-gpu: fast_search off (an edge / connector polyline has decreasing cumulative distance)"); } }
@@ -492,6 +499,7 @@ impl GpuSim {
         s("fuelCheckInterval", 60.0); s("fuelMinFillToSkip", 0.5); s("fuelLowFraction", 0.12); s("fuelPlanFactor", 1.3);
         s("fuelReserveKm", 15.0); s("fuelPlanSpeed", 22.2); s("progressW", o.progress_weight); s("jerkW", o.jerk_weight); s("nAgents", self.n_agents as f64);
         for k in ["crashOn", "crashBase", "crashK", "crashCap", "crashFault", "crashFail"] { s(k, 0.0); }
+        if o.record_share { s("crashOn", 1.0); }
         s("geoOff", lo.geo as f64); s("lgvOff", lo.lgv as f64); s("hopOff", lo.hop as f64); s("hasLG", if w.has_lg { 1.0 } else { 0.0 });
         let ctl = if o.controls { w.ctl } else { None };
         s("ctlEdgeOff", lo.ctl_edge as f64); s("ctlListOff", ctl.map_or(0.0, |c| (lo.ctl_edge + c.0) as f64)); s("ctlApOff", lo.ctl_ap as f64); s("ctlCOff", lo.ctl_c as f64);
@@ -830,6 +838,7 @@ impl GpuSim {
         let m = n.min(cap); let base = io::EVDATA;
         for k in 0..m { let t = io[base + 4 * k];
             if t & 255 == ev::WRECK { self.wrecks.insert(io[base + 4 * k + 1], Wreck { lo: (t >> 8) & 15, hi: (t >> 12) & 15, ty: (t >> 16) & 255, edge: io[base + 4 * k + 2], s: f32::from_bits(io[base + 4 * k + 3]) as f64 }); } }
+        if self.opts.record_events { self.record_batch(&io[base..base + 4 * m]); }
         for k in 0..m {
             let o = base + 4 * k; let t = io[o] & 255; let slot = io[o + 1]; let a = io[o + 2]; let b = io[o + 3];
             match t {
@@ -866,6 +875,71 @@ impl GpuSim {
         self.io_host = io;
     }
 
+    /// Per-slot records of one batch of GPU events (before the host handlers change slot / crash state), then one
+    /// gathered readback of the involved slots' veh / par records for progress, exact arrival time and lateness.
+    fn record_batch(&mut self, evs: &[u32]) {
+        use crate::events::kind as K;
+        let first = self.rec.len(); let t_now = self.time;
+        let mut new_crash: HashSet<u32> = HashSet::new();
+        let mut tripx: HashMap<u32, (f32, f32)> = HashMap::new();
+        let mut share: HashMap<u32, f32> = HashMap::new();
+        let agent = |st: &Vec<i32>, s: u32| -> i64 { st.get(s as usize).copied().unwrap_or(-1) as i64 };
+        for e in evs.chunks_exact(4) {
+            let (t, slot, a, b) = (e[0] & 255, e[1], e[2], e[3]);
+            match t {
+                ev::TRIPX => { tripx.insert(slot, (f32::from_bits(a), f32::from_bits(b))); }
+                ev::CRASHPEN => { share.insert(slot, ((b >> 16) & 255) as f32 / 255.0); }
+                ev::ARRIVE => {
+                    self.rec.push(t_now, K::ARRIVED, slot, agent(&self.slot_trip, slot), -1, f32::NAN, f32::NAN, f32::NAN);
+                    if let Some(&(m, d)) = tripx.get(&slot) { let i = self.rec.len() - 1; self.rec.trip_m[i] = m; self.rec.trip_s[i] = d; }
+                }
+                ev::CRASH | ev::CONTACT => {
+                    let (di, dj) = ((b & 0xFFFF) as f32 / 10.0, (b >> 16) as f32 / 10.0);
+                    let fresh = |me: &Self, s: u32, nc: &HashSet<u32>| me.wrecks.contains_key(&s) && !me.in_crash.contains(&s) && !nc.contains(&s);
+                    let pair: Vec<(u32, u32, f32, f32)> = if a != NONE { vec![(slot, a, di, dj), (a, slot, dj, di)] } else { vec![(slot, NONE, di, f32::NAN)] };
+                    for (me, other, d, od) in pair {
+                        let k = if t == ev::CRASH && fresh(self, me, &new_crash) { new_crash.insert(me); K::CRASHED } else { K::CONTACT };
+                        self.rec.push(t_now, k, me, agent(&self.slot_trip, me), if other == NONE { -1 } else { other as i64 }, d, od, share.remove(&me).unwrap_or(f32::NAN));
+                    }
+                }
+                ev::STRANDED => self.rec.push(t_now, K::STRANDED, slot, agent(&self.slot_trip, slot), -1, f32::NAN, f32::NAN, f32::NAN),
+                ev::SPAWN => self.rec.push(t_now, K::SPAWNED, slot, agent(&self.slot_trip, slot), -1, f32::NAN, f32::NAN, f32::NAN),
+                ev::MISSED => self.rec.push(t_now, K::MISSED_EXIT, slot, agent(&self.slot_trip, slot), -1, f32::NAN, f32::NAN, f32::NAN),
+                ev::CTLVIOL => self.rec.push(t_now, K::VIOLATION, slot, agent(&self.slot_trip, slot), -1, f32::NAN, f32::NAN, f32::NAN),
+                _ => {}
+            }
+        }
+        if self.rec.len() == first { return; }
+        // gather the involved slots' records (one submit, one map)
+        let mut slots: Vec<u32> = self.rec.slot[first..].iter().map(|&s| s as u32).collect(); slots.sort_unstable(); slots.dedup();
+        let (vw, pw) = (L::VEH_WORDS * 4, L::PAR_WORDS * 4); let n = slots.len();
+        let rb = self.gpu.device.create_buffer(&wgpu::BufferDescriptor { label: Some("recGather"), size: (n * (vw + pw)) as u64, usage: wgpu::BufferUsages::MAP_READ | wgpu::BufferUsages::COPY_DST, mapped_at_creation: false });
+        let mut enc = self.gpu.device.create_command_encoder(&Default::default());
+        let (vb, pb) = (self.gpu.get("veh"), self.gpu.get("par"));
+        for (i, &sl) in slots.iter().enumerate() {
+            enc.copy_buffer_to_buffer(&vb, (sl as usize * vw) as u64, &rb, (i * vw) as u64, vw as u64);
+            enc.copy_buffer_to_buffer(&pb, (sl as usize * pw) as u64, &rb, (n * vw + i * pw) as u64, pw as u64);
+        }
+        self.gpu.queue.submit([enc.finish()]);
+        rb.slice(..).map_async(wgpu::MapMode::Read, |r| r.expect("map rec"));
+        self.gpu.device.poll(wgpu::PollType::wait_indefinitely()).expect("poll");
+        let words: Vec<u32> = bytemuck::cast_slice(&rb.slice(..).get_mapped_range().expect("rec")).to_vec();
+        rb.unmap();
+        let vrec = |i: usize, f: usize| f32::from_bits(words[i * L::VEH_WORDS + f]);
+        let prec = |i: usize, f: usize| f32::from_bits(words[n * L::VEH_WORDS + i * L::PAR_WORDS + f]);
+        for r in first..self.rec.len() {
+            let i = slots.binary_search(&(self.rec.slot[r] as u32)).unwrap();
+            self.rec.progress_m[r] = vrec(i, veh::ROUTE_DIST);
+            if self.rec.kind[r] == K::ARRIVED && self.rec.trip_s[r].is_finite() {
+                let arr = vrec(i, veh::SPAWN_TIME) as f64 + self.rec.trip_s[r] as f64;
+                self.rec.time[r] = arr;
+                if self.rec.agent[r] >= 0 && self.x.has_pop() { self.rec.late_by[r] = (arr - prec(i, 13) as f64) as f32; }
+            }
+        }
+    }
+    /// Take the per-slot event records collected since the last call.
+    pub fn take_records(&mut self) -> crate::events::EventLog { self.sync(); self.rec.drain() }
+
     fn by_sev(&mut self, kmh: f64) -> &'static str {
         let (i, s) = if kmh < 10.0 { (0, "minor") } else if kmh < 25.0 { (1, "moderate") } else if kmh < 50.0 { (2, "severe") } else { (3, "very severe") };
         self.counters.by_severity[i] += 1; s
@@ -882,6 +956,9 @@ impl GpuSim {
             if outcome == "arrived" { self.x.fuel_left[id] = fuel as f32; }
             else if outcome == "towed" { let ty = self.x.vehicle_type(id); self.x.fuel_left[id] = (0.2 * VEHICLE_PARAMS[ty.min(3)].tank_l) as f32; }
             if tr & 1 == 0 && self.x.outcome[id] == 0 { self.x.outcome[id] = match outcome { "arrived" => 1, "crash" => 2, "stranded" => 3, "stuck" => 4, _ => 0 }; }
+        }
+        if self.opts.record_events && (outcome == "towed" || outcome == "cleared") {
+            self.rec.push(self.time, crate::events::kind::CLEARED, slot, tr as i64, -1, f32::NAN, f32::NAN, f32::NAN);
         }
         self.slot_trip[slot as usize] = -2;
         self.arena_free(slot);

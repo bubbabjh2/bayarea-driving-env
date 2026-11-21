@@ -14,6 +14,7 @@
 pub mod bake;
 pub mod blob;
 pub mod controls;
+pub mod events;
 pub mod extras;
 pub mod graph;
 pub mod hops;

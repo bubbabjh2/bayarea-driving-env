@@ -61,6 +61,14 @@ pop.place_obstacles(count=40, seed=3); pop.place_wrecks(10); pop.reset_day()
   call (same results, the Python side overlaps with the GPU). `sync()` waits explicitly.
 * `bayenv.VecEnv(data_dir, n_envs, n_cars, seed)`: several independent envs on one device sharing one world (env i
   uses seed + i); `act((E, N, 3))`, `step(k)`, `step_observe(actions, k, out=(E, N, obs))`, `crash_flags() -> (E, N)`.
+* `events()`: per-slot event records since the last call, as a dict of equal-length numpy arrays (one row per event
+  and car). Columns: `time`, `kind` (1 arrived, 2 crashed = this car disabled, 3 contact, 4 stranded, 5 cleared,
+  6 spawned, 7 missed exit, 8 signal / stop violation), `slot`, `agent` (trip id), `other` (partner slot, -1 barrier),
+  `dv_kmh`, `other_dv_kmh`, `share` (fault share from the crash kernel, with `crash_share=True`, 1/255 steps), `late_by`
+  (arrivals with a population: arrival − workStart, s), `progress_m` (route metres), `trip_m` / `trip_s` (arrivals).
+  Arrivals carry their exact arrival time; other events carry the end of the step batch. `VecEnv.events()` adds `env`.
+  Shape type: `bayenv_world::events::EventLog`, shared with the CPU sim. `state()["progress_m"]` gives dense progress.
+  The old scene / outcome log is `event_log()`.
 * `observe(out=arr)` fills a preallocated array (no allocation). Readbacks go through persistent staging buffers and copy
   only the rows in use.
 * `backend="cpu"`: the CPU reference sim (`bayenv-sim`) behind the same calls. It uses a commuter population of
