@@ -200,6 +200,107 @@ impl Car {
     }
 }
 
+/// Raw pointers to the slot-field arrays a Car writes, for writing back many cars from parallel tasks. Sound only
+/// for pairwise distinct slots, no other access to these arrays meanwhile, and no reallocation (taken right before).
+pub struct CarPtrs {
+    accel: *mut f32,
+    ax_prev: *mut f32,
+    brake: *mut f32,
+    cmd_step: *mut i32,
+    conn: *mut i32,
+    delay_steps: *mut u32,
+    edge: *mut i32,
+    fuel: *mut f32,
+    gas: *mut f32,
+    heading_rel: *mut f32,
+    hw: *mut f32,
+    lat: *mut f32,
+    odometer: *mut f32,
+    power: *mut f32,
+    refuel_state: *mut u8,
+    route_dist: *mut f32,
+    route_pos: *mut i32,
+    s: *mut f32,
+    seg: *mut i32,
+    spawn_time: *mut f32,
+    speed: *mut f32,
+    steer_angle: *mut f32,
+    steer_rate: *mut f32,
+    steer_sl: *mut f32,
+    steer_target: *mut f32,
+    stop_pos: *mut i32,
+    stopped_since: *mut f32,
+    surf_l: *mut u8,
+    surf_r: *mut u8,
+    taper: *mut f32,
+    target_lane: *mut i8,
+    type_idx: *mut u8,
+    v_lat: *mut f32,
+    yaw_rate: *mut f32,
+    width: *mut f32,
+    length: *mut f32,
+    lane: *mut i8,
+    lane_lo: *mut i8,
+    lane_hi: *mut i8,
+    x: *mut f32,
+    y: *mut f32,
+    z: *mut f32,
+    heading: *mut f32,
+}
+unsafe impl Send for CarPtrs {}
+unsafe impl Sync for CarPtrs {}
+impl CarPtrs {
+    pub fn new(vs: &mut VehicleStore) -> CarPtrs { CarPtrs { accel: vs.accel.as_mut_ptr(), ax_prev: vs.ax_prev.as_mut_ptr(), brake: vs.brake.as_mut_ptr(), cmd_step: vs.cmd_step.as_mut_ptr(), conn: vs.conn.as_mut_ptr(), delay_steps: vs.delay_steps.as_mut_ptr(), edge: vs.edge.as_mut_ptr(), fuel: vs.fuel.as_mut_ptr(), gas: vs.gas.as_mut_ptr(), heading_rel: vs.heading_rel.as_mut_ptr(), hw: vs.hw.as_mut_ptr(), lat: vs.lat.as_mut_ptr(), odometer: vs.odometer.as_mut_ptr(), power: vs.power.as_mut_ptr(), refuel_state: vs.refuel_state.as_mut_ptr(), route_dist: vs.route_dist.as_mut_ptr(), route_pos: vs.route_pos.as_mut_ptr(), s: vs.s.as_mut_ptr(), seg: vs.seg.as_mut_ptr(), spawn_time: vs.spawn_time.as_mut_ptr(), speed: vs.speed.as_mut_ptr(), steer_angle: vs.steer_angle.as_mut_ptr(), steer_rate: vs.steer_rate.as_mut_ptr(), steer_sl: vs.steer_sl.as_mut_ptr(), steer_target: vs.steer_target.as_mut_ptr(), stop_pos: vs.stop_pos.as_mut_ptr(), stopped_since: vs.stopped_since.as_mut_ptr(), surf_l: vs.surf_l.as_mut_ptr(), surf_r: vs.surf_r.as_mut_ptr(), taper: vs.taper.as_mut_ptr(), target_lane: vs.target_lane.as_mut_ptr(), type_idx: vs.type_idx.as_mut_ptr(), v_lat: vs.v_lat.as_mut_ptr(), yaw_rate: vs.yaw_rate.as_mut_ptr(), width: vs.width.as_mut_ptr(), length: vs.length.as_mut_ptr(), lane: vs.lane.as_mut_ptr(), lane_lo: vs.lane_lo.as_mut_ptr(), lane_hi: vs.lane_hi.as_mut_ptr(), x: vs.x.as_mut_ptr(), y: vs.y.as_mut_ptr(), z: vs.z.as_mut_ptr(), heading: vs.heading.as_mut_ptr() } }
+    /// # Safety
+    /// `i < high`, and no two concurrent calls with the same `i`.
+    #[inline]
+    pub unsafe fn write(&self, i: usize, c: &Car) {
+        *self.accel.add(i) = c.accel;
+        *self.ax_prev.add(i) = c.ax_prev;
+        *self.brake.add(i) = c.brake;
+        *self.cmd_step.add(i) = c.cmd_step;
+        *self.conn.add(i) = c.conn;
+        *self.delay_steps.add(i) = c.delay_steps;
+        *self.edge.add(i) = c.edge;
+        *self.fuel.add(i) = c.fuel;
+        *self.gas.add(i) = c.gas;
+        *self.heading_rel.add(i) = c.heading_rel;
+        *self.hw.add(i) = c.hw;
+        *self.lat.add(i) = c.lat;
+        *self.odometer.add(i) = c.odometer;
+        *self.power.add(i) = c.power;
+        *self.refuel_state.add(i) = c.refuel_state;
+        *self.route_dist.add(i) = c.route_dist;
+        *self.route_pos.add(i) = c.route_pos;
+        *self.s.add(i) = c.s;
+        *self.seg.add(i) = c.seg;
+        *self.spawn_time.add(i) = c.spawn_time;
+        *self.speed.add(i) = c.speed;
+        *self.steer_angle.add(i) = c.steer_angle;
+        *self.steer_rate.add(i) = c.steer_rate;
+        *self.steer_sl.add(i) = c.steer_sl;
+        *self.steer_target.add(i) = c.steer_target;
+        *self.stop_pos.add(i) = c.stop_pos;
+        *self.stopped_since.add(i) = c.stopped_since;
+        *self.surf_l.add(i) = c.surf_l;
+        *self.surf_r.add(i) = c.surf_r;
+        *self.taper.add(i) = c.taper;
+        *self.target_lane.add(i) = c.target_lane;
+        *self.type_idx.add(i) = c.type_idx;
+        *self.v_lat.add(i) = c.v_lat;
+        *self.yaw_rate.add(i) = c.yaw_rate;
+        *self.width.add(i) = c.width;
+        *self.length.add(i) = c.length;
+        *self.lane.add(i) = c.lane;
+        *self.lane_lo.add(i) = c.lane_lo;
+        *self.lane_hi.add(i) = c.lane_hi;
+        *self.x.add(i) = c.x;
+        *self.y.add(i) = c.y;
+        *self.z.add(i) = c.z;
+        *self.heading.add(i) = c.heading;
+    }
+}
+
 pub struct AllocArgs<'a> { pub type_idx: u8, pub traits: Traits, pub route: &'a [i32], pub commuter: i32, pub leg: u8, pub time: f64, pub learner: bool, pub dt: f64, pub step: i64, pub lane: i32 }
 
 #[inline(always)] fn f(x: f32) -> f64 { x as f64 }
@@ -344,6 +445,14 @@ impl VehicleStore {
         if let Some(m) = out.missed { self.set_missed(i, m); }
         if let Some(t) = out.missed_t { self.missed_t.insert(i, t); if self.missed_t.len() > 100000 { self.missed_t.clear(); } }
         car_scatter!(self, i, c);
+    }
+    /// The non-field part of scatter (ring, route edits, missed exits), in slot order after a parallel CarPtrs write.
+    pub fn scatter_side(&mut self, i: usize, out: &CarOut) {
+        if let Some((k, v)) = out.ring_write { let b = i * 120 + k; self.ctrl_ring[b..b + 3].copy_from_slice(&v); }
+        for &(k, v) in &out.route_set { self.routes[i][k] = v; }
+        if out.route_reset { self.route_off[i] = -1; }
+        if let Some(m) = out.missed { self.set_missed(i, m); }
+        if let Some(t) = out.missed_t { self.missed_t.insert(i, t); if self.missed_t.len() > 100000 { self.missed_t.clear(); } }
     }
     pub fn gather(&self, i: usize) -> Car { car_gather!(self, i) }
     /// integrate(i, dt, now, graph, step, locked): 0 driving, 1 end of route, 2 refuel stop.

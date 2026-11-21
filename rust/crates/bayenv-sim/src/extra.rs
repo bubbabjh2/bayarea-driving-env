@@ -571,7 +571,10 @@ impl Sim {
             if fr == goal { return false; }
             (fr, vec![route[rp]])
         };
-        let plan = { let st = self.stations.as_mut().unwrap(); st.plan(&*g, &mut *self.router, from, goal) };
+        let plan = match self.plan_prefetch.get(&(from, goal)).cloned() {
+            Some(p) => { self.stations.as_mut().unwrap().count(&p); p }
+            None => { let st = self.stations.as_mut().unwrap(); st.plan(&*g, &mut *self.router, from, goal) }
+        };
         let Some(plan) = plan else { self.counters.refuel_plan_failed += 1; return false };
         let mut edges = prefix.clone(); edges.extend_from_slice(&plan.edges);
         let s_on = if at_spawn { 0.0 } else { f(self.vs.s[i]) };

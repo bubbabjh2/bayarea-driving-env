@@ -88,17 +88,49 @@ impl Sim {
             (0..high).into_par_iter().with_min_len(64).map(|i| if me.vs.state[i] == STATE_DRIVING { Some(me.lead_base(i)) } else { None }).collect()
         } else { Vec::new() };
         if self.profile { self.sub_ns[0] += t1.elapsed().as_nanos() as u64; }
+        // phase 2: order-dependent perception. Parallel: every car speculatively against phase-1 values of the cars
+        // before it, committed in slot order; a car whose reads of earlier cars' leader / conflict changed is re-run.
+        let spec_ok = par && !self.opts.pass_wrecks && self.passers.is_empty_lists();
+        let spec: Vec<Option<(f32, i32, Option<usize>, Vec<(usize, i32, Option<usize>)>)>> = if spec_ok {
+            use rayon::prelude::*;
+            let me = &*self;
+            let bs = &bases[..];
+            (0..high).into_par_iter().with_min_len(32).map(|i| {
+                let b = bs[i]?;
+                let p = crate::junction::P2::new(i, b.gap, b.leader, Some(bs));
+                me.perceive_p2(&p);
+                Some((p.gap.get(), p.leader.get(), p.cw.get(), p.reads.into_inner()))
+            }).collect()
+        } else { Vec::new() };
+        let mut reruns = 0u64;
         for i in 0..high {
             if self.vs.state[i] != STATE_DRIVING { continue; }
             let b = if par { bases[i].unwrap() } else { self.lead_base(i) };
             self.apply_base(i, &b);
             let e = self.vs.edge[i] as usize;
-            let pw = self.vs.pass_wreck[i];
-            let _ = pw;
-            if g.j.is_some() { self.junction(i); if self.vs.conn[i] < 0 { self.node_bodies(i, e); } }
-            if self.vs.conn[i] < 0 { self.converge_bodies(i, e); }
-            if g.e_rev[e] >= 0 { self.opposing(i, e); }
-            if self.opts.path_sight >= 1.0 { self.path_bodies(i); }
+            let mut done = false;
+            if spec_ok {
+                if let Some((gap, leader, cw, reads)) = &spec[i] {
+                    let ok = reads.iter().all(|&(j, l, c)| self.vs.leader[j] == l && self.conflict_with.get(&j).copied() == c);
+                    if ok {
+                        self.vs.gap[i] = *gap; self.vs.leader[i] = *leader;
+                        if let Some(c) = cw { self.conflict_with.insert(i, *c); }
+                        done = true;
+                    } else { reruns += 1; }
+                }
+            }
+            if !done {
+                let p = crate::junction::P2::new(i, self.vs.gap[i], self.vs.leader[i], None);
+                if g.j.is_some() { self.junction_p(&p); if self.vs.conn[i] < 0 { self.node_bodies_p(&p, e); } }
+                if self.vs.conn[i] < 0 { self.converge_p(&p, e); }
+                self.apply_p2(i, &p);
+                if g.e_rev[e] >= 0 { self.opposing(i, e); }
+                if self.opts.path_sight >= 1.0 {
+                    let p = crate::junction::P2::new(i, self.vs.gap[i], self.vs.leader[i], None);
+                    self.path_bodies_p(&p);
+                    self.apply_p2(i, &p);
+                }
+            }
             let vs = &mut self.vs;
             let ll = vs.leader[i];
             if ll >= 0 && vs.state[ll as usize] == STATE_CRASHED && vs.edge[ll as usize] == vs.edge[i] {
@@ -108,8 +140,23 @@ impl Sim {
                 if ov > 0.0 { vs.gap[i] = r32(f(vs.gap[i]) - jm::min(MERGE_ROOM, 2.0 + 4.0 * (ov + 0.3))); }
             }
         }
+        self.p2_reruns += reruns;
         self.courtesy();
         if self.opts.deadlock_break >= 1.0 { self.break_deadlocks(); }
+    }
+
+    /// junction, node bodies, converge, (opposing: a no-op without passing), path sight, on a P2 state.
+    fn perceive_p2(&self, p: &crate::junction::P2) {
+        let g = self.gw();
+        let i = p.i;
+        let e = self.vs.edge[i] as usize;
+        if g.j.is_some() { self.junction_p(p); if self.vs.conn[i] < 0 { self.node_bodies_p(p, e); } }
+        if self.vs.conn[i] < 0 { self.converge_p(p, e); }
+        if self.opts.path_sight >= 1.0 { self.path_bodies_p(p); }
+    }
+    fn apply_p2(&mut self, i: usize, p: &crate::junction::P2) {
+        self.vs.gap[i] = p.gap.get(); self.vs.leader[i] = p.leader.get();
+        if let Some(c) = p.cw.get() { self.conflict_with.insert(i, c); }
     }
 
     fn apply_base(&mut self, i: usize, b: &Base) {

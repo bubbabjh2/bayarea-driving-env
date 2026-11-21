@@ -173,6 +173,8 @@ pub struct Sim {
     pub(crate) spawned_keys: HashSet<i64>,
     /// first edges whose _entryLane inputs changed during this step's spawn pass
     pub(crate) spawn_dirty: HashSet<i32>,
+    /// refuel plans prefetched for this spawn pass, by (from, goal)
+    pub(crate) plan_prefetch: HashMap<(i32, i32), Option<crate::fuel::Plan>>,
     /// edge of each slot listed in the lane index at its last rebuild (-1 not listed)
     pub(crate) indexed: Vec<i32>,
     pub(crate) pair_event: HashMap<i64, f64>,
@@ -201,6 +203,8 @@ pub struct Sim {
     pub profile: bool,
     pub events: StepEvents,
     pub event_log: Vec<Event>,
+    /// speculative phase-2 perception re-runs (diagnostic)
+    pub p2_reruns: u64,
     /// slots in a crash event (contact >= touchKmh) during the last step
     pub collided_last: Vec<usize>,
     pub batch_policy: Option<BatchPolicy>,
@@ -210,6 +214,12 @@ pub struct Sim {
 }
 
 #[inline(always)] pub(crate) fn f(x: f32) -> f64 { x as f64 }
+/// A raw pointer that may cross threads (disjoint-index writes only; see the use sites).
+#[derive(Clone, Copy)]
+pub(crate) struct SyncPtr<T>(pub *mut T);
+unsafe impl<T> Send for SyncPtr<T> {}
+unsafe impl<T> Sync for SyncPtr<T> {}
+impl<T> SyncPtr<T> { #[inline(always)] pub(crate) fn get(&self) -> *mut T { self.0 } }
 #[inline(always)] pub(crate) fn r32(x: f64) -> f32 { x as f32 }
 
 impl Sim {
@@ -246,11 +256,11 @@ impl Sim {
             fitness: vec![0.0; n_c], actual_arrival: vec![-1.0; n_c], late_by: vec![0.0; n_c], early_by: vec![0.0; n_c],
             trips, trip_ptr: 0, pending: Vec::new(), lot: Vec::new(), crashes: Vec::new(), active: Vec::new(), edge_crashes: HashMap::default(), edge_has_crash: vec![0; ne],
             counters: Counters::default(), accum: Accum::default(), live: Live::default(), density: Density::default(), obstacle_rng: None, brake_every: (15.0, 40.0),
-            spawned_keys: HashSet::default(), spawn_dirty: HashSet::default(), indexed: Vec::new(), pair_event: HashMap::default(), stuck_labelled: HashMap::default(), conn_cars: Default::default(), node_conn: Default::default(),
+            spawned_keys: HashSet::default(), spawn_dirty: HashSet::default(), plan_prefetch: HashMap::default(), indexed: Vec::new(), pair_event: HashMap::default(), stuck_labelled: HashMap::default(), conn_cars: Default::default(), node_conn: Default::default(),
             passers: Default::default(), conflict_with: HashMap::default(), off_lane: Default::default(), touch: HashSet::default(), barrier_touch: HashSet::default(), barrier_now: HashSet::default(),
             conf_cache: HashMap::default(), mv_into: Sim::build_moves_into(&g), yield_by: None, creep_until: Vec::new(), creep_ignore: Vec::new(), edge_speed: HashMap::default(), traffic_penalty: None,
             last_reroute: HashMap::default(), next_traffic: 0.0, next_reroute: 0.0, next_density: start, edge_count_scratch: vec![0; ne], fwy, fwy_lane_km, seen_j: -1,
-            near_buf: Vec::new(), static_obstacles: Vec::new(), obstacles: Vec::new(), profile: std::env::var("BAYENV_PROFILE").is_ok(), phase_ns: [0; 10], sub_ns: [0; 8], events: StepEvents::default(), event_log: Vec::new(), collided_last: Vec::new(), batch_policy: None,
+            near_buf: Vec::new(), static_obstacles: Vec::new(), obstacles: Vec::new(), profile: std::env::var("BAYENV_PROFILE").is_ok(), phase_ns: [0; 10], sub_ns: [0; 8], events: StepEvents::default(), event_log: Vec::new(), p2_reruns: 0, collided_last: Vec::new(), batch_policy: None,
             empty: opts.traffic_mode == TrafficMode::Empty, time: start, dt: opts.dt, step_count: 0, vs, rng, router, g, pop, opts,
         };
         if sim.opts.traffic_mode == TrafficMode::Sparse && sim.opts.wrecks > 0 { sim.place_wrecks(sim.opts.wrecks); }
@@ -325,12 +335,38 @@ impl Sim {
             batch.par_iter().with_min_len(64).map(|t| me.trip_entry_lane(t)).collect()
         } else { batch.iter().map(|t| self.trip_entry_lane(t)).collect() };
         if self.profile { self.sub_ns[4] += tp.elapsed().as_nanos() as u64; self.sub_ns[5] += n_pending as u64; }
+        if self.stations.is_some() && self.opts.parallel { self.prefetch_spawn_plans(&batch, &pre); }
         self.spawn_dirty.clear();
         let mut keep = Vec::with_capacity(n_pending);
         for (k, t) in batch.into_iter().enumerate() {
             if !self.try_spawn(t, pre[k]) { keep.push(t); }
         }
         self.pending = keep;
+        self.plan_prefetch.clear();
+    }
+
+    /// Refuel plans (StationNetwork.plan, a pure function of (from, goal)) of the departures that will check their
+    /// fuel at spawn, computed as router batches before the ordered spawn pass; check_fuel takes them from here.
+    fn prefetch_spawn_plans(&mut self, batch: &[Trip], pre: &[i32]) {
+        let g = self.gw();
+        let pop = self.popw();
+        let st = self.stations.as_ref().unwrap();
+        let mut ods: Vec<(i32, i32)> = Vec::new();
+        for (k, t) in batch.iter().enumerate() {
+            if pre[k] < 0 { continue; }
+            let c = t.commuter;
+            let r = pop.route(c, t.leg as usize);
+            let vt = pop.vehicle_type[c] as usize;
+            let tank = VEHICLE_PARAMS[if vt < 4 { vt } else { 0 }].tank_l as f32;
+            let fuel = jm::min(tank as f64, f(self.commuter_fuel[c])) as f32;
+            let mut total = 0f32; for &e in r { total = (total as f64 + g.e_length[e as usize]) as f32; }
+            if !st.needs_fuel(vt, fuel as f64, tank as f64, total as f64) { continue; }
+            let od = (g.e_from[r[0] as usize], g.e_to[r[r.len() - 1] as usize]);
+            if !ods.contains(&od) { ods.push(od); }
+        }
+        if ods.is_empty() { return; }
+        let plans = st.plan_many(g, &mut *self.router, &ods);
+        for (od, p) in ods.into_iter().zip(plans) { self.plan_prefetch.insert(od, p); }
     }
 
     /// _entryLane for a trip's first edge (i32::MIN = no route / not evaluated).
@@ -434,7 +470,9 @@ impl Sim {
         self.vs.update_pose(slot, &g); self.vs.save_pose(slot);
         self.counters.spawned += 1;
         self.emit(EV_SPAWNED, slot, -1, f32::NAN, f32::NAN, f32::NAN, f32::NAN);
+        let tf = std::time::Instant::now();
         if self.stations.is_some() { self.check_fuel(slot, true); }
+        if self.profile { self.sub_ns[6] += tf.elapsed().as_nanos() as u64; }
         self.ensure_slot(slot);
         self.drivers[slot] = Driver::External;
         self.vs.flags[slot] |= FLAG_BRAIN;
@@ -568,6 +606,16 @@ impl Sim {
                 Some((c, out, ret, pc))
             }).collect();
         }
+        if par {
+            // write the per-car results back in parallel (distinct slots; save_pose first: px = x before the pose update)
+            use rayon::prelude::*;
+            let ptrs = crate::vehicle::CarPtrs::new(&mut self.vs);
+            let (ppx, ppz, ppy) = (SyncPtr(self.vs.px.as_mut_ptr()), SyncPtr(self.vs.pz.as_mut_ptr()), SyncPtr(self.vs.pyaw.as_mut_ptr()));
+            pre.par_iter().enumerate().with_min_len(64).for_each(|(i, p)| if let Some((c, _, _, _)) = p {
+                // SAFETY: one task per slot i < high; the arrays were not reallocated since the pointers were taken
+                unsafe { *ppx.get().add(i) = c.x; *ppz.get().add(i) = c.z; *ppy.get().add(i) = c.heading; ptrs.write(i, c); }
+            });
+        }
         if self.profile { self.sub_ns[1] += ta.elapsed().as_nanos() as u64; }
         let (mut driving, mut crashed, mut refueling, mut sum_speed) = (0u64, 0u64, 0u64, 0.0f64);
         let (mut speeding_sec, mut speeding_km, mut total_sec, mut total_km) = (0.0f64, 0.0f64, 0.0f64, 0.0f64);
@@ -578,8 +626,7 @@ impl Sim {
             if st == STATE_CRASHED {
                 crashed += 1;
                 if par {
-                    self.vs.save_pose(i);
-                    if let Some((c, out, _, _)) = &pre[i] { self.vs.scatter(i, c, out); pose!(i); }
+                    match &pre[i] { Some((_, out, _, _)) => { self.vs.scatter_side(i, out); pose!(i); } None => self.vs.save_pose(i) }
                     continue;
                 }
                 let vs = &mut self.vs;
@@ -592,9 +639,8 @@ impl Sim {
             if st != STATE_DRIVING { continue; }
             let mut done;
             if par {
-                self.vs.save_pose(i);
-                let (c, out, ret, _) = pre[i].as_ref().unwrap();
-                self.vs.scatter(i, c, out);
+                let (_, out, ret, _) = pre[i].as_ref().unwrap();
+                self.vs.scatter_side(i, out);
                 done = *ret;
             } else {
                 if !fuel_on { self.vs.fuel[i] = self.vs.tank[i]; }
@@ -622,7 +668,7 @@ impl Sim {
                 let k = self.stuck_cause(i);
                 *self.counters.stuck_by.entry(k).or_insert(0) += 1;
             }
-            if self.stations.is_some() && self.time - f(self.vs.last_fuel_check[i]) > check_every { self.check_fuel(i, false); }
+            if self.stations.is_some() && self.time - f(self.vs.last_fuel_check[i]) > check_every { let tf = std::time::Instant::now(); self.check_fuel(i, false); if self.profile { self.sub_ns[7] += tf.elapsed().as_nanos() as u64; } }
             pose!(i);
             driving += 1; sum_speed += f(self.vs.speed[i]);
         }
