@@ -19,6 +19,7 @@
     "fetch:controls": "node tools/controls/fetch.mjs",
     "build:controls": "node tools/controls/build.mjs",
     "validate:controls": "python3 -I tools/controls/validate.py data data/controls-src",
+    "build:surfaces": "node tools/surfaces/build.mjs",
     "build:world-derived": "bash tools/osm/build_world.sh derive",
     "build:osm": "bash tools/osm/build_world.sh osm",
     "verify:world": "node tools/osm/verify.mjs"

@@ -57,8 +57,8 @@ export function maxDriveAccel(P, u) {
   return (Fd - resistance(P, u, 0)) / P.m;
 }
 /** Road-load force (N) at speed u on grade (dy/ds). */
-export function resistance(P, u, grade) {
-  const roll = u > 0.05 ? P.Crr * P.m * G : 0;
+export function resistance(P, u, grade, crrMul = 1) {
+  const roll = u > 0.05 ? P.Crr * crrMul * P.m * G : 0;
   return 0.5 * RHO_AIR * P.CdA * u * Math.abs(u) + roll + P.m * G * grade / Math.sqrt(1 + grade * grade);
 }
 
@@ -89,11 +89,14 @@ export function fuelFlow(P, Pw) {
  * Advance state `st` by `dt` seconds of physics under controls (steerRate, gas, brake),
  * in sub-steps of at most PHYS_DT. `P` = VEHICLE_PARAMS entry (or typeIdx). `grade` = road slope.
  * `locked`: wheels locked / car disabled (no traction, full brake without ABS, no steering).
+ * `surf`: road-surface factors under the wheels {pk, sk, crr} (src/sim/surface.js carSurface): peak friction
+ * mu * pk, locked-wheel sliding friction mu * sk, rolling resistance Crr * crr. Default = dry asphalt {1, 0.8, 1}.
  */
-export function stepDynamics(st, steerRate, gas, brake, P, dt, grade = 0, locked = false, h0 = PHYS_DT, mode = 'rate') {
+export function stepDynamics(st, steerRate, gas, brake, P, dt, grade = 0, locked = false, h0 = PHYS_DT, mode = 'rate', surf = null) {
   if (typeof P === 'number') P = VEHICLE_PARAMS[P];
   const n = Math.max(1, Math.ceil(dt / h0 - 1e-9)), h = dt / n;
-  const { m, Iz, a, b, L, hcg, mu, Cf, Cr } = P;
+  const { m, Iz, a, b, L, hcg, Cf, Cr } = P;
+  const mu = surf ? P.mu * surf.pk : P.mu, kSlide = surf ? surf.sk / surf.pk : 0.8, crrMul = surf ? surf.crr : 1;
   const sr = steerRate < -1 ? -1 : steerRate > 1 ? 1 : steerRate || 0;
   const g_ = gas < 0 ? 0 : gas > 1 ? 1 : gas || 0, b_ = brake < 0 ? 0 : brake > 1 ? 1 : brake || 0;
   const cosG = 1 / Math.sqrt(1 + grade * grade), sinG = grade * cosG;
@@ -149,9 +152,9 @@ export function stepDynamics(st, steerRate, gas, brake, P, dt, grade = 0, locked
     const uf = u > 1 ? u : 1;
     const yfMax = Math.sqrt(Math.max(Ff * Ff - Fxf * Fxf, 0)) + (locked ? 0 : 1e-3), yrMax = Math.sqrt(Math.max(Fr * Fr - Fxr * Fxr, 0)) + (locked ? 0 : 1e-3);
     if (locked) {
-      // sliding tyres: friction opposes the sliding velocity of each axle (kinetic mu 0.8 x peak)
+      // sliding tyres: friction opposes the sliding velocity of each axle (kinetic mu = 0.8 x peak on asphalt; surf.sk / surf.pk on other surfaces)
       const vfx = u, vfy = v + a * r, vrx = u, vry = v - b * r;
-      const sf = Math.hypot(vfx, vfy), sr2 = Math.hypot(vrx, vry), k = 0.8;
+      const sf = Math.hypot(vfx, vfy), sr2 = Math.hypot(vrx, vry), k = kSlide;
       // at rest the locked tyres hold by static friction against gravity on a downhill
       const pushF = Math.max(0, -Wg) * Fzf / (Fzf + Fzr), pushR = Math.max(0, -Wg) - pushF;
       if (sf > 0.01) { Fxf = -k * Ff * vfx / sf; Fyf = -k * Ff * vfy / sf; } else { Fxf = -Math.min(Ff, pushF); Fyf = 0; }
@@ -164,7 +167,7 @@ export function stepDynamics(st, steerRate, gas, brake, P, dt, grade = 0, locked
       Fyf = lamF * yfMax * Math.tanh(Cf * af / yfMax);
       Fyr = lamF * yrMax * Math.tanh(Cr * ar / yrMax);
     }
-    const res = resistance(P, u, grade);
+    const res = resistance(P, u, grade, crrMul);
     const cd = Math.cos(steer), sd = Math.sin(steer);
     const FxBody = Fxf * cd - Fyf * sd + Fxr - res;
     const FyBody = Fxf * sd + Fyf * cd + Fyr;

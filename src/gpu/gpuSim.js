@@ -31,6 +31,7 @@ import * as simCollisions from '../sim/collisions.js';
 import * as simCrash from '../sim/crashModel.js';
 import * as simFuel from '../sim/fuel.js';
 import { VEHICLE_PARAMS, FUEL_DENSITY } from '../sim/physics/params.js';
+import { SURF_PK, SURF_SK, SURF_CRR, PAVED_SHOULDER_FREEWAY } from '../sim/surface.js';
 import { graphSig, sigMismatch } from '../sim/worldSig.js';
 import { makeRouter, routingPack } from '../sim/route.js';
 import { makeRng } from '../sim/rng.js';
@@ -93,6 +94,7 @@ const fuelConst = (k, f) => {
 
 /** WGSL const arrays of the per-type physics parameters (layout v4). */
 export function physicsDefines() {
+  const sf = (a) => `array<f32, 16>(${Array.from(a, (x) => Number(x).toExponential(7)).join(', ')})`;
   const P = VEHICLE_PARAMS, f = (fn) => `array<f32, 4>(${[0, 1, 2, 3].map((k) => Number(fn(P[k] || P[0])).toExponential(7)).join(', ')})`;
   return {
     PT_M: f((p) => p.m), PT_IZ: f((p) => p.Iz), PT_A: f((p) => p.a), PT_B: f((p) => p.b), PT_L: f((p) => p.L), PT_HCG: f((p) => p.hcg),
@@ -100,6 +102,8 @@ export function physicsDefines() {
     PT_BRAKE: f((p) => p.brakeDecel), PT_BFRONT: f((p) => p.brakeFront), PT_CDA: f((p) => p.CdA), PT_CRR: f((p) => p.Crr),
     PT_MAXSTEER: f((p) => p.maxSteer), PT_MAXSTEERRATE: f((p) => p.maxSteerRate), PT_STEERLAG: f((p) => p.steerLag || 0.1), PT_STEERSLEW: f((p) => p.steerSlew || p.maxSteerRate), PT_BSFC: f((p) => p.bsfcMin), PT_IDLE: f((p) => p.idleLph / 3600),
     PT_ACCW: f((p) => p.accessoryW), PT_RHOF: f((p) => FUEL_DENSITY[p.fuel]),
+    // src/sim/surface.js per-code friction / rolling factors (integrate.wgsl surfFactors)
+    SF_PK: sf(SURF_PK), SF_SK: sf(SURF_SK), SF_CRR: sf(SURF_CRR), PAVED_SH_FW: Number(PAVED_SHOULDER_FREEWAY).toExponential(7),
     PT_DRIVE: `array<u32, 4>(${[0, 1, 2, 3].map((k) => ({ front: 0, rear: 1, all: 2 }[(P[k] || P[0]).drive] ?? 0) + 'u').join(', ')})`,
   };
 }

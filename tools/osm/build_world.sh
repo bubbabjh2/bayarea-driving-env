@@ -24,6 +24,8 @@ osm() {
 }
 derive() {
   python3 -I tools/build_crossings.py data
+  # road surfaces (surface=* tags of the raw snapshots) -> data/surfaces.bin (docs/SURFACES.md)
+  node tools/surfaces/build.mjs --if-raw
   # traffic controls: OSM (data/src/flat/controls.*) + authoritative merge -> patch_points -> junctions -> lines
   HEAP_MB=$HEAP node tools/controls/build.mjs --no-verify
   node tools/osm/verify.mjs

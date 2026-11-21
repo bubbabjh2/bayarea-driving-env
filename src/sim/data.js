@@ -10,6 +10,7 @@ import { RoadSet } from '../roadpack.js';
 import { fromRoadSet, attachLaneGeometry, attachJunctions } from './roadGraph.js';
 import { ensureLaneGeometry, buildJunctions, JunctionSet } from '../geom/index.js';
 import { TrafficControls, loadControlsPack } from './controls.js';
+import { attachSurfaces } from './surface.js';
 
 const TYPES = { Float32: Float32Array, Uint32: Uint32Array, Uint16: Uint16Array, Uint8: Uint8Array, Int32: Int32Array };
 const isNode = typeof process !== 'undefined' && !!process.versions?.node && typeof window === 'undefined';
@@ -99,6 +100,14 @@ export async function loadWorld({ base = defaultDataBase(), local = true, statio
       attachJunctions(graph, main[key]);
     }
   }
+  // road surfaces (data/surfaces.bin, tools/surfaces/build.mjs): per-edge pavement + roadside ground codes for the
+  // tyre friction (src/sim/surface.js). Optional: without it every edge is dry asphalt.
+  try {
+    const sm = await readJSON(join(base, 'surfaces.meta.json'));
+    if (sm.edgeCount && sm.edgeCount.main === main.edgeCount && (!loc || sm.edgeCount.local === loc.edgeCount)) {
+      attachSurfaces(graph, new Uint8Array(await readBin(join(base, sm.file))).subarray(0, 2 * graph.edges.length));
+    }
+  } catch (e) { /* optional */ }
   let st = [];
   if (stations) { try { st = stationsOnGraph(await loadStationPack(base), graph); } catch (e) { /* optional */ } }
   // grade separations (data/crossings.json): freeway-system edge pairs that cross in plan without a shared

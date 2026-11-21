@@ -10,7 +10,7 @@ actions you supply.
 * Traffic controls: OSM signals, stop / give-way signs and ramp meters, merged with the authoritative SFMTA (signals,
   stop signs) and San Jose (signals) inventories; every control records its source.
 * Physics, not rules: dynamic bicycle model with tyres, friction circle, weight transfer, ABS/EBD, aero,
-  grade; swept-SAT rigid-body contacts; crash severity = per-vehicle delta-v; incidents block lanes and get
+  grade, per-surface tyre friction and rolling resistance; swept-SAT rigid-body contacts; crash severity = per-vehicle delta-v; incidents block lanes and get
   cleared / towed on realistic timelines; fuel and gas stations.
 * CPU reference sim (Node, plain ES modules, zero dependencies) and a WebGPU sim that mirrors it.
 
@@ -61,7 +61,8 @@ for (;;) {
 * **Worlds:** `trafficMode` `'empty'` (cars don't interact), `'sparse'` (+ stopped wrecks), `'full'`;
   `obstacles`, `staticObstacles`; synthetic worlds in `data/scenarios/` (`src/scenarios/README.md`).
 * **Seeding:** population + sim RNG from `seed`; runs are bit-deterministic for the same seed and actions
-  (checked: two runs → identical state hash; also identical to the original project's env).
+  (checked: two runs → identical state hash). On dry asphalt the physics is bit-identical to the original project's
+  env; road surfaces (below) change the state wherever a car's wheels are on another surface.
 * **Headless:** yes; the sim never loads rendering code.
 
 Measured (Apple M-series laptop): CPU real world, 2,000-commuter population at ~06:20: ~3,000 steps/s with
@@ -120,6 +121,23 @@ on big arterials, ITE yellow, a 1.5 s all-red and a green wave; ramp meters run 
 `src/look/signals.js` is an optional three.js helper that draws heads, poles, mast arms and STOP/YIELD plates at
 every stop line, driven by the sim's signal states. The env never imports it, and its **shape is generic**: the same
 pole/arm/head everywhere, not surveyed. It needs `three` (`npm i three` or an import map; see `tools/controls/README.md`).
+
+## Road surfaces and friction
+
+Each edge has a pavement surface code and a ground class for each side, in `data/surfaces.bin` (2 bytes per edge;
+format, codes and sources in `docs/SURFACES.md`; `npm run build:surfaces`). The pavement comes from the OSM
+`surface=*` tag where it is set: 50.2 % of main-tier and 34.9 % of local-tier edges. Elsewhere it defaults to
+asphalt, concrete on bridges and tunnels, and steel grating on movable bridges. The ground class is what a wheel
+touches past the paved width: curb / sidewalk, grass verge, gravel median, dirt or shore sand. It comes from the road
+class, the `sidewalk` tags and the distance to the water polygons.
+
+`src/sim/surface.js` holds the friction table: peak and sliding adhesion, dry and wet, and the rolling resistance per
+surface, with sources. The CPU and GPU physics take the surface under the right and left wheel lines each step. They
+scale the vehicle's tyre `mu` by `muPeak / muPeak(asphalt)`, scale the locked-wheel sliding friction to match, and
+use the surface's rolling resistance. The codes of the last step are in `env.sim.vs.surfR` / `surfL`. Dry asphalt
+is the reference, with every factor 1. Full brake from 100 km/h, sedan: asphalt / concrete 41.2 m, paving stones
+45.6 m, gravel 56.7 m, steel grate 61.7 m, grass 66.4 m. The wet columns of the table are documentation only:
+friction does not change with weather. Embedded rails (cable car, streetcar) are not modelled.
 
 ## Rebuilding the world
 

@@ -1,0 +1,111 @@
+{
+ "format": "bay-surfaces/1",
+ "file": "surfaces.bin",
+ "edgeCount": {
+  "main": 51011,
+  "local": 240144,
+  "total": 291155
+ },
+ "order": "main-tier edges 0..main-1, then local-tier edges (= SimGraph edge index; local edge k is record main + k)",
+ "layout": "2 bytes per edge. byte 0: bits 0-3 surface code of the pavement, bit 4 = 1 if from the OSM surface tag (0 = default), bit 5 = 1 if the edge's way is not in the raw snapshot. byte 1: bits 0-3 ground code right of the edge (driver's right), bits 4-7 ground code left of the edge (beyond the opposing lanes on two-way roads).",
+ "codes": [
+  "asphalt",
+  "concrete",
+  "paving_stones",
+  "sett",
+  "gravel",
+  "compacted",
+  "dirt",
+  "grass",
+  "sand",
+  "metal_grate",
+  "wood",
+  "curb"
+ ],
+ "defaults": "untagged: asphalt; bridge / tunnel: concrete; bridge=movable: metal_grate. ground: bridge / tunnel / metal / wood = the deck surface; unpaved roads = dirt (grass, sand as tagged); within 25 m of the water polygons = sand; motorway / trunk (+ links): right grass, left gravel; sidewalk tag on that side = curb; sidewalk=no = grass (unclassified: dirt); untagged: curb (unclassified: dirt)",
+ "sources": {
+  "osm": "OpenStreetMap way tags surface=*, bridge=movable (data/osm/raw, tools/osm/osm-lock.json), ODbL 1.0",
+  "water": "data/water.json",
+  "roads": "data/roads.json, data/roads-local.json"
+ },
+ "coverage": {
+  "main": {
+   "edges": 51011,
+   "osmTagged": 25623,
+   "defaulted": 25388,
+   "wayNotInSnapshot": 194,
+   "unknownTag": {},
+   "bySurface": {
+    "concrete": 2764,
+    "asphalt": 48240,
+    "metal_grate": 4,
+    "paving_stones": 3
+   },
+   "byGroundRight": {
+    "concrete": 2265,
+    "grass": 22998,
+    "curb": 24929,
+    "asphalt": 619,
+    "sand": 196,
+    "metal_grate": 4
+   },
+   "osmTagValues": {
+    "asphalt": 23899,
+    "concrete": 913,
+    "paved": 777,
+    "concrete:plates": 27,
+    "metal": 4,
+    "paving_stones": 3
+   },
+   "osmTaggedPct": 50.23,
+   "defaultedPct": 49.77
+  },
+  "local": {
+   "edges": 240144,
+   "osmTagged": 83879,
+   "defaulted": 156265,
+   "wayNotInSnapshot": 358,
+   "unknownTag": {},
+   "bySurface": {
+    "asphalt": 238166,
+    "concrete": 1601,
+    "paving_stones": 154,
+    "dirt": 142,
+    "gravel": 60,
+    "sett": 13,
+    "compacted": 2,
+    "wood": 6
+   },
+   "byGroundRight": {
+    "dirt": 6401,
+    "grass": 31652,
+    "curb": 200479,
+    "concrete": 800,
+    "asphalt": 219,
+    "sand": 585,
+    "wood": 6,
+    "paving_stones": 2
+   },
+   "osmTagValues": {
+    "asphalt": 79633,
+    "paving_stones": 145,
+    "unpaved": 78,
+    "paved": 2997,
+    "concrete": 862,
+    "gravel": 60,
+    "sett": 9,
+    "dirt": 62,
+    "concrete:plates": 8,
+    "unhewn_cobblestone": 4,
+    "compacted": 2,
+    "brick": 5,
+    "wood": 6,
+    "bricks": 4,
+    "ground": 2,
+    "asphalt:lanes": 2
+   },
+   "osmTaggedPct": 34.93,
+   "defaultedPct": 65.07
+  }
+ }
+}

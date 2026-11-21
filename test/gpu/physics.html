@@ -10,6 +10,7 @@
 import { VEHICLE_PARAMS, stepDynamics, createState, obbContact, resolveContact } from '../../src/sim/physics/index.js';
 import { initGPU, loadKernelSource } from '../../src/gpu/device.js';
 import { physicsDefines } from '../../src/gpu/gpuSim.js';
+import { SURFACE_CODES, SURF_PK, SURF_SK, SURF_CRR } from '../../src/sim/surface.js';
 const out = document.getElementById('out');
 const log = (s) => { console.log(s); out.textContent += s + '\n'; };
 const res = { ok: false };
@@ -27,12 +28,18 @@ try {
     S.push({ name: `${nm} full-lock swerve at 120`, type: t, init: { u: 33.3 }, steps: 80, ctrl: (k) => [k < 20 ? 1 : 0, 0, 0] });
     S.push({ name: `${nm} step steer at 20 m/s`, type: t, init: { u: 20 }, steps: 160, ctrl: (k) => [k < 6 ? 1 : 0, 0.3, 0] });
     S.push({ name: `${nm} locked slide`, type: t, init: { u: 25, v: 4, r: 0.4 }, steps: 120, locked: true, ctrl: () => [0, 0, 1] });
+    // road surfaces (src/sim/surface.js): braking, cornering and sliding on other surfaces
+    for (const sn of ['gravel', 'grass', 'sand', 'metal_grate']) {
+      S.push({ name: `${nm} full brake from 100 on ${sn}`, type: t, surf: SURFACE_CODES[sn], init: { u: 27.78 }, steps: 300, ctrl: () => [0, 0, 1] });
+      S.push({ name: `${nm} lane change at 100 on ${sn}`, type: t, surf: SURFACE_CODES[sn], init: { u: 27.78, lat: 1.85 }, steps: 160, ctrl: (k) => [k < 20 ? 0.6 : k < 40 ? -0.6 : k < 50 ? 0.3 : 0, 0.4, 0] });
+      S.push({ name: `${nm} locked slide on ${sn}`, type: t, surf: SURFACE_CODES[sn], init: { u: 25, v: 4, r: 0.4 }, steps: 160, locked: true, ctrl: () => [0, 0, 1] });
+    }
   }
   const NS = S.length, maxSteps = Math.max(...S.map((s) => s.steps));
   const scen = new Float32Array(NS * 12), ctrl = new Float32Array(NS * maxSteps * 3);
   S.forEach((s, k) => {
     const st = createState(s.init);
-    scen.set([s.type, s.locked ? 1 : 0, s.steps, st.u, st.v, st.r, st.steer, st.ax, st.hr, st.lat, st.s, 0], k * 12);
+    scen.set([s.type, s.locked ? 1 : 0, s.steps, st.u, st.v, st.r, st.steer, st.ax, st.hr, st.lat, st.s, s.surf ?? 0], k * 12);
     for (let j = 0; j < s.steps; j++) ctrl.set(s.ctrl(j), (k * maxSteps + j) * 3);
   });
   // ---- random contact pairs
@@ -71,7 +78,8 @@ fn dyn(@builtin(global_invocation_id) g: vec3u) {
   var fuel = 0.0;
   for (var j = 0u; j < n; j = j + 1u) {
     let c = (k * NSTEP + j) * 3u;
-    st = stepDynamics(st, ctrl[c], ctrl[c + 1u], ctrl[c + 2u], t, ${dt}, 0.0, locked);
+    let sc = u32(scen[b + 11u]);
+    st = stepDynamicsS(st, ctrl[c], ctrl[c + 1u], ctrl[c + 2u], t, ${dt}, 0.0, locked, vec3f(SF_PK[sc], SF_SK[sc], SF_CRR[sc]));
     fuel = fuel + st.fuelL;
     let o = (k * NSTEP + j) * 8u;
     outS[o] = st.u; outS[o + 1u] = st.v; outS[o + 2u] = st.r; outS[o + 3u] = st.steer; outS[o + 4u] = st.hr; outS[o + 5u] = st.lat; outS[o + 6u] = st.s; outS[o + 7u] = fuel;
@@ -110,7 +118,8 @@ fn coll(@builtin(global_invocation_id) g: vec3u) {
     for (let j = 0; j < s.steps; j++) {
       const [sr, gas, br] = s.ctrl(j);
       st.fuelL = 0;
-      stepDynamics(st, sr, gas, br, P, dt, 0, !!s.locked, undefined, MODE);
+      const sc = s.surf ?? 0;
+      stepDynamics(st, sr, gas, br, P, dt, 0, !!s.locked, undefined, MODE, { pk: SURF_PK[sc], sk: SURF_SK[sc], crr: SURF_CRR[sc] });
       fuel += st.fuelL;
       const o = (k * maxSteps + j) * 8;
       const gv = { u: G[o], v: G[o + 1], r: G[o + 2], steer: G[o + 3], hr: G[o + 4], lat: G[o + 5], s: G[o + 6], fuel: G[o + 7] };

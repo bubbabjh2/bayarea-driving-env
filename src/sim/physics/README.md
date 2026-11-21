@@ -14,7 +14,7 @@ import { VEHICLE_PARAMS, createState, stepDynamics, pedalsFor, maxDriveAccel, re
 `VEHICLE_PARAMS[typeIdx]` (0 sedan, 1 SUV, 2 truck, 3 bus): `length, width, height, L (wheelbase), a, b
 (CG to front/rear axle), hcg, m, Iz, CdA, Crr, Pmax (W at the wheels), F0 (N, low-speed traction limit),
 drive ('front'|'rear'|'all'), vmax, brakeDecel (m/s² at brake = 1 before the tyre limit), brakeFront,
-Cf, Cr (cornering stiffness, N/rad), mu (peak road friction), maxSteer (rad), maxSteerRate (rad/s),
+Cf, Cr (cornering stiffness, N/rad), mu (peak road friction on dry asphalt; scaled per surface), maxSteer (rad), maxSteerRate (rad/s),
 fuel ('gasoline'|'diesel'), bsfcMin (g/kWh), idleLph, accessoryW, tankL`. Constants `RHO_AIR = 1.225`,
 `G = 9.81`, `FUEL_DENSITY` (g/L).
 
@@ -38,6 +38,9 @@ values: `steerRate ∈ [-1, 1]` × `maxSteerRate`, `gas, brake ∈ [0, 1]`. `gra
 axle loads shift by m g sinθ hcg / L, gravity enters the road load, a stopped car's brakes hold against gravity on a
 downhill, and `s` advances by the horizontal component u cosθ. No reverse gear: on an uphill a car never rolls back.
 `locked` = disabled car: no traction, wheels locked, sliding friction until rest.
+`surf` (11th argument, optional) = road-surface factors under the wheels `{pk, sk, crr}` from `src/sim/surface.js`
+`carSurface`: peak friction `mu·pk`, locked-wheel sliding friction `mu·sk`, rolling resistance `Crr·crr`. Omitted or
+`{1, 0.8, 1}` = dry asphalt, exactly the single-mu model. Table and sources: `docs/SURFACES.md`.
 
 Per sub-step: steer integrates and clamps; normal loads with longitudinal weight transfer; traction
 `gas·min(F0, Pmax/u)` split by drive layout; brakes `brake·m·brakeDecel` split front/rear; each axle's

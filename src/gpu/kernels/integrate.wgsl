@@ -44,6 +44,29 @@ fn finishLeg(a: u32, leg: u32, code: u32, tripS: f32, prog: f32) {
 }
 fn release(i: u32) { veh[i].state = FREE; pose[i] = vec4f(0.0, -1000.0, 0.0, 0.0); }
 
+// src/sim/surface.js carSurface: road-surface factors (pk, sk, crr) under the right / left wheels. Edge flag bits
+// 16..19 pavement code, 20..23 ground right, 24..27 ground left (worldPack.js); SF_* per-code factor tables.
+fn surfFactors(e: u32, s: f32, lat: f32, hw: f32, conn: i32, taper: f32) -> vec3f {
+  let fl = eFlags(e);
+  let cs = (fl >> 16u) & 15u; let gR = (fl >> 20u) & 15u; let gL = (fl >> 24u) & 15u;
+  var cR = cs; var cL = cs;
+  let inBox = P.hasJ != 0u && (s < eSExit(e) + 1.0 || s > eSStop(e));
+  if (conn < 0 && !inBox && (gR != cs || gL != cs)) {
+    let W = laneWAt(e, s); let latR = lat - hw; let latL = lat + hw; let nW = f32(eLanes(e)) * W;
+    if (latR < 0.0 || latL > nW) {
+      var padR = 0.0; var padL = nW;
+      if (P.hasLG != 0u) { let bd = boundsAt(e, s); padR = bd.z - bd.x; padL = bd.z - bd.y; }
+      else if (taper > s) { padR = padR - W; padL = padL + W; }
+      let sh = select(0.0, PAVED_SH_FW, (fl & 64u) != 0u);
+      var left = padL + sh;
+      if (eRev(e) >= 0) { left = padL + f32(eLanes(u32(eRev(e)))) * W; }
+      if (latR < padR - sh) { cR = gR; }
+      if (latL > left) { cL = gL; }
+    }
+  }
+  return vec3f(0.5 * (SF_PK[cR] + SF_PK[cL]), 0.5 * (SF_SK[cR] + SF_SK[cL]), 0.5 * (SF_CRR[cR] + SF_CRR[cL]));
+}
+
 fn updatePose(i: u32) { pose[i] = poseOf(veh[i]); }
 fn savePose(i: u32) { let p = pose[i]; veh[i].px = p.x; veh[i].pz = p.z; veh[i].pyaw = p.w; }
 
@@ -71,7 +94,7 @@ fn main(@builtin(global_invocation_id) g: vec3u, @builtin(local_invocation_index
         let pc = par[i];
         var st: DynState;
         st.u = v.speed; st.v = v.vLat; st.r = v.yawRate; st.steer = v.steerAngle; st.sl = v.steerSl; st.ax = v.axPrev; st.hr = v.headingRel; st.lat = v.lat; st.s = v.s;
-        st = stepDynamics(st, 0.0, 0.0, 1.0, pc.typeIdx, dt, edgeGrade(v.edge, v.s), true);
+        st = stepDynamicsS(st, 0.0, 0.0, 1.0, pc.typeIdx, dt, edgeGrade(v.edge, v.s), true, surfFactors(v.edge, v.s, v.lat, 0.5 * pc.width, vConn(v), v.taper));
         veh[i].speed = st.u; veh[i].vLat = st.v; veh[i].yawRate = st.r; veh[i].steerAngle = st.steer; veh[i].axPrev = st.ax;
         veh[i].headingRel = st.hr; veh[i].lat = st.lat; veh[i].s = clamp(st.s, 0.0, frameEnd(v));
         veh[i].lanes = derivedLanes(v.edge, veh[i].s, st.lat, halfExtent(veh[i], pc), vTarget(v));
@@ -134,7 +157,7 @@ fn main(@builtin(global_invocation_id) g: vec3u, @builtin(local_invocation_index
       let s0 = v.s;
       var st: DynState;
       st.u = v.speed; st.v = v.vLat; st.r = v.yawRate; st.steer = v.steerAngle; st.sl = v.steerSl; st.ax = v.axPrev; st.hr = v.headingRel; st.lat = v.lat; st.s = v.s;
-      st = stepDynamics(st, sr, gas, brake, pi.typeIdx, dt, select(edgeGrade(v.edge, v.s), 0.0, vConn(v) >= 0), false);
+      st = stepDynamicsS(st, sr, gas, brake, pi.typeIdx, dt, select(edgeGrade(v.edge, v.s), 0.0, vConn(v) >= 0), false, surfFactors(v.edge, v.s, v.lat, 0.5 * pi.width, vConn(v), v.taper));
       v.speed = st.u; v.vLat = st.v; v.yawRate = st.r; v.steerAngle = st.steer; v.steerSl = st.sl; v.axPrev = st.ax; v.headingRel = st.hr; v.lat = st.lat; v.power = st.power;
       let nv = st.u;
       var a = (st.u - u0) / dt;
