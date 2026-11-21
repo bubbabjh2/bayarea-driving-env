@@ -20,7 +20,9 @@ pub const STORAGE: wgpu::BufferUsages = wgpu::BufferUsages::STORAGE.union(wgpu::
 
 impl Gpu {
     /// Highest-performance adapter (Metal / Vulkan / DX12), the adapter's own limits requested.
-    pub fn new() -> Result<Gpu, String> {
+    pub fn new() -> Result<Gpu, String> { Self::new_with(wgpu::Features::empty()) }
+    /// As `new`, also requesting the optional `want` features the adapter has (e.g. timestamp queries for profiling).
+    pub fn new_with(want: wgpu::Features) -> Result<Gpu, String> {
         let mut desc = wgpu::InstanceDescriptor::new_without_display_handle_from_env();
         if std::env::var("WGPU_BACKEND").is_err() { desc.backends = wgpu::Backends::PRIMARY; }
         let instance = wgpu::Instance::new(desc);
@@ -41,7 +43,7 @@ impl Gpu {
         limits.max_compute_workgroup_storage_size = al.max_compute_workgroup_storage_size;
         limits.max_bind_groups = al.max_bind_groups.min(4);
         let (device, queue) = pollster::block_on(adapter.request_device(&wgpu::DeviceDescriptor {
-            label: Some("bayenv"), required_features: wgpu::Features::empty(), required_limits: limits.clone(),
+            label: Some("bayenv"), required_features: want & adapter.features(), required_limits: limits.clone(),
             memory_hints: wgpu::MemoryHints::Performance, ..Default::default()
         })).map_err(|e| format!("request_device: {e}"))?;
         device.on_uncaptured_error(Arc::new(|e| eprintln!("wgpu error: {e}")));
