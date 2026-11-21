@@ -360,7 +360,9 @@ pub struct World {
     /// junction movements by out-edge (junction.rs moves_into), built once per world
     pub mv_into: std::sync::OnceLock<Option<crate::fx::HashMap<u32, Vec<usize>>>>,
     /// hop table: for edge e, entry k = hop to out_edges[out_start[e_to[e]] + k]
-    hop_base: Vec<u32>, hops: Vec<Hop>,
+    hop_base: Vec<u32>,
+    /// (out edge, hop) per (edge, out edge of its head node), CSR order; edge e at [hop_base[e], hop_base[e + 1])
+    hop_tab: Vec<(u32, Hop)>,
     pub bounds: (f64, f64, f64, f64),
 }
 
@@ -433,7 +435,7 @@ impl World {
             l_start: p.u32s("lStart"), lane_off: p.f64s("laneOff"),
             out_start: p.i32s("outStart"), out_edges: p.i32s("outEdges"), in_start: p.i32s("inStart"), in_edges: p.i32s("inEdges"),
             highway_names: names, max_speed: meta["maxSpeed"].as_f64().unwrap_or(0.0), banned_hops, contact_pairs, lg, j, controls, stations,
-            surfaces: meta["surfaces"].as_bool().unwrap_or(false), hop_base: Vec::new(), hops: Vec::new(), conf_ext: Vec::new(), nav_base: std::sync::OnceLock::new(), mv_into: std::sync::OnceLock::new(),
+            surfaces: meta["surfaces"].as_bool().unwrap_or(false), hop_base: Vec::new(), hop_tab: Vec::new(), conf_ext: Vec::new(), nav_base: std::sync::OnceLock::new(), mv_into: std::sync::OnceLock::new(),
             bounds: (b["minX"].as_f64().unwrap_or(0.0), b["maxX"].as_f64().unwrap_or(0.0), b["minZ"].as_f64().unwrap_or(0.0), b["maxZ"].as_f64().unwrap_or(0.0)),
         };
         w.build_hops();
@@ -495,7 +497,7 @@ impl World {
             contact_pairs: w.contact_pairs.as_ref().map(|c| c.set.iter().map(|&k| k as i64).collect()),
             lg: Some(lg), j, controls,
             stations: w.stations.iter().map(|s| Station { node: s.node as i32, pumps: s.pumps as i32, x: s.x, z: s.z }).collect(),
-            surfaces: w.surfaces, hop_base: Vec::new(), hops: Vec::new(), conf_ext: Vec::new(), nav_base: std::sync::OnceLock::new(), mv_into: std::sync::OnceLock::new(),
+            surfaces: w.surfaces, hop_base: Vec::new(), hop_tab: Vec::new(), conf_ext: Vec::new(), nav_base: std::sync::OnceLock::new(), mv_into: std::sync::OnceLock::new(),
             bounds: (g.bounds.min_x, g.bounds.max_x, g.bounds.min_z, g.bounds.max_z),
         };
         world.build_hops();
@@ -521,7 +523,7 @@ impl World {
             banned_hops: g.banned_hops.iter().map(|(&k, v)| (k as i64, v.iter().map(|&x| x as i32).collect())).collect(),
             contact_pairs: None, lg: None, j: None, controls: None,
             stations: w.stations.iter().map(|s| Station { node: s.node as i32, pumps: s.pumps as i32, x: s.x, z: s.z }).collect(),
-            surfaces: false, conf_ext: Vec::new(), hop_base: Vec::new(), hops: Vec::new(), nav_base: std::sync::OnceLock::new(), mv_into: std::sync::OnceLock::new(),
+            surfaces: false, conf_ext: Vec::new(), hop_base: Vec::new(), hop_tab: Vec::new(), nav_base: std::sync::OnceLock::new(), mv_into: std::sync::OnceLock::new(),
             bounds: (g.bounds.min_x, g.bounds.max_x, g.bounds.min_z, g.bounds.max_z),
         }
     }
@@ -531,13 +533,13 @@ impl World {
         let ne = self.edge_count;
         let mut base = vec![0u32; ne + 1];
         for e in 0..ne { let t = self.e_to[e] as usize; base[e + 1] = base[e] + (self.out_start[t + 1] - self.out_start[t]) as u32; }
-        let mut hops = Vec::with_capacity(base[ne] as usize);
+        let mut tab = Vec::with_capacity(base[ne] as usize);
         for e in 0..ne {
             let t = self.e_to[e] as usize;
-            for q in self.out_start[t]..self.out_start[t + 1] { hops.push(self.hop_compute(e, self.out_edges[q as usize] as usize)); }
+            for q in self.out_start[t]..self.out_start[t + 1] { let en = self.out_edges[q as usize] as usize; tab.push((en as u32, self.hop_compute(e, en))); }
         }
         self.hop_base = base;
-        self.hops = hops;
+        self.hop_tab = tab;
     }
 
     /// Check the hop table against the JS reference (world pack `hopRef`). Returns mismatches.
@@ -596,10 +598,9 @@ impl World {
     /// hopMap(g, e, en) (cached table for adjacent pairs).
     #[inline]
     pub fn hop(&self, e: usize, en: usize) -> Hop {
-        let t = self.e_to[e] as usize;
-        let s = self.out_start[t] as usize;
-        let b = self.hop_base[e] as usize;
-        for q in s..self.out_start[t + 1] as usize { if self.out_edges[q] as usize == en { return self.hops[b + q - s]; } }
+        // entries (out edge, hop) of e's head node, contiguous: [hop_base[e], hop_base[e + 1])
+        let (b, b1) = (self.hop_base[e] as usize, self.hop_base[e + 1] as usize);
+        for (to, h) in &self.hop_tab[b..b1] { if *to as usize == en { return *h; } }
         self.hop_compute(e, en)
     }
     /// mapLane(g, e, en, l)
