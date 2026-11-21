@@ -30,7 +30,9 @@ pub const DEFAULT_TRAITS: Traits = Traits { aggression: 0.5, patience: 0.5, reac
 
 /// vs.missed entry (a lane that led onto another out-edge than planned).
 #[derive(Clone, Copy, Debug)]
-pub struct Missed { pub from: i32, pub planned: i32, pub took: i32, pub goal: i32 }
+pub struct Missed { pub from: i32, pub planned: i32, pub took: i32, pub goal: i32,
+    /// SimOpts::replan_at_missed_event: the route was already re-planned at the event
+    pub replanned: bool }
 
 macro_rules! store {
     ($($name:ident : $t:ty = $init:expr, $stride:expr;)*) => {
@@ -544,7 +546,7 @@ impl VehicleStore {
                                 let took = j.info(best as usize, 2) as i32;
                                 
                                 let goal = g.e_to[route_at(route, out, route.len() - 1) as usize];
-                                out.missed = Some(Missed { from: e as i32, planned: rnext, took, goal });
+                                out.missed = Some(Missed { from: e as i32, planned: rnext, took, goal, replanned: false });
                                 out.route_set.push((next, took)); out.route_reset = true;
                                 mv = best;
                                 out.missed_t = Some((now, f(c.spawn_time)));
@@ -607,7 +609,7 @@ impl VehicleStore {
                         if l2 >= 0 && l2 < g.e_lanes[o] {
                             
                             let goal = g.e_to[route_at(route, out, route.len() - 1) as usize];
-                            out.missed = Some(Missed { from: e as i32, planned: en as i32, took: o as i32, goal });
+                            out.missed = Some(Missed { from: e as i32, planned: en as i32, took: o as i32, goal, replanned: false });
                             out.route_set.push((next, o as i32)); out.route_reset = true;
                             en = o; break;
                         }
