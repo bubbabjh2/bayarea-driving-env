@@ -315,3 +315,25 @@ fn dt_zero_rejected() {
     let Some(g) = common::shared_world("road3") else { panic!("SimOpts.dt (fixtures unavailable)") };
     let _ = Sim::new(g.clone(), Arc::new(Population::default()), SimOpts { dt: 0.0, ..SimOpts::default() }, bayenv_sim::harness::router_for(&g));
 }
+
+#[test]
+fn heading_preview_sees_the_corner_ahead() {
+    let Some(g) = common::shared_world("road3") else { return bayenv_world::oracle::skip("physics_fixes", "fixtures") };
+    let mut sim = sim_with(&g, SimOpts::default());
+    // 15 m before the 90-degree kink at b, route a -> b -> c
+    let a = place(&mut sim, SEDAN, &[0, 1], g.e_length[0] - 15.0, 0, 10.0);
+    let p = bayenv_sim::obs::heading_preview(&sim, a);
+    eprintln!("preview before the kink: {p:?}");
+    assert!(p[0].abs() < 1e-6 && p[1].abs() < 1e-6, "straight for the first 10 m");
+    assert!((p[2].abs() - std::f64::consts::FRAC_PI_2).abs() < 0.1 && (p[3] - p[2]).abs() < 1e-6, "the right angle at 20 and 40 m");
+    // on a junction connector of a real-map cut: the preview follows the connector's turn
+    let Some(w) = scenario_world("junction-s1") else { return };
+    let j = w.j.as_ref().unwrap();
+    let m = (0..j.move_count).find(|&m| j.turn(m).abs() > 1.2 && w.e_length[j.info(m, 0) as usize] >= 150.0).unwrap();
+    let mut sim = sim_with(&w, SimOpts::default());
+    let c = place(&mut sim, SEDAN, &[j.info(m, 0) as i32, j.info(m, 2) as i32], j.s_in(m) - 2.0, j.info(m, 1) as i32, 5.0);
+    let p = bayenv_sim::obs::heading_preview(&sim, c);
+    eprintln!("preview 2 m before a {:.2} rad turn: {p:?}", j.turn(m));
+    assert!((p[3] - j.turn(m)).abs() < 0.25, "the 40 m preview sees the whole turn");
+    assert!(p[3].signum() == j.turn(m).signum());
+}
