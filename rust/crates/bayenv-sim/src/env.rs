@@ -171,7 +171,8 @@ impl Env {
         macro_rules! col { ($($n:literal => $f:ident),*) => { vec![$(($n, (0..h).map(|i| vs.$f[i] as f64).collect::<Vec<f64>>())),*] }; }
         let cols: Vec<(&'static str, Vec<f64>)> = col!("edge" => edge, "state" => state, "flags" => flags, "route_pos" => route_pos, "s" => s, "speed" => speed, "accel" => accel, "lat" => lat,
             "heading_rel" => heading_rel, "steer" => steer_angle, "odometer" => odometer, "fuel" => fuel, "gas" => gas, "brake" => brake, "yaw_rate" => yaw_rate,
-            "v_lat" => v_lat, "lane" => lane, "x" => x, "y" => y, "z" => z, "heading" => heading, "commuter" => commuter, "leader" => leader, "gap" => gap, "progress_m" => route_dist);
+            "v_lat" => v_lat, "lane" => lane, "x" => x, "y" => y, "z" => z, "heading" => heading, "commuter" => commuter, "leader" => leader, "gap" => gap, "progress_m" => route_dist, "leg" => leg, "conn" => conn, "lane_lo" => lane_lo, "lane_hi" => lane_hi,
+            "ctl_type" => ctl_type, "ctl_state" => ctl_state, "ctl_dist" => ctl_dist, "route_pos" => route_pos);
         let mut cols = cols;
         let g = &self.world;
         cols.push(("speed_limit", (0..h).map(|i| if vs.state[i] != crate::vehicle::STATE_FREE && vs.edge[i] >= 0 && (vs.edge[i] as usize) < g.edge_count { g.e_speed[vs.edge[i] as usize] as f32 as f64 } else { f64::NAN }).collect()));
