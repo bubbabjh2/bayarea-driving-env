@@ -106,6 +106,22 @@ pub trait Router: Send + Sync {
     fn route(&mut self, start: i32, goal: i32, avoid: Option<&HashSet<i32>>, penalty: Option<&HashMap<i32, f64>>) -> Option<Vec<i32>>;
 }
 
+/// Per-car events since the last `take_events` (Env::step clears them): what reward.js needs.
+#[derive(Clone, Copy, Debug)]
+pub struct ArrivedEv { pub slot: usize, pub agent: i32, pub leg: u8, pub late_by: f64 }
+/// A crash event for a car that was driving (sim._crashEvent / signalsFor .crash): own delta-v (km/h), its share of
+/// the closing speed (reward.js crashShare), disabled = own delta-v >= 10 km/h (the trip fails).
+#[derive(Clone, Copy, Debug)]
+pub struct CrashedEv { pub slot: usize, pub agent: i32, pub dv_kmh: f64, pub share: f64, pub disabled: bool }
+#[derive(Clone, Debug, Default)]
+pub struct StepEvents { pub arrived: Vec<ArrivedEv>, pub crashed: Vec<CrashedEv>, pub stranded: Vec<(usize, i32)> }
+
+/// Batched external policy hook (JS batchDrive / opts.batchPolicy): called once per step in `drive`, before any car
+/// is commanded, with the slots of every driving car that has the external driver; it writes their commands into
+/// `actions[slot]` (None = the default action). Runs at the point where JS calls driver.step, so it sees exactly the
+/// state the per-car drivers see.
+pub type BatchPolicy = Box<dyn FnMut(&Sim, &[usize], &mut [Option<Action>]) + Send + Sync>;
+
 /// Per-step signals for a driver (sim.signalsFor).
 #[derive(Clone, Copy, Debug, Default)]
 pub struct Signals { pub collision: bool, pub stranded: bool, pub harsh_braking: bool, pub time_to_work_start: f64, pub remaining_route_distance: f64, pub fuel_fraction: f64, pub refuel_planned: bool }
@@ -164,6 +180,8 @@ pub struct Sim {
     pub obstacles: Vec<(usize, &'static str, i32, f64)>,
     /// per-phase wall time (ns) when `profile` is set: spawn, hash, contacts, lanes, leaders, controls, drive, integrate, scenes, traffic+reroute+density
     pub profile: bool,
+    pub events: StepEvents,
+    pub batch_policy: Option<BatchPolicy>,
     pub phase_ns: [u64; 10],
 }
 
@@ -208,7 +226,7 @@ impl Sim {
             passers: Default::default(), conflict_with: HashMap::default(), off_lane: Default::default(), touch: HashSet::default(), barrier_touch: HashSet::default(), barrier_now: HashSet::default(),
             conf_cache: HashMap::default(), mv_into: None, yield_by: None, creep_until: Vec::new(), creep_ignore: Vec::new(), edge_speed: HashMap::default(), traffic_penalty: None,
             last_reroute: HashMap::default(), next_traffic: 0.0, next_reroute: 0.0, next_density: start, edge_count_scratch: vec![0; ne], fwy, fwy_lane_km, seen_j: -1,
-            near_buf: Vec::new(), static_obstacles: Vec::new(), obstacles: Vec::new(), profile: std::env::var("BAYENV_PROFILE").is_ok(), phase_ns: [0; 10],
+            near_buf: Vec::new(), static_obstacles: Vec::new(), obstacles: Vec::new(), profile: std::env::var("BAYENV_PROFILE").is_ok(), phase_ns: [0; 10], events: StepEvents::default(), batch_policy: None,
             empty: opts.traffic_mode == TrafficMode::Empty, time: start, dt: opts.dt, step_count: 0, vs, rng, router, g, pop, opts,
         };
         if sim.opts.traffic_mode == TrafficMode::Sparse && sim.opts.wrecks > 0 { sim.place_wrecks(sim.opts.wrecks); }
@@ -415,6 +433,13 @@ impl Sim {
 
     fn drive(&mut self, dt: f64) {
         let high = self.vs.high;
+        if let Some(mut hook) = self.batch_policy.take() {
+            let slots: Vec<usize> = (0..high).filter(|&i| self.vs.state[i] == STATE_DRIVING && self.drivers[i] == Driver::External).collect();
+            let mut acts = std::mem::take(&mut self.actions);
+            hook(self, &slots, &mut acts);
+            self.actions = acts;
+            self.batch_policy = Some(hook);
+        }
         for i in 0..high {
             if self.vs.state[i] != STATE_DRIVING { continue; }
             if let Some(cmd) = self.driver_cmd(i) {
@@ -538,6 +563,7 @@ impl Sim {
         let c = c as usize;
         let leg = self.vs.leg[i];
         let late = if leg == 0 { self.time - self.pop.work_start[c] } else { 0.0 };
+        self.events.arrived.push(ArrivedEv { slot: i, agent: c as i32, leg, late_by: late });
         self.counters.arrived += 1;
         self.commuter_fuel[c] = self.vs.fuel[i];
         self.set_outcome(c, leg, FAIL_ARRIVED);

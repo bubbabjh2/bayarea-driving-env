@@ -477,8 +477,7 @@ impl Sim {
         }
     }
 
-    #[allow(dead_code)]
-    pub(crate) fn box_busy_j(&mut self, i: usize, e: usize) -> bool {
+    pub fn box_busy_j(&mut self, i: usize, e: usize) -> bool {
         let g = self.gw();
         let j = g.j.as_ref().unwrap();
         if self.vs.conn[i] >= 0 || !(g.e_s_stop[e] < g.e_length[e]) { return false; }

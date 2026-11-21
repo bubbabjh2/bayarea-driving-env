@@ -31,6 +31,14 @@ pub struct ObstacleSpec { pub count: usize, pub kinds: Vec<&'static str>, pub se
 pub const OBSTACLE_KINDS: [&str; 8] = ["midblock", "afterCurve", "afterMerge", "junction", "rampEnd", "partial", "slow", "braking"];
 impl Default for ObstacleSpec { fn default() -> Self { ObstacleSpec { count: 40, kinds: OBSTACLE_KINDS.to_vec(), seed: 1.0, slow_kmh: (10.0, 20.0), brake_every: (15.0, 40.0), allow_single_lane: false } } }
 
+/// Flat observation layouts: `V3` = obsLayout.js 358 floats (the GPU obs='v3' vector), `Flat` = the 77 structured
+/// scalars of obs.rs (FLAT layout), `FlatV3` = both (435).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum ObsKind { Flat, V3, FlatV3 }
+impl ObsKind { pub fn width(self) -> usize { match self { ObsKind::Flat => crate::obs::flat_stride(false), ObsKind::V3 => crate::obs::OBS3, ObsKind::FlatV3 => crate::obs::flat_stride(true) } } }
+
+pub struct StepOutput { pub events: crate::sim::StepEvents, pub progress: Vec<(usize, f64)> }
+
 pub struct Env { pub world: Arc<World>, pub pop: Arc<Population>, pub cfg: EnvConfig, pub sim: Sim, router: RouterFactory }
 
 pub fn default_start(pop: &Population) -> f64 {
@@ -69,6 +77,45 @@ impl Env {
     }
     /// env.step(k): k sim steps, then the commands are cleared.
     pub fn step(&mut self, k: usize) { for _ in 0..k { self.sim.step(); } for a in self.sim.actions.iter_mut() { *a = None; } }
+
+    /// step(k) returning the per-car events of those steps (arrivals with lateness, crash events with own delta-v and
+    /// share, strandings) and the route progress (m) of every car that was driving before the step and is still the
+    /// same trip after it (route-distance delta; a re-route restarts route distance at the current position).
+    pub fn step_events(&mut self, k: usize) -> StepOutput {
+        let vs = &self.sim.vs;
+        let before: Vec<(usize, i32, f32, f32)> = (0..vs.high).filter(|&i| vs.state[i] == STATE_DRIVING).map(|i| (i, vs.commuter[i], vs.spawn_time[i], vs.route_dist[i])).collect();
+        self.sim.events = Default::default();
+        self.step(k);
+        let vs = &self.sim.vs;
+        let progress = before.into_iter().filter(|&(i, c, t, _)| vs.state[i] != crate::vehicle::STATE_FREE && vs.commuter[i] == c && vs.spawn_time[i] == t)
+            .map(|(i, _, _, d)| (i, vs.route_dist[i] as f64 - d as f64)).collect();
+        StepOutput { events: std::mem::take(&mut self.sim.events), progress }
+    }
+
+    /// Zero-copy batch observe: writes the flat vector (ObsKind) of every driving car into `out` (row r = slots[r])
+    /// and the slots into `slots`; returns the row width. `out` must hold n_driving * width floats (grows if a Vec).
+    pub fn observe_batch(&mut self, kind: ObsKind, out: &mut Vec<f32>, slots: &mut Vec<u32>) -> usize {
+        let list = crate::obs::driving_slots(&self.sim);
+        slots.clear(); slots.extend(list.iter().map(|&s| s as u32));
+        let w = kind.width();
+        out.clear(); out.resize(list.len() * w, 0.0);
+        match kind {
+            ObsKind::Flat => crate::obs::observe_flat(&mut self.sim, &list, out, false),
+            ObsKind::FlatV3 => crate::obs::observe_flat(&mut self.sim, &list, out, true),
+            ObsKind::V3 => {
+                let mut o = crate::obs::Obs::default();
+                for (r, &i) in list.iter().enumerate() { crate::obs::observe_one(&mut self.sim, i, &mut o, Some(&mut out[r * w..(r + 1) * w])); }
+            }
+        }
+        w
+    }
+    /// act_batch(slots, actions n*3 [steer, gas, brake])
+    pub fn act_batch(&mut self, slots: &[u32], actions: &[f32]) {
+        for (r, &sl) in slots.iter().enumerate() {
+            let a = &actions[3 * r..3 * r + 3];
+            self.act(sl as usize, Action { steer: Some(a[0] as f64), steer_rate: None, gas: a[1] as f64, brake: a[2] as f64 });
+        }
+    }
     pub fn outcomes(&self) -> &[u8] { &self.sim.outcome }
 }
 

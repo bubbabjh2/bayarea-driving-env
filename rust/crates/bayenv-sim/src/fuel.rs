@@ -22,6 +22,7 @@ pub fn litres_per_km(type_idx: usize, v: f64) -> f64 {
     fuel_flow(p, pw) * 1000.0 / jm::max(v, 0.1)
 }
 
+/// detour_time = via-station route time - direct route time (s, free flow), as routeViaStation's detourTime.
 pub struct Plan { pub edges: Vec<i32>, pub station: usize, pub stop_index: usize, pub detour_time: f64 }
 
 pub struct StationNetwork {
@@ -87,17 +88,17 @@ impl StationNetwork {
         if self.node.is_empty() { return None; }
         let r = self.route_via_station(g, router, from, goal);
         match r {
-            Some((route, st)) => {
+            Some((route, st, direct_time)) => {
                 let stop = route.edges.iter().position(|&e| g.edge_to(e as usize) == self.node[st]);
                 match stop {
-                    Some(k) => { self.planned += 1; let dt = route.time; Some(Plan { edges: route.edges, station: st, stop_index: k, detour_time: dt }) }
+                    Some(k) => { self.planned += 1; let dt = route.time - direct_time; Some(Plan { edges: route.edges, station: st, stop_index: k, detour_time: dt }) }
                     None => { self.plan_failed += 1; None }
                 }
             }
             None => { self.plan_failed += 1; None }
         }
     }
-    fn route_via_station<G: PlanGraph + ?Sized>(&self, g: &G, router: &mut dyn Router, from: i32, goal: i32) -> Option<(RouteRes, usize)> {
+    fn route_via_station<G: PlanGraph + ?Sized>(&self, g: &G, router: &mut dyn Router, from: i32, goal: i32) -> Option<(RouteRes, usize, f64)> {
         let direct = to_result(g, router.route(from, goal, None, None))?;
         let stride = 1usize.max((direct.nodes.len() as f64 / 400.0).floor() as usize);
         let mut scored: Vec<(usize, f64)> = Vec::new();
@@ -118,7 +119,7 @@ impl StationNetwork {
             let Some(r) = to_result(g, Some(all)) else { continue };
             if best.as_ref().is_none_or(|(br, _)| r.time < br.time) { best = Some((r, s)); }
         }
-        best
+        best.map(|(r, s)| (r, s, direct.time))
     }
 }
 
