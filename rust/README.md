@@ -71,9 +71,17 @@ pop.place_obstacles(count=40, seed=3); pop.place_wrecks(10); pop.reset_day()
   The old scene / outcome log is `event_log()`.
 * `observe(out=arr)` fills a preallocated array (no allocation). Readbacks go through persistent staging buffers and copy
   only the rows in use.
-* `backend="cpu"`: the CPU reference sim (`bayenv-sim`) behind the same calls. It uses a commuter population of
-  `n_cars` (population.js, `seed`), and cars spawn on their trip schedule, so `n_slots` grows. Available: `act`, `step`,
-  `state`, `crash_flags`, `signals`, `stats`. `observe()` is not exposed for the CPU backend yet.
+* `backend="cpu"`: the CPU reference sim (`bayenv-sim`) behind the same calls and shapes: `act`, `step`,
+  `step_observe`, `observe` (`obs="v2"` 70 floats via the v2 encoder, sensed after every step like the JS driver loop;
+  `"v3"` 358; `"flat"` 77, CPU only), `state()`, `events()`, `crash_flags`, `signals`, `stats`. It uses a commuter
+  population of `n_cars` (population.js, `seed`), and cars spawn on their trip schedule, so `n_slots` grows; rows are slots.
+  `bayenv.VecEnv(..., backend="cpu")` steps its envs in parallel (rayon). It pads rows to the largest env, and `env_slots()`
+  gives the per-env counts.
+* CPU vs GPU events: `rust/tools/compare_backends.py` (same population / start / dt, k = 1, constant actions, matched
+  by agent). On 5,000 commuters, 1,200 steps: spawns 834/834 identical steps; arrivals and crashes agree within tens
+  of steps for the agents both report. One difference comes from the JS oracles themselves: the GPU kernels report a
+  barrier (kerb) scrape as a CONTACT row on every step it lasts (1,388 vs 12 on the CPU), while the CPU sim reports it
+  once.
 * Gymnasium-style wrapper: `crates/bayenv-py/examples/gym_wrapper.py` (one observation and action row per car; the
   environment defines no reward). Benchmark: `crates/bayenv-py/examples/bench.py`.
 

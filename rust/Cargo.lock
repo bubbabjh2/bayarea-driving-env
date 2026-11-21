@@ -67,6 +67,7 @@ dependencies = [
  "bytemuck",
  "numpy",
  "pyo3",
+ "rayon",
 ]
 
 [[package]]
