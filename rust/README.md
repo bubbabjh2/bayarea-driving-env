@@ -117,7 +117,7 @@ pop.place_obstacles(count=40, seed=3); pop.place_wrecks(10); pop.reset_day()
   heading change (rad) 5, 10, 20 and 40 m ahead along each driving car's planned path (`bayenv_sim::obs::heading_preview`;
   0 for slots that are not driving). CPU: computed on demand, (n_slots, 4). GPU: `Env(heading_preview=True)` /
   `GpuOptions::heading_preview` runs `kernels/heading_preview.wgsl` after every step into a cap × 4 f32 buffer
-  (`GpuSim::heading_preview()`), (capacity, 4); it matches the CPU within 2.1e-6 rad on identical states
+  (`GpuSim::heading_preview()`), (capacity, 4); it matches the CPU within about 2e-6 rad on identical states
   (`tests/heading_preview.rs`, raw and smoothed + `junction_radii` worlds). Not part of the obs vectors yet.
 * **CPU model fix (default since the crash-divergence investigation):** `replan_at_missed_event=True`
   (`SimOpts.replan_at_missed_event`, backend="cpu") re-plans a missed turn at the event, while the car is still on the

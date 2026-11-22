@@ -652,9 +652,9 @@ Each entry: date, decision, why, alternatives, numbers, and one line to say it o
   - One difference: the CPU runs its synchronous refuel check first and keeps the car on edge 0 when a refuel plan
     replaced the route. GPU refuel plans are asynchronous (made later from the car's current edge), so a GPU car
     always starts on the clearance edge.
-  - `cpu_vs_gpu` (curvature + smooth + junction_radii + spawn_clearance): all 834 spawns start on the same route
-    position and edge, within 2 m in s; 127 start past route edge 0 on both. Crashed 746 / 746, contacts 1,797 /
-    1,785, missed exits 15 / 19, violations 376 / 376. `Env(backend="gpu", spawn_clearance=True)` works.
+  - `cpu_vs_gpu` (curvature + smooth + junction_radii + spawn_clearance, with static_hold / idle_creep / steer_delay):
+    all 834 spawns start on the same route position and edge, within 2 m in s; 127 start past route edge 0 on both.
+    Crashed 745 / 745, contacts 1,759 / 1,771, missed exits 14 / 18, violations 375 / 376. `Env(backend="gpu", spawn_clearance=True)` works.
 - **On camera:** "Our junction corners were tighter than a car can turn. So we moved where each turn starts, until a
   car could follow the curve and a truck could take the big roads."
 
@@ -715,6 +715,6 @@ Each entry: date, decision, why, alternatives, numbers, and one line to say it o
   become part of the v2 / v3 observation once the feature list is fixed.
 - **Numbers** (`tests/heading_preview.rs`: GPU population, then every driving car's edge, connector, s, lane, route
   position and route words copied into a CPU vehicle store and the CPU function evaluated): raw world, 495 cars, max
-  |GPU − CPU| 2.1e-6 rad; smoothed + `junction_radii`, 269 cars, 1.4e-6 rad.
+  |GPU − CPU| 1.3e-6 rad; smoothed + `junction_radii`, 267 cars, 1.4e-6 rad (all under 2.1e-6 in earlier runs).
 - **Alternatives:** computing it on the host from a state readback (a cap-sized readback every step); folding it into
   `sense.wgsl` now (it would change the obs layout before the feature list is settled).
