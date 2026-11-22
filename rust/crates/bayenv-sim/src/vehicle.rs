@@ -148,8 +148,8 @@ pub struct Car {
     pub heading: f32,
 }
 /// integrate_car's state between its pre-dynamics and post-dynamics parts
-/// Model fixes that act inside integrate (set from SimOpts; all false = the JS).
-#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+/// Model fixes that act inside integrate (set from SimOpts; Default = the JS).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct ModelFlags {
     /// SimOpts::brake_hold / heavy_brakes (inside step_dynamics)
     pub fixes: physics::Fixes,
@@ -157,6 +157,11 @@ pub struct ModelFlags {
     pub curvature: bool,
     /// SimOpts::wreck_end_stop: a sliding wreck stopped at the end of its edge / connector loses its along-track speed
     pub wreck_end_stop: bool,
+    /// SimOpts::steer_delay in steps (-1: the JS, steering delayed by the reaction time like the pedals)
+    pub steer_delay_steps: i32,
+}
+impl Default for ModelFlags {
+    fn default() -> Self { ModelFlags { fixes: Default::default(), curvature: false, wreck_end_stop: false, steer_delay_steps: -1 } }
 }
 pub struct DynCall { pub st: DynState, pub sr: f64, pub gas: f64, pub brake: f64, pub p: &'static physics::VehicleParams, pub grade: f64, pub sf: Option<physics::Surf>, pub u0: f64, pub s0: f64, pub e: usize, pub hr0: f64 }
 /// Side effects of integrate_car beyond the slot fields.
@@ -475,7 +480,7 @@ impl VehicleStore {
     /// integrate(i, dt, now, graph, step, locked): 0 driving, 1 end of route, 2 refuel stop.
     #[allow(clippy::too_many_arguments)]
     pub fn integrate_car(c: &mut Car, route: &[i32], ring: &[f32], missed_t: Option<(f64, f64)>, position_mode: bool, out: &mut CarOut, dt: f64, now: f64, g: &World, step: i64, locked: bool, mf: ModelFlags) -> i32 {
-        let mut k = Self::integrate_pre(c, ring, out, g, step, locked);
+        let mut k = Self::integrate_pre(c, ring, out, g, step, locked, mf.steer_delay_steps);
         physics::step_dynamics_h(&mut k.st, k.sr, k.gas, k.brake, k.p, dt, k.grade, locked, position_mode, k.sf, mf.fixes);
         Self::integrate_post(c, k, route, missed_t, position_mode, out, dt, now, g, step, locked, mf)
     }
@@ -485,8 +490,8 @@ impl VehicleStore {
     #[allow(clippy::too_many_arguments)]
     pub fn integrate_car2(a: (&mut Car, &[i32], &[f32], Option<(f64, f64)>, &mut CarOut, bool), b: (&mut Car, &[i32], &[f32], Option<(f64, f64)>, &mut CarOut, bool), position_mode: bool, dt: f64, now: f64, g: &World, step: i64, mf: ModelFlags) -> (i32, i32) {
         let (ca, ra, ga, ma, oa, la) = a; let (cb, rb, gb, mb, ob, lb) = b;
-        let mut ka = Self::integrate_pre(ca, ga, oa, g, step, la);
-        let mut kb = Self::integrate_pre(cb, gb, ob, g, step, lb);
+        let mut ka = Self::integrate_pre(ca, ga, oa, g, step, la, mf.steer_delay_steps);
+        let mut kb = Self::integrate_pre(cb, gb, ob, g, step, lb, mf.steer_delay_steps);
         physics::step_dynamics2(
             (&mut ka.st, ka.sr, ka.gas, ka.brake, ka.p, ka.grade, la, ka.sf),
             (&mut kb.st, kb.sr, kb.gas, kb.brake, kb.p, kb.grade, lb, kb.sf), dt, position_mode, mf.fixes);
@@ -499,10 +504,10 @@ impl VehicleStore {
     #[allow(clippy::type_complexity)]
     pub fn integrate_car4(cs: [(&mut Car, &[i32], &[f32], Option<(f64, f64)>, &mut CarOut, bool); 4], position_mode: bool, dt: f64, now: f64, g: &World, step: i64, mf: ModelFlags) -> [i32; 4] {
         let [(c0, r0, g0, m0, o0, l0), (c1, r1, g1, m1, o1, l1), (c2, r2, g2, m2, o2, l2), (c3, r3, g3, m3, o3, l3)] = cs;
-        let mut k0 = Self::integrate_pre(c0, g0, o0, g, step, l0);
-        let mut k1 = Self::integrate_pre(c1, g1, o1, g, step, l1);
-        let mut k2 = Self::integrate_pre(c2, g2, o2, g, step, l2);
-        let mut k3 = Self::integrate_pre(c3, g3, o3, g, step, l3);
+        let mut k0 = Self::integrate_pre(c0, g0, o0, g, step, l0, mf.steer_delay_steps);
+        let mut k1 = Self::integrate_pre(c1, g1, o1, g, step, l1, mf.steer_delay_steps);
+        let mut k2 = Self::integrate_pre(c2, g2, o2, g, step, l2, mf.steer_delay_steps);
+        let mut k3 = Self::integrate_pre(c3, g3, o3, g, step, l3, mf.steer_delay_steps);
         physics::step_dynamics4([
             (&mut k0.st, k0.sr, k0.gas, k0.brake, k0.p, k0.grade, l0, k0.sf), (&mut k1.st, k1.sr, k1.gas, k1.brake, k1.p, k1.grade, l1, k1.sf),
             (&mut k2.st, k2.sr, k2.gas, k2.brake, k2.p, k2.grade, l2, k2.sf), (&mut k3.st, k3.sr, k3.gas, k3.brake, k3.p, k3.grade, l3, k3.sf)], dt, position_mode, mf.fixes);
@@ -511,7 +516,7 @@ impl VehicleStore {
     }
 
     /// integrate_car up to the vehicle dynamics (commands from the ring, state, surface, grade)
-    fn integrate_pre(c: &mut Car, ring: &[f32], out: &mut CarOut, g: &World, step: i64, locked: bool) -> DynCall {
+    fn integrate_pre(c: &mut Car, ring: &[f32], out: &mut CarOut, g: &World, step: i64, locked: bool, steer_delay: i32) -> DynCall {
         let base = 0usize;
         let (mut sr, mut gas, mut brake) = (0.0f64, 0.0f64, 1.0f64);
         if !locked {
@@ -525,6 +530,11 @@ impl VehicleStore {
             let o = (base + ((((step - c.delay_steps as i64) % CTRL_RING as i64) + CTRL_RING as i64) % CTRL_RING as i64) as usize) * CTRL_STRIDE;
             let rv = match copied { Some(v) if o == cur => v, _ => [ring[o], ring[o + 1], ring[o + 2]] };
             sr = f(rv[0]); gas = f(rv[1]); brake = f(rv[2]);
+            // steer_delay (ENV-REQUESTS #16): steering from its own, shorter delay; the pedals keep the reaction delay
+            if steer_delay >= 0 && (steer_delay as u32) < c.delay_steps {
+                let os = (base + ((((step - steer_delay as i64) % CTRL_RING as i64) + CTRL_RING as i64) % CTRL_RING as i64) as usize) * CTRL_STRIDE;
+                sr = f(match copied { Some(v) if os == cur => v[0], _ => ring[os] });
+            }
             if c.fuel <= 0.0 { gas = 0.0; if brake < 0.3 { brake = 0.3; } }
         }
         c.steer_rate = sr as f32; c.gas = gas as f32; c.brake = brake as f32;

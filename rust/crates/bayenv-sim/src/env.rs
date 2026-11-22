@@ -191,7 +191,7 @@ impl Env {
     /// stats(): counters (same keys as the GPU backend where they exist).
     pub fn stats(&self) -> Vec<(&'static str, f64)> {
         let s = &self.sim; let c = &s.counters; let l = &s.live;
-        vec![("driving", l.driving as f64), ("crashed_on_scene", l.crashed as f64), ("arrived", c.arrived as f64), ("spawned", c.spawned as f64), ("stuck", c.stuck as f64),
+        vec![("driving", l.driving as f64), ("crashed_on_scene", l.crashed as f64), ("arrived", c.arrived as f64), ("spawned", c.spawned as f64), ("spawn_moved", c.spawn_moved as f64), ("stuck", c.stuck as f64),
             ("crash_events", c.crashes as f64), ("crash_scenes", c.disabling_crashes as f64), ("crashed_vehicles", c.crashed_vehicles as f64), ("minor_contacts", c.minor_contacts as f64),
             ("stranded", c.stranded as f64), ("towed", c.towed as f64), ("cleared", c.cleared as f64), ("missed_exits", c.missed_exits as f64), ("reroutes", c.reroutes as f64),
             ("signal_violations", c.signal_violations as f64), ("stop_violations", c.stop_violations as f64), ("arrival_rate", s.arrival_rate()),
@@ -212,6 +212,17 @@ impl Env {
     /// One-call world load for create_real.
     pub fn load_world(data_dir: &std::path::Path) -> Result<Arc<World>, String> {
         let bw = bayenv_world::World::load(data_dir).map_err(|e| e.to_string())?;
+        Ok(Arc::new(World::from_bayenv(&bw)))
+    }
+    /// load_world with the smoothed frame geometry (LoadOptions::smooth_geometry; for SimOpts::smooth_geometry with
+    /// curvature_dynamics, DECISIONS.md 33).
+    pub fn load_world_smoothed(data_dir: &std::path::Path) -> Result<Arc<World>, String> { Self::load_world_with(data_dir, true, true) }
+    /// load_world with the manifest check (`verify`) and geometry smoothing (`smooth`) chosen.
+    pub fn load_world_with(data_dir: &std::path::Path, verify: bool, smooth: bool) -> Result<Arc<World>, String> { Self::load_world_opts(data_dir, verify, smooth, false) }
+    /// ... and the junction-radius re-fit (`junction_radii`, needs `smooth`; DECISIONS.md 34).
+    pub fn load_world_opts(data_dir: &std::path::Path, verify: bool, smooth: bool, junction_radii: bool) -> Result<Arc<World>, String> {
+        let o = bayenv_world::LoadOptions { verify, smooth_geometry: smooth, junction_radii, ..Default::default() };
+        let bw = bayenv_world::World::load_with(data_dir, &o).map_err(|e| e.to_string())?;
         Ok(Arc::new(World::from_bayenv(&bw)))
     }
     /// load_world for scenario / synthetic / custom data dirs (no world-manifest sha check).

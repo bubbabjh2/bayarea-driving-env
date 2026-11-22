@@ -34,6 +34,8 @@ fn place(sim: &mut Sim, ty: u8, route: &[i32], s: f64, lane: i32, speed: f64) ->
 fn wreck(sim: &mut Sim, ty: u8, s: f64) -> usize { sim.place_static_obstacles(&[(0, s, Some(0), None, ty)], true)[0] }
 /// the defaults plus curvature_dynamics (default off until the lane geometry is smoothed, DECISIONS.md 23)
 fn curv() -> SimOpts { SimOpts { curvature_dynamics: true, ..SimOpts::default() } }
+/// curv() on the smoothed frame geometry (DECISIONS.md 33)
+fn curv_smooth() -> SimOpts { SimOpts { smooth_geometry: true, ..curv() } }
 fn mass(ty: u8) -> f64 { bayenv_sim::physics::VEHICLE_PARAMS[ty as usize].m }
 /// world velocity along x (edge 0 runs along +x)
 fn vx(sim: &Sim, i: usize) -> f64 { let h = sim.vs.heading[i] as f64; sim.vs.speed[i] as f64 * h.cos() + sim.vs.v_lat[i] as f64 * h.sin() }
@@ -87,17 +89,19 @@ fn wreck_real_mass_bus_into_parked_sedan() {
 }
 
 /// data/scenarios/<name> (a small real-map cut with junctions), None (skip) when the data dir is missing
-fn scenario_world(name: &str) -> Option<Arc<World>> {
+fn scenario_world(name: &str) -> Option<Arc<World>> { scenario_world_s(name, false) }
+fn scenario_world_s(name: &str, smooth: bool) -> Option<Arc<World>> {
     let d = bayenv_sim::population_gen::default_data_dir().join("scenarios").join(name);
     if !d.join("roads.meta.json").exists() { return None; }
-    Some(bayenv_sim::env::Env::load_world_unverified(&d).expect("scenario world"))
+    Some(bayenv_sim::env::Env::load_world_with(&d, false, smooth).expect("scenario world"))
 }
+
 
 /// A car approaching a corner at `kmh` with steer `policy(sim, i)`: on "road3" the 90-degree kink b (no arc), on a
 /// scenario world the first junction turn movement (|turn| > 1.2 rad, in-edge >= 150 m). Returns (max world lateral accel in g while
 /// driving, drove 30 m down the out-edge, any barrier / contact).
 fn corner(world: &str, opts: SimOpts, kmh: f64, policy: impl Fn(&Sim, usize) -> f64) -> Option<(f64, bool, bool)> {
-    let g = if world == "road3" { common::shared_world(world)? } else { scenario_world(world)? };
+    let g = if world == "road3" { common::shared_world(world)? } else { scenario_world_s(world, opts.smooth_geometry)? };
     let mut sim = sim_with(&g, opts);
     let (route, s0, lane) = if world == "road3" { ([0, 1], g.e_length[0] - 120.0, 0) } else {
         let j = g.j.as_ref().expect("junctions");
@@ -152,6 +156,99 @@ fn curvature_dynamics_steered_corner_is_physical() {
     eprintln!("30 km/h steered: peak {peak:.2} g, reached {reached}, touched {touched}");
     assert!(reached, "a steered car takes the corner");
     assert!(peak < 1.1, "within tyre grip: {peak} g");
+}
+
+/// The heading + offset tracker of `curvature_dynamics_steered_corner_is_physical`.
+fn tracker(sim: &Sim, i: usize) -> f64 {
+    let hr = sim.vs.heading_rel[i] as f64;
+    let e = sim.vs.edge[i] as usize;
+    let err = sim.vs.lat[i] as f64 - (sim.vs.lane[i].max(0) as f64 + 0.5) * sim.g.lane_w(e, (sim.vs.s[i] as f64).min(sim.g.e_length[e]));
+    let mx = bayenv_sim::physics::VEHICLE_PARAMS[0].max_steer;
+    ((-1.2 * hr - (0.08 * err).clamp(-0.1, 0.1)) / mx).clamp(-1.0, 1.0)
+}
+
+/// The sharpest kink (< 1.6 rad) at a pass-through join (no junction box, no other edge; in-edge >= 70 m, out-edge
+/// >= 40 m, same lanes, speed limit <= 72 km/h)
+/// among a few scenario cuts: (scenario, in-edge, out-edge, turn).
+fn sharpest_join() -> Option<(&'static str, usize, usize, f64)> {
+    let mut best: Option<(&'static str, usize, usize, f64)> = None;
+    for name in ["curve-s1", "sbend-s1", "urban-s1", "grid-s1", "hill-s1", "junction-s1", "lanes-s1", "interchange-s1", "roundabout-s1", "weave-s1", "pack-mixed-s3"] {
+        let Some(g) = scenario_world(name) else { continue };
+        let lg = g.lg.as_ref()?;
+        for a in 0..g.edge_count {
+            let n = g.e_to[a] as usize;
+            if g.j.as_ref().map_or(false, |j| j.j_of_node[n] >= 0) || g.e_length[a] < 70.0 { continue; }
+            let outs: Vec<i32> = (g.out_start[n]..g.out_start[n + 1]).map(|q| g.out_edges[q as usize]).filter(|&o| o != g.e_rev[a]).collect();
+            if outs.len() != 1 { continue; }
+            let b = outs[0] as usize;
+            let ins = (g.in_start[n]..g.in_start[n + 1]).map(|q| g.in_edges[q as usize]).filter(|&i| i != g.e_rev[b]).count();
+            if ins != 1 || g.e_length[b] < 40.0 || g.e_lanes[a] != g.e_lanes[b] || g.e_speed[a] > 20.0 { continue; }
+            let (p, q) = (lg.offset_point(a, g.e_length[a], 0.0, 0.0), lg.offset_point(b, 0.0, 0.0, 0.0));
+            let t = (q.hz.atan2(q.hx) - p.hz.atan2(p.hx)).sin().atan2((q.hz.atan2(q.hx) - p.hz.atan2(p.hx)).cos());
+            if t.abs() < 1.6 && best.map_or(true, |x| t.abs() > x.3.abs()) { best = Some((name, a, b, t)); }
+        }
+    }
+    best
+}
+
+/// A car at `kmh` on route [a, b] from 60 m before the join, steered by `policy`: (peak world lateral g, drove 30 m
+/// down b, any barrier / contact).
+fn join_corner(g: &Arc<World>, a: usize, b: usize, opts: SimOpts, kmh: f64, policy: impl Fn(&Sim, usize) -> f64) -> (f64, bool, bool) {
+    let mut sim = sim_with(g, opts);
+    let i = place(&mut sim, SEDAN, &[a as i32, b as i32], g.e_length[a] - 60.0, 0, kmh / 3.6);
+    let (mut peak, mut reached) = (0.0f64, false);
+    let mut h0 = sim.vs.heading[i] as f64;
+    for _ in 0..400 {
+        if sim.vs.state[i] != STATE_DRIVING { break; }
+        let u = sim.vs.speed[i] as f64;
+        let st = policy(&sim, i);
+        hold(&mut sim, i, st, ((kmh / 3.6 - u) * 0.5).clamp(0.0, 1.0), 0.0);
+        sim.step();
+        if sim.vs.state[i] != STATE_DRIVING { break; }
+        let h = sim.vs.heading[i] as f64; let d = (h - h0).sin().atan2((h - h0).cos());
+        peak = peak.max(sim.vs.speed[i] as f64 * d.abs() / sim.dt / 9.81); h0 = h;
+        if sim.vs.edge[i] as usize == b && sim.vs.s[i] > 30.0 { reached = true; break; }
+    }
+    (peak, reached, sim.counters.crashes + sim.counters.minor_contacts + sim.counters.touches > 0)
+}
+
+/// smooth_geometry (DECISIONS.md 33): the sharpest pass-through join kink of the scenario cuts becomes a fillet arc.
+/// With curvature_dynamics the frame turns by the whole kink at one point on the raw geometry; on the smoothed
+/// geometry it turns by at most one arc sample there, and a heading tracker takes it within grip. Steer 0 still goes
+/// straight on. (The sharp joins of the real map are checked in bayenv-world tests/smooth_world.rs.)
+#[test]
+fn smooth_geometry_smooths_a_join_kink() {
+    let Some((name, a, b, turn)) = sharpest_join() else { return bayenv_world::oracle::skip("physics_fixes", "scenario data") };
+    let (raw, sm) = (scenario_world(name).unwrap(), scenario_world_s(name, true).unwrap());
+    // the frame heading step across the join: the whole kink raw, ~0 smoothed
+    let step = |g: &Arc<World>| { let lg = g.lg.as_ref().unwrap(); let (p, q) = (lg.offset_point(a, g.e_length[a], 0.0, 0.0), lg.offset_point(b, 0.0, 0.0, 0.0)); let d = q.hz.atan2(q.hx) - p.hz.atan2(p.hx); d.sin().atan2(d.cos()).abs() };
+    let (sr, ss) = (step(&raw), step(&sm));
+    let (rp, rr, rt) = join_corner(&raw, a, b, curv(), 30.0, tracker);
+    let (sp, sr2, st) = join_corner(&sm, a, b, curv_smooth(), 30.0, tracker);
+    let (zp, _, _) = join_corner(&sm, a, b, curv_smooth(), 30.0, |_, _| 0.0);
+    eprintln!("{name}: join {a} -> {b} turns {turn:.2} rad; frame step at the join raw {sr:.3} rad, smoothed {ss:.4} rad; tracker at 30 km/h: raw peak {rp:.2} g reached {rr} touched {rt}, smoothed peak {sp:.2} g reached {sr2} touched {st}; steer 0 smoothed: peak {zp:.2} g");
+    // the smoothed join lies inside a fillet arc: the frame steps by at most one arc sample (arc_step) there
+    assert!(ss <= bayenv_world::smooth::SmoothCfg::default().arc_step + 1e-6 && ss < sr, "frame heading step at the smoothed join: {sr} -> {ss}");
+    assert!(sr2 && !st, "a steered car takes the smoothed join");
+    assert!(sp < 1.0 && sp <= rp + 1e-9, "within grip, no harsher than raw: {sp} vs {rp}");
+    assert!(zp < 0.2, "steer 0 does not turn: {zp}");
+}
+
+/// The junction-s1 turn of `curvature_dynamics_steered_corner_is_physical` on the smoothed geometry (the connector is
+/// re-fitted to the smoothed lanes): still taken, within grip.
+#[test]
+fn smooth_geometry_steered_junction_turn() {
+    let Some((peak, reached, touched)) = corner("junction-s1", curv_smooth(), 30.0, tracker) else { return bayenv_world::oracle::skip("physics_fixes", "fixtures") };
+    eprintln!("junction-s1, 30 km/h steered, smoothed: peak {peak:.2} g, reached {reached}, touched {touched}");
+    assert!(reached, "a steered car takes the corner");
+    assert!(peak < 1.1, "within tyre grip: {peak} g");
+}
+
+#[test]
+#[should_panic(expected = "SimOpts.smooth_geometry")]
+fn smooth_geometry_must_match_the_world() {
+    let Some(g) = common::shared_world("road3") else { panic!("SimOpts.smooth_geometry (fixtures unavailable)") };
+    let _ = Sim::new(g.clone(), Arc::new(Population::default()), curv_smooth(), bayenv_sim::harness::router_for(&g));
 }
 
 #[test]
@@ -336,4 +433,89 @@ fn heading_preview_sees_the_corner_ahead() {
     eprintln!("preview 2 m before a {:.2} rad turn: {p:?}", j.turn(m));
     assert!((p[3] - j.turn(m)).abs() < 0.25, "the 40 m preview sees the whole turn");
     assert!(p[3].signum() == j.turn(m).signum());
+}
+
+/// spawn_clearance (DECISIONS.md 34): the spawn edge chosen for a route leaves at least spawn_clearance_m between its
+/// spawn point (s_exit) and the junction entry the route takes next, unless it is the route's last edge; without the
+/// flag (the JS) cars spawn on the first edge however close the junction. Checked for every two-edge route through a
+/// junction of the real-map scenario cuts.
+#[test]
+fn spawn_clearance_keeps_spawns_off_junction_entries() {
+    let (mut close, mut moved, mut kept) = (0usize, 0usize, 0usize);
+    for name in ["urban-s1", "grid-s1", "junction-s1", "roundabout-s1", "interchange-s1", "pack-mixed-s3", "weave-s1", "merge-s1", "diverge-s1"] {
+    let Some(w) = scenario_world(name) else { return bayenv_world::oracle::skip("physics_fixes", "scenario data") };
+    // the scenario cuts have long blocks: a 50 m clearance makes the rule bite (the default is 18 m)
+    let sim = sim_with(&w, SimOpts { spawn_clearance: true, spawn_clearance_m: 50.0, ..SimOpts::default() });
+    let j = w.j.as_ref().unwrap();
+    let entry = |e: usize, nx: i32| (0..w.e_lanes[e]).filter_map(|l| { let m = j.movement(e, l, nx); (m >= 0).then(|| j.s_in(m as usize)) }).fold(f64::INFINITY, f64::min);
+    for m in 0..j.move_count {
+        let (a, b) = (j.info(m, 0) as usize, j.info(m, 2) as i32);
+        let s0 = w.e_s_exit[a].max(0.0);
+        let gap = entry(a, b) - s0;
+        if gap < sim.opts.spawn_clearance_m { close += 1; }
+        // route [a, b, b's continuation if any]
+        let to = w.e_to[b as usize] as usize;
+        let mut route = vec![a as i32, b];
+        if let Some(q) = (w.out_start[to]..w.out_start[to + 1]).map(|q| w.out_edges[q as usize]).find(|&o| o != w.e_rev[b as usize]) { route.push(q); }
+        let k = sim.spawn_edge_index(&route);
+        if gap < sim.opts.spawn_clearance_m { assert!(k >= 1, "movement {m}: moved on"); moved += 1; } else { assert_eq!(k, 0); kept += 1; }
+        if k + 1 < route.len() {
+            let e = route[k] as usize;
+            if w.e_s_stop[e] < w.e_length[e] { let g2 = entry(e, route[k + 1]) - w.e_s_exit[e].max(0.0); assert!(!g2.is_finite() || g2 >= sim.opts.spawn_clearance_m, "route {route:?}: spawn edge {k} gap {g2}"); }
+        }
+    }
+    }
+    eprintln!("scenario cuts, movements: {close} have their in-edge's spawn point within 50 m of the entry ({moved} spawn further along with spawn_clearance), {kept} keep the first edge");
+    assert!(close > 0 && moved == close);
+}
+
+#[test]
+fn static_hold_and_idle_creep_pull_away() {
+    // ENV-REQUESTS #17: the first brake_hold counted rolling resistance as holding force, so a car pulling away with
+    // a little gas (or gas + some brake) stayed parked for ever
+    let Some(g) = common::shared_world("road3") else { return bayenv_world::oracle::skip("physics_fixes", "fixtures") };
+    let run = |opts: SimOpts, gas: f64, brake: f64| {
+        let mut sim = sim_with(&g, opts);
+        let a = place(&mut sim, SEDAN, &[0], 100.0, 0, 0.0);
+        for _ in 0..400 { hold(&mut sim, a, 0.0, gas, brake); sim.step(); }
+        (sim.vs.s[a] as f64 - 100.0, sim.vs.speed[a] as f64)
+    };
+    let v1 = SimOpts { brake_hold: true, static_hold: false, idle_creep: false, ..SimOpts::default() };
+    let (d_v1, _) = run(v1, 0.02, 0.0);
+    let (d_new, _) = run(SimOpts::default(), 0.02, 0.0);
+    let (_, u_creep) = run(SimOpts::default(), 0.0, 0.0);
+    let (d_brk, _) = run(SimOpts::default(), 0.0, 0.1);
+    let (d_js, _) = run(SimOpts::js(), 0.0, 0.0);
+    eprintln!("20 s from rest: gas 2 %: brake_hold v1 {d_v1:.2} m, now {d_new:.1} m; no pedals: creep {u_creep:.2} m/s (js {d_js:.2} m); brake 10 %: {d_brk:.3} m");
+    assert!(d_v1 < 0.01, "v1 strands the car");
+    assert!(d_new > 10.0, "gas 2 % pulls away");
+    assert!((1.2..=1.8).contains(&u_creep), "idle creep about 1.5 m/s: {u_creep}");
+    assert!(d_brk < 0.01, "a light brake holds against the creep");
+    assert!(d_js < 0.01, "the JS: no creep");
+}
+
+#[test]
+fn steer_delay_is_short_pedals_keep_reaction_time() {
+    // ENV-REQUESTS #16: steering waits steer_delay (0.15 s), the pedals the reaction time
+    let Some(g) = common::shared_world("road3") else { return bayenv_world::oracle::skip("physics_fixes", "fixtures") };
+    let run = |opts: SimOpts| {
+        let mut sim = sim_with(&g, opts);
+        let a = place(&mut sim, SEDAN, &[0], 100.0, 1, 10.0);
+        sim.vs.set_reaction_time(a, 1.0, sim.dt);
+        for _ in 0..30 { hold(&mut sim, a, 0.0, 0.0, 0.0); sim.step(); }
+        let (mut t_steer, mut t_brake) = (-1.0, -1.0);
+        let u0 = sim.vs.speed[a] as f64;
+        for k in 0..60 {
+            hold(&mut sim, a, 0.3, 0.0, 1.0); sim.step();
+            let t = (k + 1) as f64 * sim.dt;
+            if t_steer < 0.0 && sim.vs.steer_angle[a].abs() > 1e-4 { t_steer = t; }
+            if t_brake < 0.0 && (sim.vs.speed[a] as f64) < u0 - 0.5 { t_brake = t; }
+        }
+        (t_steer, t_brake)
+    };
+    let ((s, b), (js, jb)) = (run(SimOpts::default()), run(SimOpts::js()));
+    eprintln!("first response (s): steer {s:.2}, brake {b:.2}; js steer {js:.2}, brake {jb:.2}");
+    assert!(s <= 0.25 && s > 0.0, "steering after about 0.15 s: {s}");
+    assert!(b >= 1.0, "pedals keep the 1 s reaction time: {b}");
+    assert!(js >= 1.0, "the JS delays steering by the reaction time: {js}");
 }

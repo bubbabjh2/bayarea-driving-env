@@ -86,7 +86,7 @@ pop.place_obstacles(count=40, seed=3); pop.place_wrecks(10); pop.reset_day()
   5.2 ms (GPU 3.8 ms; `BENCHMARKS.md`).
 * Constructor options: `backend="gpu"`, `capacity` (default `n_cars` rounded up to 1024; results are identical for any
   capacity ≥ `n_cars`), `obs="v2" | "v3" | "none"`, `dt`, `start_time`, `accidents`, `collisions`, `fuel`, `controls`,
-  `junctions`, `steer="position" | "rate"`, `decide_every`, `keep_events`, `cpu_connector_join` (default `True`), `contact_tangent` (default `True`), `replan_at_missed_event` (CPU, default `True`), the physics-audit fixes `wreck_real_mass`, `wreck_end_stop`, `contact_episodes`, `connector_barrier`, `brake_hold`, `heavy_brakes`, `barrier_soft_push`, `impact_reverse` (both backends, default `True`) and `curvature_dynamics` (both backends, default `False`; `DECISIONS.md` 21–32). A dt that is not positive and finite raises `ValueError`.
+  `junctions`, `steer="position" | "rate"`, `decide_every`, `keep_events`, `cpu_connector_join` (default `True`), `contact_tangent` (default `True`), `replan_at_missed_event` (CPU, default `True`), the physics-audit fixes `wreck_real_mass`, `wreck_end_stop`, `contact_episodes`, `connector_barrier`, `brake_hold`, `heavy_brakes`, `barrier_soft_push`, `impact_reverse` (both backends, default `True`) and `curvature_dynamics` (both backends, default `False`; `DECISIONS.md` 21–32), and `smooth_geometry` (both backends, default `False`, needs `curvature_dynamics=True`: loads the world with the smoothed frame geometry, `DECISIONS.md` 33), `junction_radii` (both backends, default `False`, needs `smooth_geometry=True`: vehicle-feasible junction turns) and `spawn_clearance` (both backends, default `False`; `DECISIONS.md` 34), and `heading_preview` (GPU, default `False`: compute `Env.heading_preview()` after every step; `DECISIONS.md` 37). A dt that is not positive and finite raises `ValueError`.
 * **GPU model fix (default since the kerb investigation):** `cpu_connector_join=True` makes junction connector entry
   match the CPU sim. `False` is the legacy mode, the JS GPU kernels bit-for-bit, including their connector-entry bug.
   **Legacy GPU runs and all earlier GPU checkpoints were trained with the bug:** steer-0 cars drift into the kerb after
@@ -96,9 +96,29 @@ pop.place_obstacles(count=40, seed=3); pop.place_wrecks(10); pop.reset_day()
   `parity_run`, `parity_check`, `opt_check`, hence `compare_gpu.sh` / `compare_parity.sh`) run with both `false`.
 * **Physics-audit model fixes (`docs/physics-audit.md`, `DECISIONS.md` 21–32):** nine flags, each a `SimOpts` field,
   a `GpuOptions` field (patches `kernels/model_contacts.wgsl` and `kernels/model_integrate.wgsl`) and an `Env` keyword.
-  All default on except `curvature_dynamics`, which stays off until the lane polylines are smoothed.
+  All default on except `curvature_dynamics`, which stays off for now.
+* **Smoothed frame geometry (`DECISIONS.md` 33):** `smooth_geometry` (`LoadOptions::smooth_geometry`,
+  `Env::load_world_smoothed`, `SimOpts` / `GpuOptions::smooth_geometry`, `Env(smooth_geometry=True)`) derives, at load
+  time, fillet-arc copies of the lane reference polylines and the junction connectors with minimum radii by road class
+  and speed limit (`bayenv_world::smooth`). Positions and frames both use it, on both backends (the GPU blob is packed
+  from the smoothed world); s, lengths, mouths, connector s_in / s_out and hop maps are unchanged. It is meant for
+  `curvature_dynamics`; off by default, so every JS-oracle check is unaffected. The census:
+  `cargo run --release -p bayenv-sim --example geom_radius -- ../data [--smooth | --junction-radii]`.
+* **Junction turns and spawn clearance (`DECISIONS.md` 34):** `junction_radii` (`LoadOptions` / `SimOpts` /
+  `GpuOptions`, needs `smooth_geometry`) re-fits turning connectors as one arc of 8 m (local) / 12 m (arterial) /
+  15 m (freeway system), moving s_in back and s_out forward; conflict positions are recomputed. `spawn_clearance`
+  (`SimOpts` / `GpuOptions`) starts a car on a later route edge when its first edge leaves under 18 m before the
+  next junction entry. On the GPU the host picks the start index while it writes the spawn-queue entry
+  (`kernels/spawn_clearance.wgsl` reads it); `cpu_vs_gpu` checks that every car starts on the same route position and
+  edge as on the CPU. Vehicle turning limits: `cargo run --release -p bayenv-sim --example turn_feasibility`.
   `SimOpts::js()` and `GpuOptions::js_model()` turn them all off. `tests/physics_fixes.rs` checks each fix against the
   JS model, and `cpu_vs_gpu` checks the two backends against each other.
+* **Lane-heading preview (`DECISIONS.md` 37):** `Env.heading_preview()` returns float64 rows of 4: the road frame's
+  heading change (rad) 5, 10, 20 and 40 m ahead along each driving car's planned path (`bayenv_sim::obs::heading_preview`;
+  0 for slots that are not driving). CPU: computed on demand, (n_slots, 4). GPU: `Env(heading_preview=True)` /
+  `GpuOptions::heading_preview` runs `kernels/heading_preview.wgsl` after every step into a cap × 4 f32 buffer
+  (`GpuSim::heading_preview()`), (capacity, 4); it matches the CPU within about 2e-6 rad on identical states
+  (`tests/heading_preview.rs`, raw and smoothed + `junction_radii` worlds). Not part of the obs vectors yet.
 * **CPU model fix (default since the crash-divergence investigation):** `replan_at_missed_event=True`
   (`SimOpts.replan_at_missed_event`, backend="cpu") re-plans a missed turn at the event, while the car is still on the
   in-edge, as the GPU does. `False` is the JS CPU sim's model: the re-plan comes one step late, the next junction box is
