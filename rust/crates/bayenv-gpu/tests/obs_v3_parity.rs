@@ -3,7 +3,7 @@
 //! (population.js, seed 42, from 07:30), every car driven open loop by the same per-commuter command (a slow steering
 //! swing, light gas), so most cars stay in step for the first half minute; the rows of cars whose state and route agree
 //! on both backends (|ds|, |dlat| < 2 mm, |dv| < 2 mm/s, ...), with no car out of step within 150 m, are compared at
-//! steps 45, 200, 600 (1,000 and 10,000 commuters, steer_delay 0.15 and -1). DECISIONS.md 42 has the numbers.
+//! steps 5, 45, 200, 600 (1,000 and 10,000 commuters, steer_delay 0.15 and -1). DECISIONS.md 42 has the numbers.
 //! The CPU row is encoded as bayenv-py obs="v3" does (record_actions, step, encode every driving car).
 //! Run with OBS_V3_TABLE=1 for the per-index table. Skips without the world data or a GPU.
 use bayenv_gpu::{defines::ObsMode, sim::{GpuOptions, GpuPopulation}};
@@ -12,10 +12,10 @@ use std::{collections::HashMap, path::Path, sync::Arc};
 
 const START: f64 = 7.5 * 3600.0;
 const TOL: f32 = 1e-3;
-/// Inputs the GPU writes in its junctions stage (jyield.wgsl: 62 yield required, 65..69 junction conflict / in box /
-/// mouth distance), before act / integrate: with obs_after_step they show the state before the step, the rest of the
-/// row the state after it (GPU bug, DECISIONS.md 42). The CPU row keeps the state after the step; checked separately.
-const GPU_STALE: [usize; 6] = [62, 65, 66, 67, 68, 69];
+/// Inputs exempt from the per-index check. None: with obs_after_step the GPU computes 62 / 65..69 (jyield.wgsl) after
+/// integrate, with the rest of the row (they showed the state before the step until DECISIONS.md 44); the diagnostic
+/// "GPU 65..69 = the CPU's of the state before the step" is printed only.
+const GPU_STALE: [usize; 0] = [];
 /// Rows of an index allowed over TOL (sim-state differences between the backends, DECISIONS.md 42): 1 %, at least 3
 fn allowed(rows: usize) -> usize { (rows / 100).max(3) }
 /// state agreement of a car in step (m, m/s)
@@ -159,7 +159,6 @@ fn report(n: usize, sd: f64, res: &[(usize, Diff)]) -> Vec<String> {
         eprintln!("   max |diff| by block: 0..69 {:.1e} (without 62, 65..69: {:.1e}) | 70..78 {:.1e} | 79..86 {:.1e} | 87..93 {:.1e} | 94..101 {:.1e} | bodies {:.1e}; rows within {TOL} everywhere but 62, 65..69: {} / {}; GPU 65..69 = CPU before the step: {} / {}",
             block(0, 70), (0..70).filter(|k| !GPU_STALE.contains(k)).map(|k| d.max[k]).fold(0.0f32, f32::max), block(70, 79), block(79, 87), block(87, 94), block(94, 102), block(102, OBS3), d.clean_rows, d.rows, d.pre_ok, d.pre_n);
         for &k in &over { if !GPU_STALE.contains(&k) && d.over[k] > allowed(d.rows) { bad.push(format!("n {n} sd {sd} step {t} index {k}: {} / {} rows, max {:.3e}", d.over[k], d.rows, d.max[k])); } }
-        if d.pre_ok * 100 < d.pre_n * 99 { bad.push(format!("n {n} sd {sd} step {t}: GPU 65..69 = CPU before the step in only {} / {} rows (GPU fixed? update GPU_STALE)", d.pre_ok, d.pre_n)); }
         if d.clean_rows * 100 < d.rows * 97 { bad.push(format!("n {n} sd {sd} step {t}: only {} / {} rows within {TOL}", d.clean_rows, d.rows)); }
     }
     bad
@@ -172,8 +171,8 @@ fn cpu_v3_rows_match_gpu() {
     for n in [1000, 10000] {
         for sd in [0.15, -1.0] {
             if let Ok(only) = std::env::var("OBS_V3_ONLY") { if only != format!("{n},{sd}") { continue; } }
-            let Some(res) = run(&w, n, sd, &[45, 200, 600]) else { return };
-            for (_, d) in &res { assert!(d.rows >= if n >= 10000 { 300 } else { 30 }, "too few cars compared: {}", d.rows); }
+            let Some(res) = run(&w, n, sd, &[5, 45, 200, 600]) else { return };
+            for (t, d) in &res { if *t >= 45 { assert!(d.rows >= if n >= 10000 { 300 } else { 30 }, "too few cars compared: {}", d.rows); } }
             bad.extend(report(n, sd, &res));
         }
     }

@@ -158,7 +158,10 @@ pub struct GpuOptions {
     /// Guidance inside junction boxes as on the CPU (default ON; kernels/model_sense.wgsl MF_GUIDE_BOX): once the car is
     /// past the in-edge's end in a box, obs input 20..32 show the next maneuver (distance >= 0), not the junction being
     /// crossed with a negative distance (the JS GPU kernel).
+    /// obs v2 only for now: the v3 rows keep the JS GPU guidance, which bayenv-sim's V3Encoder mirrors (DECISIONS.md 42 / 43).
     pub guide_in_box: bool,
+    /// obs v3 command-ring index without u32 wrap in the first steps (default ON; kernels/model_sense.wgsl MF_RING_FIX)
+    pub obs_ring_fix: bool,
     /// MODEL fix (default 0.15 s; negative = the JS; kernels/model_integrate.wgsl): steering leaves the control ring after
     /// round(steer_delay / dt) steps when that is shorter than the reaction delay; the pedals keep it. SimOpts::steer_delay
     pub steer_delay: f64,
@@ -207,7 +210,7 @@ impl GpuOptions {
     pub fn set_flag(&mut self, name: &str, on: bool) -> Result<(), String> {
         match name { "indirect_resolve" => self.indirect_resolve = on, "fused_resolve" => self.fused_resolve = on, "sorted_order" => self.sorted_order = on, "fast_scan" => self.fast_scan = on, "fast_search" => self.fast_search = on, "zero_init_workgroup" => self.zero_init_workgroup = on, "cpu_connector_join" => self.cpu_connector_join = on, "contact_tangent" => self.contact_tangent = on, "deterministic_contacts" => self.deterministic_contacts = on, "deterministic_spawn" => self.deterministic_spawn = on, "deterministic_events" => self.deterministic_events = on, "deterministic_leaders" => self.deterministic_leaders = on,
             "wreck_real_mass" => self.wreck_real_mass = on, "curvature_dynamics" => self.curvature_dynamics = on, "smooth_geometry" => self.smooth_geometry = on, "junction_radii" => self.junction_radii = on, "spawn_clearance" => self.spawn_clearance = on, "heading_preview" => self.heading_preview = on, "wreck_end_stop" => self.wreck_end_stop = on,
-            "contact_episodes" => self.contact_episodes = on, "connector_barrier" => self.connector_barrier = on, "box_barrier" => self.box_barrier = on, "lane_drop_hop" => self.lane_drop_hop = on, "brake_hold" => self.brake_hold = on, "static_hold" => self.static_hold = on, "idle_creep" => self.idle_creep = on, "mountable_kerbs" => self.mountable_kerbs = on, "hill_rollback" => self.hill_rollback = on, "obs_after_step" => self.obs_after_step = on, "guide_in_box" => self.guide_in_box = on,
+            "contact_episodes" => self.contact_episodes = on, "connector_barrier" => self.connector_barrier = on, "box_barrier" => self.box_barrier = on, "lane_drop_hop" => self.lane_drop_hop = on, "brake_hold" => self.brake_hold = on, "static_hold" => self.static_hold = on, "idle_creep" => self.idle_creep = on, "mountable_kerbs" => self.mountable_kerbs = on, "hill_rollback" => self.hill_rollback = on, "obs_after_step" => self.obs_after_step = on, "guide_in_box" => self.guide_in_box = on, "obs_ring_fix" => self.obs_ring_fix = on,
             "heavy_brakes" => self.heavy_brakes = on, "barrier_soft_push" => self.barrier_soft_push = on, "impact_reverse" => self.impact_reverse = on,
             "profile" => self.profile = on, _ => return Err(format!("unknown GpuOptions flag {name}")) }
         Ok(())
@@ -223,12 +226,12 @@ impl GpuOptions {
         kernels::ModelFixes { cpu_connector_join: self.cpu_connector_join, contact_tangent: self.contact_tangent, wreck_real_mass: self.wreck_real_mass,
             curvature_dynamics: self.curvature_dynamics, wreck_end_stop: self.wreck_end_stop, contact_episodes: self.contact_episodes, connector_barrier: self.connector_barrier, box_barrier: self.box_barrier,
             brake_hold: self.brake_hold, heavy_brakes: self.heavy_brakes, barrier_soft_push: self.barrier_soft_push, impact_reverse: self.impact_reverse, spawn_clearance: self.spawn_clearance,
-            static_hold: self.static_hold, idle_creep: self.idle_creep, mountable_kerbs: self.mountable_kerbs, hill_rollback: self.hill_rollback, obs_after_step: self.obs_after_step, guide_in_box: self.guide_in_box, lane_drop_hop: self.lane_drop_hop, steer_delay_steps: if self.steer_delay < 0.0 { None } else { Some(jsmath::round(self.steer_delay / self.dt) as u32) } }
+            static_hold: self.static_hold, idle_creep: self.idle_creep, mountable_kerbs: self.mountable_kerbs, hill_rollback: self.hill_rollback, obs_after_step: self.obs_after_step, guide_in_box: self.guide_in_box && self.obs != ObsMode::V3, obs_ring_fix: self.obs_ring_fix, lane_drop_hop: self.lane_drop_hop, steer_delay_steps: if self.steer_delay < 0.0 { None } else { Some(jsmath::round(self.steer_delay / self.dt) as u32) } }
     }
     /// Every model fix off: the JS kernels (oracle checks, legacy checkpoints).
     pub fn js_model(mut self) -> GpuOptions {
         self.cpu_connector_join = false; self.contact_tangent = false; self.wreck_real_mass = false; self.curvature_dynamics = false; self.smooth_geometry = false; self.junction_radii = false; self.spawn_clearance = false; self.wreck_end_stop = false;
-        self.contact_episodes = false; self.connector_barrier = false; self.box_barrier = false; self.lane_drop_hop = false; self.brake_hold = false; self.static_hold = false; self.idle_creep = false; self.mountable_kerbs = false; self.hill_rollback = false; self.obs_after_step = false; self.guide_in_box = false; self.steer_delay = -1.0; self.heavy_brakes = false; self.barrier_soft_push = false; self.impact_reverse = false;
+        self.contact_episodes = false; self.connector_barrier = false; self.box_barrier = false; self.lane_drop_hop = false; self.brake_hold = false; self.static_hold = false; self.idle_creep = false; self.mountable_kerbs = false; self.hill_rollback = false; self.obs_after_step = false; self.guide_in_box = false; self.obs_ring_fix = false; self.steer_delay = -1.0; self.heavy_brakes = false; self.barrier_soft_push = false; self.impact_reverse = false;
         self
     }
     /// Optional device features these options use (timestamp queries when profiling).
@@ -240,7 +243,7 @@ impl Default for GpuOptions {
     fn default() -> Self {
         GpuOptions { capacity: 131072, dt: 0.05, start_time: 5.0 * 3600.0, seed: 1, obs: ObsMode::V2, steer_rate: false, decide_every: 1, features: Features::default(),
             controls: true, junctions: true, table_bits: 18, contact_cap: 131072, ev_cap: 16384, spawn_queue: 16384, op_cap: 16384, max_blocks: 4096, route_slack: 1 << 22,
-            resolve_rounds: 12, progress_weight: 1.0, jerk_weight: 0.5, jerk_reward: false, grade_obs: true, squeeze_delay: 15.0 * 60.0, deadlock_break: 0, reroute: true, keep_events: false, record_events: true, record_share: false, missed_at_out_edge: false, indirect_resolve: true, fused_resolve: true, sorted_order: true, fast_scan: true, fast_search: true, cpu_connector_join: true, contact_tangent: true, deterministic_contacts: true, deterministic_spawn: true, deterministic_events: true, deterministic_leaders: true, wreck_real_mass: true, curvature_dynamics: false, smooth_geometry: false, junction_radii: false, spawn_clearance: false, spawn_clearance_m: 18.0, heading_preview: false, wreck_end_stop: true, contact_episodes: true, connector_barrier: true, box_barrier: true, lane_drop_hop: true, brake_hold: false, static_hold: true, idle_creep: true, mountable_kerbs: true, hill_rollback: true, obs_after_step: true, guide_in_box: true, steer_delay: 0.15, heavy_brakes: true, barrier_soft_push: true, impact_reverse: true, zero_init_workgroup: false, profile: false, return_trips: true, refuel_budget_ms: f64::INFINITY,
+            resolve_rounds: 12, progress_weight: 1.0, jerk_weight: 0.5, jerk_reward: false, grade_obs: true, squeeze_delay: 15.0 * 60.0, deadlock_break: 0, reroute: true, keep_events: false, record_events: true, record_share: false, missed_at_out_edge: false, indirect_resolve: true, fused_resolve: true, sorted_order: true, fast_scan: true, fast_search: true, cpu_connector_join: true, contact_tangent: true, deterministic_contacts: true, deterministic_spawn: true, deterministic_events: true, deterministic_leaders: true, wreck_real_mass: true, curvature_dynamics: false, smooth_geometry: false, junction_radii: false, spawn_clearance: false, spawn_clearance_m: 18.0, heading_preview: false, wreck_end_stop: true, contact_episodes: true, connector_barrier: true, box_barrier: true, lane_drop_hop: true, brake_hold: false, static_hold: true, idle_creep: true, mountable_kerbs: true, hill_rollback: true, obs_after_step: true, guide_in_box: true, obs_ring_fix: true, steer_delay: 0.15, heavy_brakes: true, barrier_soft_push: true, impact_reverse: true, zero_init_workgroup: false, profile: false, return_trips: true, refuel_budget_ms: f64::INFINITY,
             route_threads: std::thread::available_parallelism().map_or(1, |n| n.get()), route_ahead: 300.0, route_cache: 0 }
     }
 }
@@ -791,7 +794,9 @@ impl GpuSim {
             if dl { push!("courtesy.commit", "courtesy.commit", g(cap as usize, 128)); }
             if self.opts.deadlock_break != 0 { push!("junction.dlFind", "junction.dlFind", g(cap as usize, 128)); push!("junction.dlApply", "junction.dlApply", g(cap as usize, 128)); }
             if dl && self.opts.deadlock_break != 0 { push!("jyield.snap", "jyield.snap", g(cap as usize, 256)); }   // else in courtesy.commit
-            push!("junction.yield", "junction.yield", g(cap as usize, 128));
+            // obs_after_step: the yield / junction-conflict inputs (62, 65..69) are computed after integrate, with the rest
+            // of the observation (bayenv-sim: _yieldJ and the junction obs at observe time, after Sim::step)
+            if !(self.opts.obs_after_step && !js && f.policy) { push!("junction.yield", "junction.yield", g(cap as usize, 128)); }
             let every = jsmath::round(2.0 / self.dt).max(1.0) as u64;
             if (self.closed_n > 0 || !self.traffic_penalty.is_empty()) && self.opts.reroute && step_index % every == 0 { push!("junction.reroute", "junction.reroute", g(cap as usize, 128)); }
         }
@@ -808,6 +813,11 @@ impl GpuSim {
         stage = "integrate"; push!("integrate", "integrate", g(cap as usize, 256));
         if self.opts.heading_preview { stage = "preview"; push!("headingPreview", "headingPreview", g(cap as usize, 128)); }
         if f.policy && after {
+            if hj {
+                stage = "junctions";
+                if self.opts.deterministic_leaders { push!("jyield.snap", "jyield.snap", g(cap as usize, 256)); }   // the leader / gap snapshot of this pass
+                push!("junction.yield", "junction.yield", g(cap as usize, 128));
+            }
             if self.opts.obs != ObsMode::None { stage = "sense"; push!("sense", "sense", g(cap as usize, 128)); }
             if self.opts.obs == ObsMode::V3 { stage = "perceive"; push!("perceive", "perceive", g(cap as usize, 64)); }
         }
