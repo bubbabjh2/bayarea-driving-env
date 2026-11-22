@@ -12,6 +12,7 @@ use std::sync::Arc;
 
 const SEDAN: u8 = 0;
 const SUV: u8 = 1;
+const TRUCK: u8 = 2;
 const DROP: f64 = 30.0;
 
 fn sim_with(g: &Arc<World>, opts: SimOpts) -> Sim {
@@ -43,10 +44,11 @@ fn bridge_world(bridge: bool) -> Option<Arc<World>> {
 struct Run { slot: usize, state: u8, fell: bool, sim: Sim, trace: Vec<(f32, f32, f32, f32)> }
 /// A car of type `ty` at `u` m/s, `deg` degrees toward the right-hand (outer) barrier (negative: toward the left), in
 /// lane 0 of road3's motorway, gas holding its speed, for `secs`.
-fn strike(g: &Arc<World>, opts: SimOpts, ty: u8, u: f64, deg: f64, secs: f64) -> Run {
+fn strike(g: &Arc<World>, opts: SimOpts, ty: u8, u: f64, deg: f64, secs: f64) -> Run { strike_on(g, opts, ty, u, deg, secs, false) }
+fn strike_on(g: &Arc<World>, opts: SimOpts, ty: u8, u: f64, deg: f64, secs: f64, water: bool) -> Run {
     let mut sim = sim_with(g, opts);
     let y0 = g.edge_point(0, 500.0, 0.0, 0).y;
-    sim.ground = Some(Arc::new(FlatGround { y: y0 - DROP, water: false }));
+    sim.ground = Some(Arc::new(FlatGround { y: y0 - DROP, water }));
     let i = place(&mut sim, ty, 0, 500.0, 0, u, -deg.to_radians(), None);
     let mut trace = vec![];
     for _ in 0..(secs / sim.dt) as usize {
@@ -134,6 +136,28 @@ fn flag_off_is_unchanged() {
     }
 }
 
+#[test]
+fn water_landing_ploughs_in_and_stops_within_20_m() {
+    // DECISIONS.md 49: water entry from a 30 m fall kills the horizontal speed within metres (quadratic drag
+    // 1/2 rho Cd A v^2), heavier vehicles a little further; it sinks to its resting depth
+    let Some(g) = bridge_world(true) else { return bayenv_world::oracle::skip("barrier_breach", "fixtures") };
+    let on = SimOpts { barrier_breach: true, ..SimOpts::default() };
+    let mut dist = vec![];
+    for (ty, deg) in [(SUV, 25.0), (TRUCK, 12.0)] {
+        let r = strike_on(&g, on.clone(), ty, 30.0, deg, 12.0, true);
+        assert!(r.fell, "type {ty} breaches");
+        let fl = &r.sim.falls[0];
+        let d = ((fl.pos[0] - fl.land_xz.0).powi(2) + (fl.pos[2] - fl.land_xz.1).powi(2)).sqrt();
+        eprintln!("type {ty} ({:.0} kg, A {:.1} m^2): hits the water at {:.1} m/s horizontal, at rest {d:.1} m on, depth {:.2} m, {:?}", fl.mass, fl.area, fl.land_vh, fl.pos[1] - fl.land_y, fl.phase);
+        assert!(fl.water && fl.land_vh > 20.0, "it entered the water fast: {}", fl.land_vh);
+        assert!(d < 20.0, "type {ty}: came to rest {d:.1} m from water entry");
+        assert_eq!(fl.phase, FallPhase::Rest);
+        assert!((fl.pos[1] - (fl.land_y - bayenv_sim::breach::SINK_DEPTH)).abs() < 1e-9, "sunk to its resting depth");
+        dist.push(d);
+    }
+    assert!(dist[1] > dist[0], "the truck ploughs further than the SUV: {dist:?}");
+}
+
 /// the real Bay Bridge east span (a 5-lane Skyway deck east of Yerba Buena Island, x > -18500, with the bay under its
 /// right side; its decks are side by side, so nothing is below but water), with the DEM
 #[test]
@@ -160,4 +184,6 @@ fn bay_bridge_breach_lands_in_the_bay() {
     assert!(fl.drop == fl.deck_y && fl.drop > 30.0, "fell from the deck to sea level");
     assert_eq!(fl.phase, FallPhase::Rest);
     assert!((fl.pos[1] + bayenv_sim::breach::SINK_DEPTH).abs() < 1e-9, "sunk to {}", fl.pos[1]);
+    let d = ((fl.pos[0] - fl.land_xz.0).powi(2) + (fl.pos[2] - fl.land_xz.1).powi(2)).sqrt();
+    assert!(d < 20.0, "at rest {d:.1} m from water entry");
 }
