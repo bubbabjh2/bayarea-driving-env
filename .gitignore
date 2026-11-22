@@ -29,3 +29,6 @@ data/controls-src/verify/
 # render build outputs (npm run build:tiles, npm run build:landscape; see README "Viewing the world")
 data/tiles/
 data/landscape/
+
+# local JS-oracle dumps / symlink to them (rust/tools/make_oracle.sh); never commit
+rust/oracle
