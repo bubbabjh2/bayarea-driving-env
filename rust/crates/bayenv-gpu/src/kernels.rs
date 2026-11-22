@@ -197,7 +197,7 @@ pub struct ModelFixes {
 }
 impl ModelFixes {
     /// every fix on (the GpuOptions default is this with curvature_dynamics off: `ModelFixes::default_model()`)
-    pub fn default_model() -> ModelFixes { ModelFixes { curvature_dynamics: false, ..ModelFixes::all() } }
+    pub fn default_model() -> ModelFixes { ModelFixes { curvature_dynamics: false, brake_hold: false, ..ModelFixes::all() } }
     pub fn all() -> ModelFixes {
         ModelFixes { cpu_connector_join: true, contact_tangent: true, wreck_real_mass: true, curvature_dynamics: true, wreck_end_stop: true, contact_episodes: true,
             connector_barrier: true, brake_hold: true, heavy_brakes: true, barrier_soft_push: true, impact_reverse: true }
