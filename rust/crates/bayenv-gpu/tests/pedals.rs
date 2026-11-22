@@ -77,3 +77,55 @@ fn gpu_steer_delay_is_short_pedals_keep_reaction_time() {
     assert!(b >= 0.5, "pedals keep the reaction time: {b}");
     assert!(js >= 0.5, "the JS delays steering by the reaction time: {js}");
 }
+
+/// obs v2 delay compensation with steer_delay (kernels/model_sense.wgsl): input 5 (heading error, delay-compensated)
+/// replays only the steering commands not applied yet, so after a steer step it predicts the heading error the car
+/// actually has once those are applied: sds steps later with steer_delay (the JS window replayed d steps, counting the
+/// d - sds already applied ones twice). Returns the mean |prediction - actual| at t + sds and at t + d.
+fn heading_prediction_error(w: &Arc<bayenv_world::World>, steer_delay: f64) -> Option<(f64, f64)> {
+    let mut o = GpuOptions { capacity: 1024, obs: ObsMode::V2, steer_delay, ..Default::default() };
+    o.features.collisions = false; o.features.accidents = false; o.features.fuel = false;
+    let mut s = match bayenv_gpu::env::create(w.clone(), o) { Ok(s) => s, Err(e) => { eprintln!("pedals: no GPU ({e}): not run"); return None } };
+    bayenv_gpu::env::scatter(&mut s, N, 9);
+    act(&mut s, [0.0, 0.25, 0.0]); s.run_steps(120);
+    let cap = s.cap; let mut obs = vec![0f32; cap * 70];
+    let (mut pred, mut actual): (Vec<Vec<f32>>, Vec<Vec<f32>>) = (Vec::new(), Vec::new());
+    let mut alive = vec![true; N];
+    for k in 0..60 {
+        // steer pulses: 0.3 for 10 steps, -0.3 for 10, ...
+        act(&mut s, [if (k / 10) % 2 == 0 { 0.3 } else { -0.3 }, 0.25, 0.0]);
+        s.run_steps(1); s.read_obs_into(&mut obs);
+        let st = s.read_state();
+        // sensed in this step before integrate: the prediction for after the pending commands; actual = after integrate
+        pred.push((0..N).map(|i| obs[i * 70 + 5] * std::f32::consts::FRAC_PI_4).collect());
+        actual.push((0..N).map(|i| -st.f(i, 5)).collect());
+        for i in 0..N { if st.u(i, 7) != 1 || st.f(i, 2) < 3.0 || st.f(i, 30) >= 1.0 || (st.f(i, 5)).abs() > 0.7 { alive[i] = false; } }
+    }
+    let st = s.read_state();
+    let sds = (steer_delay / s.dt).round() as i64;
+    let (mut e_s, mut e_d, mut n) = (0.0f64, 0.0f64, 0usize);
+    for i in 0..N {
+        if !alive[i] { continue; }
+        let d = st.par[i * bayenv_gpu::layout::PAR_WORDS + 3] as usize;
+        let win = if steer_delay >= 0.0 && (sds as usize) < d { sds as usize } else { d };
+        // with steer_delay the prediction made at step t covers the pending commands and the one act writes in step t
+        // (model_sense.wgsl): it predicts the state after integrate t + window; the JS window (d) stops at t - 1 + d
+        let (hs, hd) = if win < d { (win, d) } else { (d - 1, d - 1) };
+        for t in 1..(60 - d) {
+            e_s += (pred[t][i] - actual[t + hs][i]).abs() as f64;
+            e_d += (pred[t][i] - actual[t + hd][i]).abs() as f64;
+            n += 1;
+        }
+    }
+    Some((e_s / n.max(1) as f64, e_d / n.max(1) as f64))
+}
+
+#[test]
+fn gpu_obs_delay_compensation_follows_steer_delay() {
+    let Some(w) = world() else { return };
+    let Some((s15, d15)) = heading_prediction_error(&w, 0.15) else { return };
+    let (sj, dj) = heading_prediction_error(&w, -1.0).unwrap();
+    eprintln!("GPU obs 5 prediction error (rad, mean): steer_delay 0.15: vs actual after sds {s15:.4}, after d {d15:.4}; JS: after d {dj:.4} ({sj:.4})");
+    assert!(s15 < d15, "with steer_delay the compensation predicts the heading after sds steps");
+    assert!(s15 < 1.5 * dj, "the compensation is as accurate as the JS one: {s15} vs {dj}");
+}

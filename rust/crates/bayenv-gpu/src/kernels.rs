@@ -59,6 +59,7 @@ pub const HOST_SOURCES: &[(&str, &str)] = &[
     ("model_contacts", include_str!("../kernels/model_contacts.wgsl")),
     ("model_integrate", include_str!("../kernels/model_integrate.wgsl")),
     ("spawn_clearance", include_str!("../kernels/spawn_clearance.wgsl")),
+    ("model_sense", include_str!("../kernels/model_sense.wgsl")),
     ("heading_preview", include_str!("../kernels/heading_preview.wgsl")),
 ];
 
@@ -234,6 +235,8 @@ pub fn model_patches(src: String, file: &str, m: &ModelFixes) -> String {
                 + &patch_text(&src, "model_contacts")
         }
         "spawn" if m.spawn_clearance => patch_text(&src, "spawn_clearance"),
+        "sense" if m.steer_delay_steps.is_some() && std::env::var("BAYENV_NO_SENSE_PATCH").is_err() =>   // diagnostics: BAYENV_NO_SENSE_PATCH=1 = the JS window
+            format!("const MF_STEER_DELAY: i32 = {};\n", m.steer_delay_steps.unwrap()) + &patch_text(&src, "model_sense"),
         _ => src,
     }
 }
@@ -338,6 +341,9 @@ mod tests {
         let one: [fn(&mut ModelFixes); 16] = [|m| m.box_barrier = true, |m| m.lane_drop_hop = true, |m| m.wreck_real_mass = true, |m| m.curvature_dynamics = true, |m| m.wreck_end_stop = true, |m| m.contact_episodes = true,
             |m| m.connector_barrier = true, |m| m.brake_hold = true, |m| m.heavy_brakes = true, |m| m.barrier_soft_push = true, |m| m.impact_reverse = true, |m| m.spawn_clearance = true,
             |m| m.static_hold = true, |m| m.idle_creep = true, |m| m.steer_delay_steps = Some(3), |m| m.mountable_kerbs = true];
-        for f in one { let m = only(f); for file in ["integrate", "contacts", "spawn"] { let _ = super::model_patches(super::load(file), file, &m); } }
+        let se = super::model_patches(super::load("sense"), "sense", &all);
+        assert!(se.contains("const MF_STEER_DELAY: i32 = 3;") && se.contains("pending = last sds steps"));
+        assert_eq!(super::model_patches(super::load("sense"), "sense", &ModelFixes::default()), super::load("sense"), "steer_delay off: the JS kernel");
+        for f in one { let m = only(f); for file in ["integrate", "contacts", "spawn", "sense"] { let _ = super::model_patches(super::load(file), file, &m); } }
     }
 }

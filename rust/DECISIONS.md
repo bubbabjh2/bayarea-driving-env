@@ -695,6 +695,18 @@ Each entry: date, decision, why, alternatives, numbers, and one line to say it o
   `tests/pedals.rs` (median over scattered cars): steer 0.20 s, brake 1.05 s; JS model steer 0.95 s.
 - **On camera:** "Our drivers needed a full second to turn the wheel, as if every bend in the road was a surprise."
 
+- **Observation delay compensation follows the steer delay** (bug found with a learned policy, 2026-11-22). obs v2
+  inputs 4 / 5 / 41 (lane offset, heading error, steer angle) are predicted by replaying the steering commands not
+  applied yet (adjust.js). Both backends replayed the full reaction window, which with `steer_delay` counted the
+  already-applied commands twice; the CPU (`obs_v2.rs push_command`, `obs.rs sense_commands`) and the GPU
+  (`kernels/model_sense.wgsl`) now replay only the last min(reaction, sds) commands, and v3 input 87 reads the steer at
+  the steer delay. The GPU has one more step: its sense runs at the start of a step, before act writes the command
+  uploaded for that step, and the action computed from the observation applies a step later; with `steer_delay` the
+  replay therefore also appends that in-flight command (`actions[i]`, or the held ring entry), which the CPU encoder
+  already has in its window. `steer_delay` −1 keeps both JS-exact. Closed loop through the obs (`tests/closed_loop.rs`,
+  a lane keeper on inputs 4 / 5, 1,000 commuters, 150 s), crashed cpu / gpu before → after: 0 s 27 / 156 → 26 / 44,
+  0.15 s 55 / 172 → 53 / 50, 0.3 s 23 / 124 → 22 / 32; barrier rows now 50 / 49, 107 / 117, 163 / 157.
+
 ## 37. The lane-heading preview on the GPU (`heading_preview`, default off)
 
 - **Date:** 2026-11-21
