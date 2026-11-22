@@ -7,7 +7,9 @@ import sys, numpy as np, bayenv
 data, n, steps, backend, flag = sys.argv[1], int(sys.argv[2]), int(sys.argv[3]), sys.argv[4], sys.argv[5] == "on"
 sd = float(sys.argv[6]) if len(sys.argv) > 6 else 0.15
 hold_b = float(sys.argv[7]) if len(sys.argv) > 7 else 0.03
+import os
 kw = dict(static_hold=flag, idle_creep=flag, steer_delay=sd)
+if backend == "gpu" and os.environ.get("OAS") == "0": kw["obs_after_step"] = False
 start = 7 * 3600.0
 if backend == "cpu": env = bayenv.Env(data, n_cars=n, seed=777, backend="cpu", start_time=start, obs="v2", **kw)
 else: env = bayenv.Env(data, n_cars=n, seed=777, population=n, pop_seed=777.0, start_time=start, obs="v2", **kw)

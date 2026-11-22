@@ -837,3 +837,33 @@ Each entry: date, decision, why, alternatives, numbers, and one line to say it o
   gas 0.546 from s 14.72 stalls at s 26.19 on both (peak 27.48); gas 0.45 from s 20 rolls back to 16.65 (CPU) / 16.75
   (GPU), min speed −0.45 m/s on both (JS clamp: stops dead at 20.00 on both); gas 0.65 climbs to 168 m in 40 s; at
   s 25 brake 0.6 holds (25.00), no pedals rolls back to 7.22 on both.
+
+## 41. The GPU observes the state after the step (`obs_after_step`, default on)
+
+- **Date:** 2026-11-22
+- **Problem:** the same net scored 8–10 points lower arrival on the GPU than on the CPU. The timelines differed by one
+  step.
+  - **CPU** (`Sim::step`: spawn, contacts, lane index, leaders, control obs, drive, integrate; bayenv-py / the
+    V2Encoder encode after the step): obs(t) shows the state after step t's integrate, with the leaders and control
+    inputs of step t. The action computed from it is written into the ring in step t + 1 (drive) and integrated from
+    there, after the reaction / steer delay.
+  - **GPU, JS order** (tick, spawn, contacts, lists, leaders, junctions, sense, act, integrate): the obs read after
+    step t was sensed before step t's act / integrate, so it showed the state after step t − 1; the action computed
+    from it is written by act in step t + 1. Every input was one step older than the CPU's. The delay compensation
+    (inputs 4 / 5 / 41) hid part of it (entry 36: the in-flight command), the others (speed, gaps, controls, mirrors)
+    stayed a step old.
+  - The private trainer's GPU lane (`submit(k)`: set_actions, `submit_steps(k)`, `finish`: obs + veh after the batch)
+    adds no lag of its own: one decision per call, the actions of call n + 1 computed from the obs of call n.
+- **Decision:** `GpuOptions::obs_after_step` (default on; `js_model()` off = the JS order, JS-exact; Python
+  `Env(obs_after_step=False)` for legacy GPU checkpoints). The step runs tick, spawn, contacts, lists, leaders,
+  junctions, collided, act, integrate, then sense / perceive: the observation of step t is the state after its
+  integrate with the leaders / controls of step t, as on the CPU, and the action computed from it is written in step
+  t + 1. `collided` (the training collision signal) still runs right before act, which clears the flag.
+  `kernels/model_sense.wgsl` shifts the delay-compensation window to ring t − d + 1 .. t (the newest command is already
+  in the ring), and the in-flight append of entry 36 is no longer used.
+- **Numbers** (lane keeper + pedals on obs v2, 1,000 commuters):
+  - `tests/closed_loop.rs` (150 s), crashed cpu / gpu: 27 / 29 (steer delay 0), 55 / 56 (0.15 s), 23 / 24 (0.3 s);
+    with the JS order (and the in-flight compensation): 26 / 44, 53 / 50, 22 / 32.
+  - `tools/closed_loop.py` (30 min, 318 trips spawned): steer delay 0: arrived cpu 74 / gpu 76 (JS order 62),
+    crashed 207 / 206 (225); 0.15 s: arrived 43 / 38 (49), crashed 254 / 257 (243).
+

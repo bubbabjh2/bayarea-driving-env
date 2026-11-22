@@ -4,7 +4,9 @@
 //! compensated lane offset (4) and heading error (5) plus a per-car swing, so a compensation that predicts the wrong
 //! horizon makes the cars weave into the kerbs; pedals keep speed, follow the leader and stop (light brake) at red
 //! lights. Barrier rows and crashes must agree between the backends for steer_delay 0, 0.15 and 0.3 s. Measured:
-//! crashed cpu 26 / gpu 44, barrier rows 50 / 49 (0 s); 53 / 50, 107 / 117 (0.15 s); 22 / 32, 163 / 157 (0.3 s).
+//! crashed cpu 27 / gpu 29, barrier rows 52 / 47 (0 s); 55 / 56, 110 / 95 (0.15 s); 23 / 24, 164 / 163 (0.3 s), with
+//! obs_after_step (the GPU observes the state after the step, as the CPU). With the JS GPU order (one step older obs)
+//! and the in-flight-command compensation: crashed 26 / 44, 53 / 50, 22 / 32.
 //! Before the fix (GPU replaying the full reaction window, then the window without the in-flight command), 150 s:
 //! crashed cpu 27 / gpu 156 (0 s), 55 / 172 (0.15 s), 23 / 124 (0.3 s). Skips without the world data or a GPU.
 use bayenv_gpu::{defines::ObsMode, sim::{GpuOptions, GpuPopulation}};
@@ -77,10 +79,8 @@ fn closed_loop_through_the_obs_agrees() {
     for sd in [0.0, 0.15, 0.3] {
         let Some((c, g)) = run(&w, sd) else { return };
         let near = |a: usize, b: usize, abs: f64, rel: f64| (a as f64 - b as f64).abs() <= abs.max(rel * a as f64);
-        // barrier strikes are the steering signal; crashes also include car-car crashes, where the GPU's one step older
-        // speed / gap inputs (only 4 / 5 / 41 are delay-compensated) leave a residual difference
         if !near(c[1], g[1], 15.0, 0.25) { fails.push(format!("steer_delay {sd}: barrier rows cpu {} gpu {}", c[1], g[1])); }
-        if !near(c[0], g[0], 20.0, 0.8) { fails.push(format!("steer_delay {sd}: crashed cpu {} gpu {}", c[0], g[0])); }
+        if !near(c[0], g[0], 8.0, 0.25) { fails.push(format!("steer_delay {sd}: crashed cpu {} gpu {}", c[0], g[0])); }
     }
     assert!(fails.is_empty(), "{fails:?}");
 }
