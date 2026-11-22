@@ -527,13 +527,47 @@ impl GpuSim {
 
     /// Spawn-queue entry: VPar words + depart, flags, fuel, tank, slot.
     #[allow(clippy::too_many_arguments)]
-    fn write_entry(&mut self, q: u32, slot: u32, ty: usize, tr: [f64; 6], route_off: u32, route_len: u32, work_start: f64, len: f64, trip: u32, depart: f64, fuel: f64, tank: f64) {
+    fn write_entry(&mut self, q: u32, slot: u32, ty: usize, tr: [f64; 6], route_off: u32, route_len: u32, work_start: f64, len: f64, trip: u32, depart: f64, fuel: f64, tank: f64, route: &[i32]) {
         let mut e = [0u32; L::SPAWN_WORDS];
+        // spawn_clearance (kernels/spawn_clearance.wgsl): start route index (word 26) and the skipped route distance (27)
+        if self.opts.spawn_clearance { let (k0, d) = self.spawn_start(route); e[26] = k0 as u32; e[27] = fw(d); }
         self.par_words(&mut e[..L::PAR_WORDS], ty as i64, tr[0], tr[1], tr[2], tr[3], tr[4], tr[5], route_off, route_len, work_start, len, trip);
         e[20] = fw(depart); e[21] = 1; e[22] = fw(fuel); e[23] = fw(tank);
         e[24] = slot; e[25] = if self.opts.features.policy { flag::POLICY } else { 0 };
         self.gpu.write("queue", bytemuck::cast_slice(&e), (q as usize * L::SPAWN_WORDS * 4) as u64);
         if q as usize + 1 > self.queue_high { self.queue_high = q as usize + 1; }
+    }
+    /// spawn_clearance (bayenv-sim Sim::spawn_edge_index): the first route index whose edge leaves at least
+    /// spawn_clearance_m between its spawn point (s_exit) and the junction entry the route takes next (the earliest s_in
+    /// over the lanes); the last edge when none does. Returns it with the length of the route edges before it (f64 sum).
+    pub fn spawn_start(&mut self, route: &[i32]) -> (usize, f64) {
+        let w = self.world.clone();
+        let Some(j) = &w.junctions else { return (0, 0.0) };
+        let g = &w.graph;
+        if self.spawn_by_in.is_none() {
+            let (ne, mc) = (g.edge_count, j.m_info.len() / 7);
+            let mut start = vec![0u32; ne + 1];
+            for m in 0..mc { start[j.m_info[7 * m] as usize + 1] += 1; }
+            for e in 0..ne { start[e + 1] += start[e]; }
+            let mut fill = start.clone(); let mut by = vec![0u32; mc];
+            for m in 0..mc { let a = j.m_info[7 * m] as usize; by[fill[a] as usize] = m as u32; fill[a] += 1; }
+            self.spawn_by_in = Some((start, by));
+        }
+        let (start, by) = self.spawn_by_in.as_ref().unwrap();
+        let movement = |a: usize, la: u32, b: u32| -> Option<usize> {
+            (start[a]..start[a + 1]).map(|k| by[k as usize] as usize).find(|&m| j.m_info[7 * m + 1] == la && j.m_info[7 * m + 2] == b)
+        };
+        let mut k = 0;
+        while k + 1 < route.len() {
+            let e = route[k] as usize;
+            if !((g.s_stop[e] as f64) < g.length[e]) { break; }
+            let s0 = (g.s_exit[e] as f64).max(0.0);
+            let mut s_in = f64::INFINITY;
+            for l in 0..g.lanes[e] as u32 { if let Some(m) = movement(e, l, route[k + 1] as u32) { s_in = s_in.min(j.m_f[4 * m] as f64); } }
+            if !s_in.is_finite() || s_in - s0 >= self.opts.spawn_clearance_m { break; }
+            k += 1;
+        }
+        (k, route[..k].iter().map(|&q| g.length[q as usize]).sum())
     }
     fn traits_of(d: Option<&[f32]>) -> [f64; 6] {
         match d { Some(d) => [d[0] as f64, d[1] as f64, d[2] as f64, d[3] as f64, d[4] as f64, d[5] as f64],
@@ -557,7 +591,7 @@ impl GpuSim {
             let tank = Self::tank(ty);
             let fuel = if self.x.fuel_left[id] >= 0.0 { self.x.fuel_left[id] as f64 } else { pop.fuel_fill.as_ref().map_or(1.0, |f| f[id] as f64) * tank };
             let ro = (self.x.trip_route_base + roff) as u32;
-            self.write_entry(q, slot, ty, tr, ro, rlen as u32, pop.work_start[id] as f64, len, k as u32, dep, fuel, tank);
+            self.write_entry(q, slot, ty, tr, ro, rlen as u32, pop.work_start[id] as f64, len, k as u32, dep, fuel, tank, &pop.route_flat[roff..roff + rlen]);
             self.slot_trip[slot as usize] = k; self.slot_route[2 * slot as usize] = ro; self.slot_route[2 * slot as usize + 1] = rlen as u32;
         }
     }
@@ -615,7 +649,7 @@ impl GpuSim {
         let ty = t.vehicle_type[i] as usize;
         let g = &self.world.graph; let mut len = 0.0; for &e in r.iter() { len += g.length[e as usize]; }
         let tank = Self::tank(ty);
-        self.write_entry(q, slot, ty, tr, off as u32, r.len() as u32, t.work_start[i] as f64, len, 2 * id, t.depart[i] as f64, t.fuel_fill[i] as f64 * tank, tank);
+        self.write_entry(q, slot, ty, tr, off as u32, r.len() as u32, t.work_start[i] as f64, len, 2 * id, t.depart[i] as f64, t.fuel_fill[i] as f64 * tank, tank, &r);
         self.slot_trip[slot as usize] = 2 * id as i32; self.slot_route[2 * slot as usize] = off as u32; self.slot_route[2 * slot as usize + 1] = r.len() as u32;
         let mut h = self.x.stream_stats.spawn_hash; if h == 0 { h = 0xcbf29ce484222325; }
         let mut mix = |v: u32| { for b in v.to_le_bytes() { h ^= b as u64; h = h.wrapping_mul(0x100000001b3); } };

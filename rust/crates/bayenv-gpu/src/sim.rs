@@ -108,6 +108,15 @@ pub struct GpuOptions {
     /// LoadOptions::junction_radii): the blob carries the moved s_in / s_out, lengths, points and conflict positions.
     /// Must match the world; needs smooth_geometry. SimOpts::junction_radii
     pub junction_radii: bool,
+    /// Spawn at least `spawn_clearance_m` before the junction entry the route takes next (default OFF; DECISIONS.md 34;
+    /// kernels/spawn_clearance.wgsl + the start index the host writes into the spawn-queue entry). Off = the JS kernels
+    /// and host. SimOpts::spawn_clearance / spawn_clearance_m
+    pub spawn_clearance: bool,
+    pub spawn_clearance_m: f64,
+    /// Opt-in lane-heading preview (default OFF; kernels/heading_preview.wgsl, dispatched after integrate): per slot
+    /// [f32; 4] = the road frame's heading change 5 / 10 / 20 / 40 m ahead along the planned path, as bayenv-sim
+    /// obs::heading_preview. Read with `GpuSim::heading_preview()`. Not part of the observation vectors.
+    pub heading_preview: bool,
     /// MODEL fix (default ON; kernels/model_integrate.wgsl): a sliding wreck clamped at the end of its edge / connector
     /// gets speed 0. SimOpts::wreck_end_stop
     pub wreck_end_stop: bool,
@@ -165,7 +174,7 @@ impl GpuOptions {
     /// Set a host optimisation flag by name (indirect_resolve, fused_resolve, sorted_order, profile).
     pub fn set_flag(&mut self, name: &str, on: bool) -> Result<(), String> {
         match name { "indirect_resolve" => self.indirect_resolve = on, "fused_resolve" => self.fused_resolve = on, "sorted_order" => self.sorted_order = on, "fast_scan" => self.fast_scan = on, "fast_search" => self.fast_search = on, "zero_init_workgroup" => self.zero_init_workgroup = on, "cpu_connector_join" => self.cpu_connector_join = on, "contact_tangent" => self.contact_tangent = on, "deterministic_contacts" => self.deterministic_contacts = on, "deterministic_spawn" => self.deterministic_spawn = on, "deterministic_events" => self.deterministic_events = on, "deterministic_leaders" => self.deterministic_leaders = on,
-            "wreck_real_mass" => self.wreck_real_mass = on, "curvature_dynamics" => self.curvature_dynamics = on, "smooth_geometry" => self.smooth_geometry = on, "junction_radii" => self.junction_radii = on, "wreck_end_stop" => self.wreck_end_stop = on,
+            "wreck_real_mass" => self.wreck_real_mass = on, "curvature_dynamics" => self.curvature_dynamics = on, "smooth_geometry" => self.smooth_geometry = on, "junction_radii" => self.junction_radii = on, "spawn_clearance" => self.spawn_clearance = on, "heading_preview" => self.heading_preview = on, "wreck_end_stop" => self.wreck_end_stop = on,
             "contact_episodes" => self.contact_episodes = on, "connector_barrier" => self.connector_barrier = on, "brake_hold" => self.brake_hold = on,
             "heavy_brakes" => self.heavy_brakes = on, "barrier_soft_push" => self.barrier_soft_push = on, "impact_reverse" => self.impact_reverse = on,
             "profile" => self.profile = on, _ => return Err(format!("unknown GpuOptions flag {name}")) }
@@ -181,11 +190,11 @@ impl GpuOptions {
     pub fn model_fixes(&self) -> kernels::ModelFixes {
         kernels::ModelFixes { cpu_connector_join: self.cpu_connector_join, contact_tangent: self.contact_tangent, wreck_real_mass: self.wreck_real_mass,
             curvature_dynamics: self.curvature_dynamics, wreck_end_stop: self.wreck_end_stop, contact_episodes: self.contact_episodes, connector_barrier: self.connector_barrier,
-            brake_hold: self.brake_hold, heavy_brakes: self.heavy_brakes, barrier_soft_push: self.barrier_soft_push, impact_reverse: self.impact_reverse }
+            brake_hold: self.brake_hold, heavy_brakes: self.heavy_brakes, barrier_soft_push: self.barrier_soft_push, impact_reverse: self.impact_reverse, spawn_clearance: self.spawn_clearance }
     }
     /// Every model fix off: the JS kernels (oracle checks, legacy checkpoints).
     pub fn js_model(mut self) -> GpuOptions {
-        self.cpu_connector_join = false; self.contact_tangent = false; self.wreck_real_mass = false; self.curvature_dynamics = false; self.smooth_geometry = false; self.junction_radii = false; self.wreck_end_stop = false;
+        self.cpu_connector_join = false; self.contact_tangent = false; self.wreck_real_mass = false; self.curvature_dynamics = false; self.smooth_geometry = false; self.junction_radii = false; self.spawn_clearance = false; self.wreck_end_stop = false;
         self.contact_episodes = false; self.connector_barrier = false; self.brake_hold = false; self.heavy_brakes = false; self.barrier_soft_push = false; self.impact_reverse = false;
         self
     }
@@ -198,7 +207,7 @@ impl Default for GpuOptions {
     fn default() -> Self {
         GpuOptions { capacity: 131072, dt: 0.05, start_time: 5.0 * 3600.0, seed: 1, obs: ObsMode::V2, steer_rate: false, decide_every: 1, features: Features::default(),
             controls: true, junctions: true, table_bits: 18, contact_cap: 131072, ev_cap: 16384, spawn_queue: 16384, op_cap: 16384, max_blocks: 4096, route_slack: 1 << 22,
-            resolve_rounds: 12, progress_weight: 1.0, jerk_weight: 0.5, jerk_reward: false, grade_obs: true, squeeze_delay: 15.0 * 60.0, deadlock_break: 0, reroute: true, keep_events: false, record_events: true, record_share: false, missed_at_out_edge: false, indirect_resolve: true, fused_resolve: true, sorted_order: true, fast_scan: true, fast_search: true, cpu_connector_join: true, contact_tangent: true, deterministic_contacts: true, deterministic_spawn: true, deterministic_events: true, deterministic_leaders: true, wreck_real_mass: true, curvature_dynamics: false, smooth_geometry: false, junction_radii: false, wreck_end_stop: true, contact_episodes: true, connector_barrier: true, brake_hold: false, heavy_brakes: true, barrier_soft_push: true, impact_reverse: true, zero_init_workgroup: false, profile: false, return_trips: true, refuel_budget_ms: f64::INFINITY,
+            resolve_rounds: 12, progress_weight: 1.0, jerk_weight: 0.5, jerk_reward: false, grade_obs: true, squeeze_delay: 15.0 * 60.0, deadlock_break: 0, reroute: true, keep_events: false, record_events: true, record_share: false, missed_at_out_edge: false, indirect_resolve: true, fused_resolve: true, sorted_order: true, fast_scan: true, fast_search: true, cpu_connector_join: true, contact_tangent: true, deterministic_contacts: true, deterministic_spawn: true, deterministic_events: true, deterministic_leaders: true, wreck_real_mass: true, curvature_dynamics: false, smooth_geometry: false, junction_radii: false, spawn_clearance: false, spawn_clearance_m: 18.0, heading_preview: false, wreck_end_stop: true, contact_episodes: true, connector_barrier: true, brake_hold: false, heavy_brakes: true, barrier_soft_push: true, impact_reverse: true, zero_init_workgroup: false, profile: false, return_trips: true, refuel_budget_ms: f64::INFINITY,
             route_threads: std::thread::available_parallelism().map_or(1, |n| n.get()), route_ahead: 300.0, route_cache: 0 }
     }
 }
@@ -301,6 +310,8 @@ pub struct GpuSim {
     in_crash: HashSet<u32>,
     crash_x: HashMap<u32, CrashX>,
     refuel_queue: Vec<(u32, u32)>,
+    /// spawn_clearance: movements by in-edge (CSR, ascending m), built on first use
+    spawn_by_in: Option<(Vec<u32>, Vec<u32>)>,
     reroute_queue: std::collections::VecDeque<Reroute>,
     last_reroute: HashMap<u32, (f64, i32)>,
     lot: u32,
@@ -447,6 +458,14 @@ impl GpuSim {
         gpu.buffer("largs", 64, wgpu::BufferUsages::STORAGE | wgpu::BufferUsages::INDIRECT | wgpu::BufferUsages::COPY_DST, Some(bytemuck::cast_slice(&[1u32, 1, 1, 0, 1, 1, 1, 0, 1, 1, 1, 0, 1, 1, 1, 0])));
         gpu.uniform("listArgsP", 16); gpu.write("listArgsP", bytemuck::cast_slice(&[blob.k as u32, cap as u32, 0, 0]), 0);
         gpu.storage("cflag", (cap * 8) as u64, None, wgpu::BufferUsages::empty());
+        if opts.heading_preview {
+            gpu.storage("hpreview", (cap * 16) as u64, None, wgpu::BufferUsages::empty());
+            // kernels/heading_preview.wgsl hpdir: per lane-geometry vertex, the f64 angle of the chord to the next vertex
+            let lg = &world.lanes; let nv = lg.vx.len();
+            let mut dir: Vec<f32> = (0..nv).map(|v| if v + 1 < nv { (lg.vz[v + 1] - lg.vz[v]).atan2(lg.vx[v + 1] - lg.vx[v]) as f32 } else { 0.0 }).collect();
+            if dir.is_empty() { dir.push(0.0); }
+            gpu.storage("hpdir", (dir.len() * 4) as u64, Some(bytemuck::cast_slice(&dir)), wgpu::BufferUsages::empty());
+        }
         gpu.uniform("collidedP", 16); gpu.write("collidedP", bytemuck::cast_slice(&[cap as u32, 0, 0, 0]), 0);
         gpu.uniform("contactArgsP", 16); gpu.write("contactArgsP", bytemuck::cast_slice(&[opts.contact_cap as u32, 0, 0, 0]), 0);
         let staging = gpu.device.create_buffer(&wgpu::BufferDescriptor { label: Some("staging"), size: (io_words * 4) as u64, usage: wgpu::BufferUsages::MAP_READ | wgpu::BufferUsages::COPY_DST, mapped_at_creation: false });
@@ -456,7 +475,7 @@ impl GpuSim {
             route_words: 0, route_cap: 0, route_mirror: Vec::new(), edge_head: vec![0; blob.e], block_free: (0..opts.max_blocks as u32).rev().collect(), block_next: vec![0; opts.max_blocks],
             free: (0..cap as u32).rev().collect(), slot_trip: vec![-1; cap], slot_route: vec![0; cap * 2], slot_station: vec![-1; cap],
             queue_free: (0..opts.spawn_queue as u32).rev().collect(), queue_high: 0, ops_pending: Vec::new(), wrecks: HashMap::new(), in_crash: HashSet::new(), crash_x: HashMap::new(),
-            refuel_queue: Vec::new(), reroute_queue: Default::default(), last_reroute: HashMap::new(), lot: 0, new_pose: false, crashes: Vec::new(), active: Vec::new(),
+            refuel_queue: Vec::new(), spawn_by_in: None, reroute_queue: Default::default(), last_reroute: HashMap::new(), lot: 0, new_pose: false, crashes: Vec::new(), active: Vec::new(),
             counters: Counters::default(), gpu_stats: [0; 64], events: Vec::new(), closed_key: None, closed_n: 0, closed_edges: Vec::new(),
             edge_speed_ema: HashMap::new(), edge_speed_order: Vec::new(), traffic_penalty: HashMap::new(), penalty_order: Vec::new(), pending_penalty: None, next_traffic: -1e9,
             router: None, packer: None, out_staging: None, half: None, rec: Default::default(), rec_mark: 0, missed_pending: Vec::new(), pending: None, staging, io_host: vec![0; io_words], profiler: None, js_stages: false, fast_search_ok: false, x: Default::default(), blob, gpu, opts,
@@ -494,7 +513,7 @@ impl GpuSim {
         if self.opts.deterministic_spawn {
             for (l, e) in [("spawnClaim", "spawnClaim"), ("spawnCommit", "spawnCommit"), ("leaveClaim", "leaveClaim"), ("leaveCommit", "leaveCommit")] {
                 let spec = kernels::KernelSpec { label: l, file: "spawn", entry: e, defines: true };
-                let src = self.patched(kernels::order_patches(kernels::model_patches(kernels::source(&spec, self.opts.obs, self.cap), "spawn", &kernels::ModelFixes::default()), "spawn", &self.opts));
+                let src = self.patched(kernels::order_patches(kernels::model_patches(kernels::source(&spec, self.opts.obs, self.cap), "spawn", &self.opts.model_fixes()), "spawn", &self.opts));
                 self.k.insert(l, self.gpu.kernel_with(l, &src, e, self.opts.zero_init_workgroup)?);
             }
         }
@@ -511,6 +530,10 @@ impl GpuSim {
         { let code = crate::defines::prefix(self.opts.obs, self.cap) + &kernels::load("common") + "\n" + kernels::host_raw("step_mark");
           self.k.insert("stepMark", self.gpu.kernel("stepMark", &code, "stepMark")?); }
         self.k.insert("collided", self.gpu.kernel("collided", kernels::host_raw("collided"), "main")?);
+        if self.opts.heading_preview {
+            let code = crate::defines::prefix(self.opts.obs, self.cap) + &kernels::resolve_includes(kernels::host_raw("heading_preview"));
+            self.k.insert("headingPreview", self.gpu.kernel_with("headingPreview", &code, "main", self.opts.zero_init_workgroup)?);
+        }
         if self.opts.sorted_order {
             self.k.insert("listArgs", self.gpu.kernel("listArgs", kernels::host_raw("list_args"), "main")?);
             let only = std::env::var("BAYENV_SORTED").ok();   // diagnostics: comma list of kernels to sort
@@ -539,6 +562,7 @@ impl GpuSim {
             ("counts", "counts"), ("starts", "counts"), ("items", "items"), ("order", "order"), ("vidx", "vidx"), ("claim", "claim"), ("laneClaim", "laneClaim"),
             ("queue", "queue"), ("ops", "ops"), ("inputs", "inputs"), ("actions", "actions"), ("agents", "agents"), ("edgeCount", "edgeCount"), ("edgeSpeed", "edgeSpeed"),
             ("telemetry", "telemetry"), ("ctl", "ctl"), ("CA", "contactArgsP"), ("CC", "collidedP"), ("vehw", "veh"), ("cflag", "cflag"), ("LA", "listArgsP"), ("largs", "largs"), ("cargs", "cargs"), ("hcounts", "hcounts"), ("hstarts", "hcounts"), ("hitems", "hitems"), ("hidx", "hidx"), ("contacts", "contacts")] { r.insert(k, b(n)); }
+        if self.opts.heading_preview { r.insert("hpreview", b("hpreview")); r.insert("hpdir", b("hpdir")); }
         r
     }
 
@@ -745,6 +769,7 @@ impl GpuSim {
             stage = "act"; push!("act", "act", g(cap as usize, 128));
         }
         stage = "integrate"; push!("integrate", "integrate", g(cap as usize, 256));
+        if self.opts.heading_preview { stage = "preview"; push!("headingPreview", "headingPreview", g(cap as usize, 128)); }
         d
     }
 
@@ -1425,6 +1450,12 @@ impl GpuSim {
     }
 
     // ------------------------------------------------------------------ state readback
+    /// The lane-heading preview of every slot after the last step (GpuOptions::heading_preview; cap x 4 f32, row i =
+    /// slot i: the frame heading change in rad 5, 10, 20, 40 m ahead along the planned path, 0 when not driving).
+    pub fn heading_preview(&self) -> Result<Vec<f32>, String> {
+        if !self.opts.heading_preview { return Err("heading_preview: create the GpuSim with GpuOptions::heading_preview".into()); }
+        Ok(bytemuck::pod_collect_to_vec(&self.gpu.read("hpreview", 0, (self.cap * 16) as u64)))
+    }
     pub fn read_state(&self) -> SimState {
         SimState { veh: self.read_words("veh"), par: self.read_words("par"), pose: bytemuck::cast_slice(&self.read_words("pose")).to_vec() }
     }

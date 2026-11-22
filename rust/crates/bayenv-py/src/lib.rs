@@ -168,7 +168,8 @@ impl Env {
     ///     keep_events=False, population=None, pop_seed=42, streaming=False, return_trips=True, stations=True,
     ///     refuel_budget_ms=None, cpu_connector_join=True, contact_tangent=True, replan_at_missed_event=True, wreck_real_mass=True,
     ///     curvature_dynamics=False, wreck_end_stop=True, contact_episodes=True, connector_barrier=True, brake_hold=False, static_hold=True, idle_creep=True, steer_delay=0.15,
-    ///     heavy_brakes=True, barrier_soft_push=True, impact_reverse=True, route_threads=None)
+    ///     heavy_brakes=True, barrier_soft_push=True, impact_reverse=True, route_threads=None, heading_preview=False)
+    /// heading_preview (gpu, default False): compute the heading_preview() buffer after every step (the cpu computes it on demand).
     /// Loads the world (~0.1 s warm), builds the GPU buffers and scatters `n_cars` cars at rest on random routes
     /// (seeded; the JS GPUSim.scatter placement). Actions start at [0, 0, 0] for every slot.
     /// population=N (gpu): instead of the scatter, N commuters (src/sim/population.js, seed pop_seed, generated natively,
@@ -192,19 +193,19 @@ impl Env {
     /// smooth_geometry (cpu and gpu, default False; needs curvature_dynamics=True): load the world with the smoothed frame
     /// geometry (lane and connector polylines filleted to realistic minimum radii, rust/DECISIONS.md 33)
     /// junction_radii (cpu and gpu, default False; needs smooth_geometry=True): turning junction connectors re-fitted to
-    /// vehicle-feasible radii, s_in / s_out moved (rust/DECISIONS.md 34). spawn_clearance (cpu only, default False):
-    /// spawn >= 18 m before the next junction entry (DECISIONS.md 34; the gpu returns an error)
+    /// vehicle-feasible radii, s_in / s_out moved (rust/DECISIONS.md 34). spawn_clearance (cpu and gpu, default False):
+    /// spawn >= 18 m before the next junction entry (DECISIONS.md 34; the gpu picks the start edge on the host)
     /// (rust/docs/physics-audit.md; SimOpts / GpuOptions fields of the same name). All False (and cpu_connector_join =
     /// contact_tangent = False on the gpu) = the JS model. dt must be finite and > 0.
     #[new]
     #[pyo3(signature = (data_dir, n_cars=10000, seed=1, backend="gpu", capacity=None, obs="v2", dt=0.05, start_time=None,
         accidents=true, collisions=true, fuel=true, controls=true, junctions=true, steer="position", decide_every=1, keep_events=false,
-        population=None, pop_seed=42.0, streaming=false, return_trips=true, stations=true, refuel_budget_ms=None, crash_share=false, missed_at_out_edge=false, cpu_connector_join=true, contact_tangent=true, replan_at_missed_event=true, wreck_real_mass=true, curvature_dynamics=false, smooth_geometry=false, junction_radii=false, spawn_clearance=false, wreck_end_stop=true, contact_episodes=true, connector_barrier=true, brake_hold=false, static_hold=true, idle_creep=true, steer_delay=0.15, heavy_brakes=true, barrier_soft_push=true, impact_reverse=true, route_threads=None))]
+        population=None, pop_seed=42.0, streaming=false, return_trips=true, stations=true, refuel_budget_ms=None, crash_share=false, missed_at_out_edge=false, cpu_connector_join=true, contact_tangent=true, replan_at_missed_event=true, wreck_real_mass=true, curvature_dynamics=false, smooth_geometry=false, junction_radii=false, spawn_clearance=false, wreck_end_stop=true, contact_episodes=true, connector_barrier=true, brake_hold=false, static_hold=true, idle_creep=true, steer_delay=0.15, heavy_brakes=true, barrier_soft_push=true, impact_reverse=true, route_threads=None, heading_preview=false))]
     #[allow(clippy::too_many_arguments)]
     fn new(py: Python<'_>, data_dir: &str, n_cars: usize, seed: u32, backend: &str, capacity: Option<usize>, obs: &str, dt: f64, start_time: Option<f64>,
            accidents: bool, collisions: bool, fuel: bool, controls: bool, junctions: bool, steer: &str, decide_every: u32, keep_events: bool,
            population: Option<usize>, pop_seed: f64, streaming: bool, return_trips: bool, stations: bool, refuel_budget_ms: Option<f64>, crash_share: bool, missed_at_out_edge: bool, cpu_connector_join: bool, contact_tangent: bool, replan_at_missed_event: bool,
-           wreck_real_mass: bool, curvature_dynamics: bool, smooth_geometry: bool, junction_radii: bool, spawn_clearance: bool, wreck_end_stop: bool, contact_episodes: bool, connector_barrier: bool, brake_hold: bool, static_hold: bool, idle_creep: bool, steer_delay: f64, heavy_brakes: bool, barrier_soft_push: bool, impact_reverse: bool, route_threads: Option<usize>) -> PyResult<Env> {
+           wreck_real_mass: bool, curvature_dynamics: bool, smooth_geometry: bool, junction_radii: bool, spawn_clearance: bool, wreck_end_stop: bool, contact_episodes: bool, connector_barrier: bool, brake_hold: bool, static_hold: bool, idle_creep: bool, steer_delay: f64, heavy_brakes: bool, barrier_soft_push: bool, impact_reverse: bool, route_threads: Option<usize>, heading_preview: bool) -> PyResult<Env> {
         check_dt(dt)?;
         let fx = PhysFixes { wreck_real_mass, curvature_dynamics, smooth_geometry, junction_radii, spawn_clearance, wreck_end_stop, contact_episodes, connector_barrier, brake_hold, static_hold, idle_creep, steer_delay, heavy_brakes, barrier_soft_push, impact_reverse };
         if backend == "cpu" {
@@ -240,7 +241,7 @@ impl Env {
             let mut o = GpuOptions { capacity: cap, dt, start_time: start_time.unwrap_or(18000.0), seed, obs: obs_mode, steer_rate, decide_every, controls, junctions, keep_events, record_share: crash_share, missed_at_out_edge,
                 return_trips, refuel_budget_ms: refuel_budget_ms.unwrap_or(f64::INFINITY), cpu_connector_join, contact_tangent, ..Default::default() };
             if let Some(t) = route_threads { o.route_threads = t; }
-            if fx.spawn_clearance { return Err("spawn_clearance is cpu-only for now (rust/DECISIONS.md 34)".to_string()); }
+            o.heading_preview = heading_preview;
             fx.gpu(&mut o);
             o.features.accidents = accidents; o.features.collisions = collisions; o.features.fuel = fuel;
             let mut sim = bayenv_gpu::env::create(world.clone(), o)?;
@@ -578,12 +579,15 @@ impl Env {
         let sim = gpu_mut(self); sim.sync(); PyArray1::from_slice(py, &sim.x.outcome)
     }
 
-    /// Opt-in lane-heading preview (cpu backend): float64 (n_slots, 4), the change of the road frame's heading (rad)
-    /// 5, 10, 20 and 40 m ahead along each driving car's planned path (bayenv-sim obs::heading_preview); zeros for
+    /// Opt-in lane-heading preview: float64 (n_slots, 4) on the cpu backend, (capacity, 4) on the gpu backend (created
+    /// with heading_preview=True; kernels/heading_preview.wgsl after each step), the change of the road frame's heading
+    /// (rad) 5, 10, 20 and 40 m ahead along each driving car's planned path (bayenv-sim obs::heading_preview); zeros for
     /// slots that are not driving. Not part of the obs vectors (obs v1 / v2 stay as in the JS).
     fn heading_preview<'py>(&mut self, py: Python<'py>) -> PyResult<Bound<'py, PyArray2<f64>>> {
-        let Some(e) = cpu_only(self) else { return Err(PyNotImplementedError::new_err("heading_preview: cpu backend only")) };
-        let rows = e.heading_preview_rows();
+        let rows: Vec<f64> = match cpu_only(self) {
+            Some(e) => e.heading_preview_rows(),
+            None => gpu_ref(self).heading_preview().map_err(PyRuntimeError::new_err)?.into_iter().map(|x| x as f64).collect(),
+        };
         let n = rows.len() / 4;
         let a = ndarray::Array2::from_shape_vec((n, 4), rows).map_err(|e| PyValueError::new_err(e.to_string()))?;
         Ok(PyArray2::from_owned_array(py, a))
@@ -689,7 +693,6 @@ impl VecEnv {
         let res: Result<(Vec<GpuSim>, usize), String> = py.detach(move || {
             let world = Arc::new(World::load_with(&data, &fx.load()).map_err(|e| format!("world: {e}"))?);
             let mut o = GpuOptions { capacity: cap, dt, start_time, obs: obs_mode, cpu_connector_join, contact_tangent, ..Default::default() };
-            if fx.spawn_clearance { return Err("spawn_clearance is cpu-only for now (rust/DECISIONS.md 34)".to_string()); }
             fx.gpu(&mut o);
             o.features.accidents = accidents; o.features.collisions = collisions; o.features.fuel = fuel;
             let mut sims = bayenv_gpu::env::create_many(world, &o, n_envs)?;
@@ -829,6 +832,7 @@ impl PhysFixes {
     fn gpu(&self, o: &mut GpuOptions) {
         o.wreck_real_mass = self.wreck_real_mass; o.curvature_dynamics = self.curvature_dynamics; o.smooth_geometry = self.smooth_geometry; o.junction_radii = self.junction_radii; o.wreck_end_stop = self.wreck_end_stop; o.contact_episodes = self.contact_episodes;
         o.connector_barrier = self.connector_barrier; o.brake_hold = self.brake_hold; o.heavy_brakes = self.heavy_brakes; o.barrier_soft_push = self.barrier_soft_push; o.impact_reverse = self.impact_reverse;
+        o.spawn_clearance = self.spawn_clearance;
     }
 }
 fn check_dt(dt: f64) -> PyResult<()> { if dt.is_finite() && dt > 0.0 { Ok(()) } else { Err(PyValueError::new_err(format!("dt must be finite and > 0 (got {dt})"))) } }
