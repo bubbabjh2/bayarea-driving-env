@@ -571,7 +571,7 @@ Each entry: date, decision, why, alternatives, numbers, and one line to say it o
     `smooth_geometry`, must match the world. At load, after the smoothing (`bayenv_world::junction_radii`), every
     turning connector (0.3–2.6 rad) whose arc is below the target is rebuilt as one circular arc with tangent entry
     and exit. Its s_in moves back on the in-edge and its s_out forward on the out-edge until the arc fits.
-  - **`spawn_clearance`:** `SimOpts` (CPU) / `Env(spawn_clearance=True)` (CPU backend). A car whose first route edge
+  - **`spawn_clearance`:** `SimOpts` / `GpuOptions` / `Env(spawn_clearance=True)` (both backends). A car whose first route edge
     leaves less than 18 m (`spawn_clearance_m`) between its spawn point (s_exit) and the junction entry its route
     takes next starts on the next route edge instead, as if it had driven the skipped ones (route position and
     distance set to match). It is its own flag because it changes where cars start on the raw world too.
@@ -639,13 +639,22 @@ Each entry: date, decision, why, alternatives, numbers, and one line to say it o
       geometry.
   - **cpu_vs_gpu** (curvature + smooth + junction_radii): crashed 734 / 734, contacts 2,023 / 2,015, barrier
     2,019 / 2,011, missed exits 13 / 15, violations 337 / 337.
-- **GPU spawn clearance (not done):** the GPU spawns on the trip's first route edge at s_exit (host `scatter` /
-  `set_population`, then the spawn kernels). The plan:
-  - Pick the start index the same way on the host when the trip's route words are packed.
-  - Write ROUTE_POS / EDGE / S / ROUTE_DIST for it in the spawn record, and have `spawn_order.wgsl` / `spawn.wgsl`
-    read them instead of assuming route position 0 at s_exit.
-  - Then add the flag to `GpuOptions`.
-  - Until then `Env(backend="gpu", spawn_clearance=True)` is an error.
+- **Heavy vehicles on residential corners:** local corners stay at 8 m, below the truck and bus minimum turning radius
+  of about 11.5 m. This is deliberate: real buses and trucks swing wide or crawl around tight corners. In the sim they
+  may strike the kerb there.
+- **GPU spawn clearance:** `GpuOptions::spawn_clearance` (default off; off = the JS kernels and host unchanged).
+  - The host picks the start index while it writes the trip's spawn-queue entry (`host.rs spawn_start`, the CPU's
+    `spawn_edge_index` on the same world arrays: f32 s_in / s_exit / s_stop, movements by in-edge in ascending order).
+  - It stores the index in the entry's spare word 26 and the skipped route distance (f64 sum, as f32) in word 27.
+    `kernels/spawn_clearance.wgsl` makes `spawn.wgsl` (and the `spawn_order.wgsl` claim / commit passes) spawn on that
+    route edge at its s_exit, with that route position and distance; the entry lane is chosen against the next route
+    edge, as on the CPU.
+  - One difference: the CPU runs its synchronous refuel check first and keeps the car on edge 0 when a refuel plan
+    replaced the route. GPU refuel plans are asynchronous (made later from the car's current edge), so a GPU car
+    always starts on the clearance edge.
+  - `cpu_vs_gpu` (curvature + smooth + junction_radii + spawn_clearance): all 834 spawns start on the same route
+    position and edge, within 2 m in s; 127 start past route edge 0 on both. Crashed 746 / 746, contacts 1,797 /
+    1,785, missed exits 15 / 19, violations 376 / 376. `Env(backend="gpu", spawn_clearance=True)` works.
 - **On camera:** "Our junction corners were tighter than a car can turn. So we moved where each turn starts, until a
   car could follow the curve and a truck could take the big roads."
 
@@ -679,3 +688,27 @@ Each entry: date, decision, why, alternatives, numbers, and one line to say it o
 - **Numbers:** driver with a 1 s reaction time: the first steering response after 0.20 s (dt 0.05; JS 1.05 s), the
   first brake response still after 1.05 s.
 - **On camera:** "Our drivers needed a full second to turn the wheel, as if every bend in the road was a surprise."
+
+## 37. The lane-heading preview on the GPU (`heading_preview`, default off)
+
+- **Date:** 2026-11-21
+- **Decision:** `GpuOptions::heading_preview` / `Env(heading_preview=True)` (GPU backend) adds
+  `kernels/heading_preview.wgsl`, dispatched after `integrate` in every step. It writes a cap × 4 f32 buffer
+  (`hpreview`). Row i is slot i: the road frame's world heading change (rad, wrapped to (−π, π]) between the car's
+  position and 5, 10, 20, 40 m further along its planned path, as `bayenv_sim::obs::heading_preview`. Rows of slots
+  that are not driving are 0. `GpuSim::heading_preview()` and `Env.heading_preview()` read it back; the GPU returns
+  (capacity, 4) float64 and the CPU (n_slots, 4).
+- **How:** the kernel walks the same pieces as the CPU, step for step. It follows the current edge or connector, then
+  the route: the connector the car's lane takes into the next route edge (any lane as a fallback), or a plain hop.
+  The route-position bookkeeping and the 16-hop limit are the same as on the CPU.
+  - Connector heading: `connPointJ`. The connector points are f32 in the world data on both backends, so they match.
+  - Edge heading: a per-vertex chord angle buffer (`hpdir`), computed on the host in f64 from the same lane-geometry
+    vertices the CPU uses. The blob's f32 vertex coordinates (ulp 4–8 mm at 30–60 km from the origin) gave up to
+    7e-3 rad of error on short segments; with `hpdir` the error is 2e-6 rad.
+- **Layout:** four f32 per slot, distances fixed at `HEADING_PREVIEW_D` = [5, 10, 20, 40] m, kept simple so it can
+  become part of the v2 / v3 observation once the feature list is fixed.
+- **Numbers** (`tests/heading_preview.rs`: GPU population, then every driving car's edge, connector, s, lane, route
+  position and route words copied into a CPU vehicle store and the CPU function evaluated): raw world, 495 cars, max
+  |GPU − CPU| 2.1e-6 rad; smoothed + `junction_radii`, 269 cars, 1.4e-6 rad.
+- **Alternatives:** computing it on the host from a state readback (a cap-sized readback every step); folding it into
+  `sense.wgsl` now (it would change the obs layout before the feature list is settled).

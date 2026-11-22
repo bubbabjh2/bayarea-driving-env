@@ -58,6 +58,8 @@ pub const HOST_SOURCES: &[(&str, &str)] = &[
     ("hash_order", include_str!("../kernels/hash_order.wgsl")),
     ("model_contacts", include_str!("../kernels/model_contacts.wgsl")),
     ("model_integrate", include_str!("../kernels/model_integrate.wgsl")),
+    ("spawn_clearance", include_str!("../kernels/spawn_clearance.wgsl")),
+    ("heading_preview", include_str!("../kernels/heading_preview.wgsl")),
 ];
 
 /// Lane-list-order variant of a per-car kernel (kernels/sorted.wgsl): the entry `entry` of `src` becomes the
@@ -194,13 +196,15 @@ pub struct ModelFixes {
     pub cpu_connector_join: bool, pub contact_tangent: bool,
     pub wreck_real_mass: bool, pub curvature_dynamics: bool, pub wreck_end_stop: bool, pub contact_episodes: bool,
     pub connector_barrier: bool, pub brake_hold: bool, pub heavy_brakes: bool, pub barrier_soft_push: bool, pub impact_reverse: bool,
+    /// kernels/spawn_clearance.wgsl (spawn.wgsl; the host writes the start index into the spawn-queue entry)
+    pub spawn_clearance: bool,
 }
 impl ModelFixes {
-    /// every fix on (the GpuOptions default is this with curvature_dynamics off: `ModelFixes::default_model()`)
-    pub fn default_model() -> ModelFixes { ModelFixes { curvature_dynamics: false, brake_hold: false, ..ModelFixes::all() } }
+    /// every fix on (the GpuOptions default is this with curvature_dynamics, brake_hold and spawn_clearance off: `ModelFixes::default_model()`)
+    pub fn default_model() -> ModelFixes { ModelFixes { curvature_dynamics: false, brake_hold: false, spawn_clearance: false, ..ModelFixes::all() } }
     pub fn all() -> ModelFixes {
         ModelFixes { cpu_connector_join: true, contact_tangent: true, wreck_real_mass: true, curvature_dynamics: true, wreck_end_stop: true, contact_episodes: true,
-            connector_barrier: true, brake_hold: true, heavy_brakes: true, barrier_soft_push: true, impact_reverse: true }
+            connector_barrier: true, brake_hold: true, heavy_brakes: true, barrier_soft_push: true, impact_reverse: true, spawn_clearance: true }
     }
     /// kernels/model_integrate.wgsl is applied (any of its flags on)
     pub fn integrate_on(&self) -> bool { self.curvature_dynamics || self.wreck_end_stop || self.brake_hold || self.heavy_brakes || self.impact_reverse }
@@ -224,6 +228,7 @@ pub fn model_patches(src: String, file: &str, m: &ModelFixes) -> String {
             mf_consts(&[("WRECK_REAL_MASS", m.wreck_real_mass), ("IMPACT_REVERSE", m.impact_reverse), ("SOFT_PUSH", m.barrier_soft_push), ("EPISODES", m.contact_episodes), ("CONN_BARRIER", m.connector_barrier)])
                 + &patch_text(&src, "model_contacts")
         }
+        "spawn" if m.spawn_clearance => patch_text(&src, "spawn_clearance"),
         _ => src,
     }
 }
@@ -322,8 +327,11 @@ mod tests {
         assert!(c.contains("const MF_EPISODES: bool = true;") && c.contains("fn connBarrier("));
         let f = super::model_patches(super::resolve_includes(super::host_raw("resolve_fused")), "contacts", &all);
         assert!(f.contains("fn connBarrier("));
-        let one: [fn(&mut ModelFixes); 9] = [|m| m.wreck_real_mass = true, |m| m.curvature_dynamics = true, |m| m.wreck_end_stop = true, |m| m.contact_episodes = true,
-            |m| m.connector_barrier = true, |m| m.brake_hold = true, |m| m.heavy_brakes = true, |m| m.barrier_soft_push = true, |m| m.impact_reverse = true];
-        for f in one { let m = only(f); for file in ["integrate", "contacts"] { let _ = super::model_patches(super::load(file), file, &m); } }
+        let sp = super::model_patches(super::load("spawn"), "spawn", &all);
+        assert!(sp.contains("v.routePos = k0;") && sp.contains("bitcast<f32>(q.p1)"));
+        assert_eq!(super::model_patches(super::load("spawn"), "spawn", &ModelFixes::default_model()), super::load("spawn"), "spawn_clearance off: the JS kernel");
+        let one: [fn(&mut ModelFixes); 10] = [|m| m.wreck_real_mass = true, |m| m.curvature_dynamics = true, |m| m.wreck_end_stop = true, |m| m.contact_episodes = true,
+            |m| m.connector_barrier = true, |m| m.brake_hold = true, |m| m.heavy_brakes = true, |m| m.barrier_soft_push = true, |m| m.impact_reverse = true, |m| m.spawn_clearance = true];
+        for f in one { let m = only(f); for file in ["integrate", "contacts", "spawn"] { let _ = super::model_patches(super::load(file), file, &m); } }
     }
 }
