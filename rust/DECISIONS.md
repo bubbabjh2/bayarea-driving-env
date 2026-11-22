@@ -867,3 +867,86 @@ Each entry: date, decision, why, alternatives, numbers, and one line to say it o
   - `tools/closed_loop.py` (30 min, 318 trips spawned): steer delay 0: arrived cpu 74 / gpu 76 (JS order 62),
     crashed 207 / 206 (225); 0.15 s: arrived 43 / 38 (49), crashed 254 / 257 (243).
 
+
+## 42. CPU input-version-3 rows, the same as the GPU's (`obs_v3.rs` `V3Encoder`)
+
+- **Date:** 2026-11-22
+- **Problem:** the training side runs its teacher and DAgger on the CPU only, but full v3 rows (358 floats) existed only on
+  the GPU (`ObsMode::V3`). The CPU's `fill_obs3` is the JS `env.observe({v3: true})` vector: 70..93 and the bodies, with
+  0..69 and the leader history 94..101 left at 0 for the policy side.
+- **Decision:** `bayenv_sim::obs_v3::V3Encoder` (wraps `V2Encoder`: `record_actions` / `push_command`, `encode`,
+  `encode_batch`, `encode_batch_teacher` with `Near` / `TeacherObs`) writes the GPU's row. 0..69 = the V2Encoder vector,
+  then the parts where the GPU's v2 sense is defined differently from the JS driver are rewritten the GPU way:
+  - 20..32 guidance: the distance to the next maneuver is measured from the car's position on its edge (the JS driver
+    uses the route distance driven, which starts at 0 at the spawn point: every spawned car's distance was long by its
+    spawn offset, 4–12 m); maneuvers are looked up by route position; nothing within 2 km gives distance 1 and the type
+    of the next maneuver; the refuel stop comes from the car's stop position.
+  - 8..19 neighbours: no junction-conflict obstacle in the own-ahead slot (adjust.js puts it there, the GPU doesn't), and
+    the side lane ends are found from the route position and s (the JS driver went through the route distance, the
+    same spawn-offset error).
+  - 70..93 and the bodies from `obs.rs` (sense_bodies, sense_controls3, sense_commands), 94..100 a per-trip
+    `LeaderHistory` stepped once per encode with the final inputs 8 / 9, 101 = 0.
+  Python `Env(backend="cpu", obs="v3")` now returns these rows (encoded after every step, like "v2"); the old vector is
+  `obs="v3_perception"`. obs v1 / v2 are unchanged (oracle-exact).
+- **Check:** `crates/bayenv-gpu/tests/obs_v3_parity.rs`: the same population on both backends (1,000 and 10,000
+  commuters, 07:30, steer_delay 0.15 and −1), open-loop per-commuter commands, rows compared at steps 45, 200, 600 for
+  cars whose state and route agree on both backends and with no car out of step within 150 m (319 / 302 / 106 rows at
+  1k, 3,160 / 2,973 / 739 at 10k). Bodies max |diff| ≤ 3.6e-4, 70..93 ≤ 5.2e-4, every input within 1e-3 in 97.6–100 %
+  of the rows (excluding 62 / 65..69). The rest are sim-state differences between the backends, not the encoder:
+  the leaders stage finds a leader on one backend only (8 / 9 and through the history 94..100, ≤ 0.5 % of rows),
+  the left-behind lane-list neighbour right after a junction box (10 / 11), the lane-end leader / own lane end once
+  (44 / 45), a signal phase edge in f32 time (86).
+- **GPU bugs found (not fixed):**
+  - 62 and 65..69 (yield required, junction conflict, in box, mouth distance) are written by `jyield.wgsl` in the
+    junctions stage, before act / integrate. With `obs_after_step` the rest of the row shows the state after the step,
+    these the state before it (checked: the GPU's 65..69 equal the CPU's computed before the step in 100 % of the
+    rows). Mouth distance is one step of travel short (|diff| up to 0.01 at 60 m scale, ~45 % of rows over 1e-3) and the
+    in-box flag lags a step when entering / leaving a box. The CPU keeps the state after the step.
+  - `senseV3` (and the steer_delay patch of input 87) index the ring with `S - dl` in u32: while the step counter is below
+    the car's delay (the first ≤ 39 steps of a GPU sim) it wraps and 87..89 read the wrong ring entry (the newest
+    command instead of 0).
+
+## 43. GPU guidance inside junction boxes (`guide_in_box`, default on)
+
+- **Date:** 2026-11-22
+- **Found by:** the private agent's static_hold trace (88 GPU trips stranded only with the hold on, 1 of them on the
+  CPU). The cars stalled inside junction boxes with a light gas + brake mix. Placing trips 610, 1184, 318, 1438 and
+  1570 at their stall points on both backends (`examples/obs_diff.rs`: same population, the car moved onto its own route
+  and crawled into the box) and diffing the 70 v2 inputs: everything matched except the guidance (inputs 20..32) for
+  the cars past the in-edge's end.
+- **Cause:** inside a box the car's s (in-edge frame) runs past the in-edge's length. The JS GPU guidance
+  (`sense.wgsl`) starts at the current route entry, so it kept reporting the junction being crossed: input 20 negative
+  (−0.016 / −0.019, i.e. −32 / −37 m) and that junction's type and side (turn-left / turn-right, lane hint). The CPU
+  guidance (`guidance.js at(routeDistance)`) counts a maneuver as passed 1 m after it and reports the next one at a
+  distance ≥ 0 (230 m / 459 m away). The policy saw "your turn is behind you" with the wrong side while standing in the
+  box.
+- **Decision:** `GpuOptions::guide_in_box` (default on, obs v2; `js_model()` off, JS-exact): `kernels/model_sense.wgsl` skips
+  the current entry's maneuver once the car is more than 1 m past the in-edge's end and clamps the distance at 0.
+  After the fix all 70 inputs agree within 1e-3 at the five stall points; `tests/obs_box.rs` checks cars stopped in
+  boxes on both backends.
+- **Residual:** the CPU measures guidance distances from the route odometer (`route_dist`) and the GPU from the route
+  position and s. They agree except after a connector entry that moves s (trip 1570: 5.7 m, input 20 off by 0.003).
+- **obs v3:** the v3 rows keep the JS GPU guidance for now, because bayenv-sim's `V3Encoder` (entry 42) mirrors it; with
+  the fix in both, `tests/obs_v3_parity.rs` index 20..32 differed in 1–1.4 % of rows (cars in boxes).
+
+## 44. GPU junction inputs after the step; command-ring index in the first steps (`obs_after_step`, `obs_ring_fix`)
+
+- **Date:** 2026-11-22
+- **Found by:** `tests/obs_v3_parity.rs` (entry 42).
+- **Junction inputs:** `jyield.wgsl` writes inputs 62 (yield required) and 65..69 (junction conflict distance /
+  time to conflict / other stopped, in box, mouth distance) in the junctions stage, before act / integrate; with
+  `obs_after_step` the rest of the row is sensed after integrate, so they were one step stale (in 100 % of rows they
+  equalled the CPU's values of the state before the step; the mouth distance was off by a step of travel in about
+  45 % of rows, the in-box flag lagged a step). Under `obs_after_step`, `junction.yield` (with its leader / gap
+  snapshot `jyield.snap` when deterministic) now runs after integrate, before sense, as bayenv-sim evaluates `_yieldJ`
+  and the junction obs at observe time. The yield state it leaves in `ctl` is read by the next step's deadlock pass,
+  also as on the CPU. The JS order (js_model) is unchanged.
+- **Ring index:** senseV3's "now" command index `S - d` (and the steer-delay variant of input 87) is u32; while the
+  step counter is below the car's delay (the first ≤ 39 steps) it wrapped, and 2^32 is not a multiple of the
+  40-entry ring, so inputs 87..89 read a written entry (gas 0.35 / brake 0.3 at step 2) where the CPU's modular index
+  reads an unwritten one (0). `GpuOptions::obs_ring_fix` (default on; js_model off) indexes `(S + 40 − d) % 40`. The
+  other ring reads (integrate, act, the delay compensation) already used that form.
+- **Numbers:** `tests/obs_v3_parity.rs` now also checks step 5 and holds 62 / 65..69 to the same 1e-3 as the rest: at
+  steps 5 / 45 no index is over 1e-3 except one row of 86 at 10,000 commuters; at steps 200 / 600 only 8..11
+  (neighbours), 44 / 45 and 94..100 (leader history) of up to 0.5 % of rows, cars near others out of step.
+
