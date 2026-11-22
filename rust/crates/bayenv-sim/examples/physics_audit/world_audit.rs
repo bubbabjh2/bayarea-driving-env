@@ -236,6 +236,9 @@ pub fn sim(data: &str, n: usize, steps: usize, policy: &str) {
             let a = match policy {
                 "const" => Action { steer: Some(0.0), steer_rate: None, gas: 0.3, brake: 0.0 },
                 "wobble" => keep_policy(&env, i, 0.03, t),
+                "oversteer" => { let mut a = keep_policy(&env, i, 0.0, t); let vs = &env.sim.vs; let hr = vs.heading_rel[i] as f64; let p = &VEHICLE_PARAMS[vs.type_idx[i] as usize];
+                    let e = vs.edge[i] as usize; let w = env.world.lane_w(e, (vs.s[i] as f64).min(env.world.e_length[e])); let err = vs.lat[i] as f64 - (vs.lane[i].max(0) as f64 + 0.5) * w;
+                    a.steer = Some(((-0.25 * err - 3.0 * hr).clamp(-0.35, 0.35) / p.max_steer).clamp(-1.0, 1.0)); a }
                 "pursuit" => pursuit_policy(&env, i, t),
                 "fast" => { let mut a = keep_policy(&env, i, 0.0, t); let u = env.sim.vs.speed[i] as f64; a.gas = ((30.0 - u) * 0.3).clamp(0.0, 1.0); if a.brake > 0.0 && env.sim.vs.leader[i] == -1 { a.brake = 0.0; } a }
                 _ => keep_policy(&env, i, 0.0, t),
