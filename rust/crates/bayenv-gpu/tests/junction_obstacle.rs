@@ -10,7 +10,7 @@
 //! standstill pairs in boxes, bodies behind on my edge); without the flag some box rows do. GpuOptions::lane_end_into:
 //! every lane-end leader (-2) at the CPU's gap; GpuOptions::sense_list_behind: the own-behind gap (input 10) of every
 //! compared row as the CPU's (DECISIONS.md 48); GpuOptions::guide_odometer: inputs 12 / 16 / 20 as the CPU's in all but
-//! 0.5 % of the rows (refuel-stop guidance, DECISIONS.md 49), many more without it; without each flag some rows differ. Skips without data / a GPU.
+//! 0.5 % of the rows (refuel-stop guidance, DECISIONS.md 50), many more without it; without each flag some rows differ. Skips without data / a GPU.
 use bayenv_gpu::{defines::ObsMode, sim::{GpuOptions, GpuPopulation, Snapshot}};
 use std::{collections::HashMap, path::Path, sync::Arc};
 

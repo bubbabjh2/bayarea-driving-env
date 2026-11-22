@@ -13,7 +13,8 @@
 //! crash, the slot is freed, so it can never arrive and no lane sees it) and lives on in `Sim::falls`. It slides over
 //! the deck edge until its centre is past the rail line, then falls under gravity with a constant tumble rate, lands
 //! on the ground below (`Sim::ground`: the DEM, or sea level 0 without one), and slides to rest, settling onto its
-//! wheels or its roof. On water it sinks to `SINK_DEPTH`. A fall only moves itself: it does not hit other cars or a
+//! wheels or its roof. On water it ploughs in against quadratic water drag (stopping within metres) and sinks to
+//! `SINK_DEPTH`. A fall only moves itself: it does not hit other cars or a
 //! lower deck.
 use crate::jm;
 use crate::physics::{Body, Contact, WALL_FRICTION};
@@ -39,6 +40,15 @@ pub const LAND_MU: f64 = 0.7;
 /// how deep a car in the water settles (m below the surface), and how fast it sinks (m/s)
 pub const SINK_DEPTH: f64 = 1.2;
 pub const SINK_SPEED: f64 = 0.4;
+/// Water entry (DECISIONS.md 49): the car ploughs in against quadratic drag 1/2 rho Cd A v^2 (sea water 1025 kg/m^3;
+/// Cd 1.0, a bluff body broadside or end-on, Hoerner's flat-plate / box values are 1.0-1.2; A = width x body height,
+/// the submerged frontal area), plus a small constant drag that ends the creep. Stopping distance from v0 to v1 is
+/// ln(v0 / v1) m / (1/2 rho Cd A): about 4 m for a sedan, 14 m for a 15 t truck from 25 m/s.
+pub const WATER_RHO: f64 = 1025.0;
+pub const WATER_CD: f64 = 1.0;
+pub const WATER_STOP: f64 = 0.5;
+/// body height by vehicle type (m): sedan, SUV, truck, bus (the frontal area of the water drag)
+pub const BODY_HEIGHT: [f64; 4] = [1.45, 1.75, 3.2, 3.2];
 
 /// The surface under a falling car: (height m, is water).
 pub trait Ground: Send + Sync {
@@ -81,6 +91,8 @@ pub struct Fall {
     pub slot: usize, pub commuter: i32, pub type_idx: u8,
     /// half length / half width (m)
     pub hl: f64, pub hw: f64,
+    /// mass (kg) and water-drag frontal area (m^2)
+    pub mass: f64, pub area: f64,
     pub edge: i32, pub time: f64, pub step: i64,
     /// impact: speed normal to the rail (m/s), impact severity (kJ), the speed along it (m/s), own delta-v (km/h)
     pub v_normal: f64, pub is_kj: f64, pub v_along: f64, pub dv_kmh: f64,
@@ -96,6 +108,8 @@ pub struct Fall {
     pub phase: FallPhase,
     /// landing: time, height of the surface, vertical speed at impact (m/s), drop from the deck (m), water
     pub land_time: f64, pub land_y: f64, pub land_vy: f64, pub drop: f64, pub water: bool,
+    /// where it landed (x, z) and its horizontal speed then (m/s)
+    pub land_xz: (f64, f64), pub land_vh: f64,
 }
 
 #[inline] fn qmul(a: [f64; 4], b: [f64; 4]) -> [f64; 4] {
@@ -152,6 +166,7 @@ impl Fall {
                 if self.pos[1] <= gy {
                     self.phase = FallPhase::Landed;
                     self.land_time = time; self.land_y = gy; self.land_vy = self.vel[1]; self.drop = self.deck_y - gy; self.water = water;
+                    self.land_xz = (self.pos[0], self.pos[2]); self.land_vh = jm::hypot(self.vel[0], self.vel[2]);
                     self.pos[1] = gy; self.vel[1] = 0.0; self.w = [0.0; 3];
                 }
             }
@@ -159,8 +174,15 @@ impl Fall {
                 let (gy, water) = ground.height(self.pos[0], self.pos[2]);
                 // horizontal: sliding friction on land, strong drag in the water
                 let hv = jm::hypot(self.vel[0], self.vel[2]);
-                let dec = if water || self.water { 3.0 } else { LAND_MU * GRAVITY } * h;
-                let k = if hv > dec { (hv - dec) / hv } else { 0.0 };
+                let k = if self.water || water {
+                    // quadratic drag, exact over the sub-step (dv/dt = -c v^2), then the constant stop drag
+                    let c = 0.5 * WATER_RHO * WATER_CD * self.area / self.mass;
+                    let v1 = hv / (1.0 + c * hv * h) - WATER_STOP * h;
+                    if v1 > 0.0 && hv > 0.0 { v1 / hv } else { 0.0 }
+                } else {
+                    let dec = LAND_MU * GRAVITY * h;
+                    if hv > dec { (hv - dec) / hv } else { 0.0 }
+                };
                 self.vel[0] *= k; self.vel[2] *= k;
                 self.pos[0] += self.vel[0] * h; self.pos[2] += self.vel[2] * h;
                 // settle onto the wheels or the roof, whichever is nearer
@@ -237,10 +259,11 @@ impl Sim {
             squeeze_at: 0.0, squeeze: false, response: crate::sim::Response::Cleared, permanent: false, gone: vec![i], delta_v_kmh: vec![dv_kmh], closing: vn, disabled: vec![i],
             crash_type: "barrier breach".into(), maneuver: "" });
         let fall = Fall {
-            slot: i, commuter: self.vs.commuter[i], type_idx: self.vs.type_idx[i], hl: f(self.vs.hl[i]), hw: f(self.vs.hw[i]), edge: e, time: self.time, step: self.step_count,
+            slot: i, commuter: self.vs.commuter[i], type_idx: self.vs.type_idx[i], hl: f(self.vs.hl[i]), hw: f(self.vs.hw[i]), mass: m,
+            area: 2.0 * f(self.vs.hw[i]) * BODY_HEIGHT[(self.vs.type_idx[i] as usize).min(3)], edge: e, time: self.time, step: self.step_count,
             v_normal: vn, is_kj: is / 1000.0, v_along: vt, dv_kmh, rail: (c.px - nx * c.depth, c.pz - nz * c.depth), normal: (nx, nz), deck_y,
             pos: [a.x, deck_y, a.z], vel: [vx, 0.0, vz], q: [0.0, (-0.5 * yaw).sin(), 0.0, (-0.5 * yaw).cos()], w: [0.0, a.w, 0.0], phase: FallPhase::Edge,
-            land_time: f64::NAN, land_y: f64::NAN, land_vy: f64::NAN, drop: f64::NAN, water: false,
+            land_time: f64::NAN, land_y: f64::NAN, land_vy: f64::NAN, drop: f64::NAN, water: false, land_xz: (f64::NAN, f64::NAN), land_vh: f64::NAN,
         };
         self.falls.push(fall);
         self.vs.state[i] = STATE_CRASHED; self.vs.clear_controls(i);

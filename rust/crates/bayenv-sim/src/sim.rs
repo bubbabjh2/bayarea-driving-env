@@ -124,7 +124,7 @@ pub struct SimOpts {
     pub v3_guide_in_box: bool,
     /// v3 bodies (obs.rs sense_bodies): a lateral offset under 1 cm counts as 0 when filing a body by sector (straight
     /// ahead / behind sit on a sector boundary; f32 vs f64 noise filed them differently on the GPU; bayenv-gpu
-    /// GpuOptions::sector_snap, DECISIONS.md 49). Default on; js() off.
+    /// GpuOptions::sector_snap, DECISIONS.md 50). Default on; js() off.
     pub v3_sector_snap: bool,
     /// Model fix (default ON; false = the JS GPU's input version 3): obs v3 own-ahead slot (inputs 8 / 9) gets the
     /// junction-conflict obstacle as obs v2 has it (adjust.js junctionObs; DECISIONS.md 45 / 46). CPU mirror of
