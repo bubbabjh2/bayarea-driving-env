@@ -117,7 +117,8 @@ pub struct GpuOptions {
     /// MODEL fix (default ON; kernels/model_contacts.wgsl): junction connectors have the in-edge's kerbs as lateral
     /// walls. SimOpts::connector_barrier
     pub connector_barrier: bool,
-    /// MODEL fix (default ON; kernels/model_integrate.wgsl): brakes + rolling resistance hold a car at 0 below 0.05 m/s.
+    /// MODEL fix (default OFF since ENV-REQUESTS #17: it strands cars pulling away with little gas; kernels/model_integrate.wgsl):
+    /// brakes + rolling resistance hold a car at 0 below 0.05 m/s.
     /// SimOpts::brake_hold
     pub brake_hold: bool,
     /// MODEL fix (default ON; kernels/model_integrate.wgsl): vehicles over 5 t brake at 4.7 m/s^2. SimOpts::heavy_brakes
@@ -197,7 +198,7 @@ impl Default for GpuOptions {
     fn default() -> Self {
         GpuOptions { capacity: 131072, dt: 0.05, start_time: 5.0 * 3600.0, seed: 1, obs: ObsMode::V2, steer_rate: false, decide_every: 1, features: Features::default(),
             controls: true, junctions: true, table_bits: 18, contact_cap: 131072, ev_cap: 16384, spawn_queue: 16384, op_cap: 16384, max_blocks: 4096, route_slack: 1 << 22,
-            resolve_rounds: 12, progress_weight: 1.0, jerk_weight: 0.5, jerk_reward: false, grade_obs: true, squeeze_delay: 15.0 * 60.0, deadlock_break: 0, reroute: true, keep_events: false, record_events: true, record_share: false, missed_at_out_edge: false, indirect_resolve: true, fused_resolve: true, sorted_order: true, fast_scan: true, fast_search: true, cpu_connector_join: true, contact_tangent: true, deterministic_contacts: true, deterministic_spawn: true, deterministic_events: true, deterministic_leaders: true, wreck_real_mass: true, curvature_dynamics: false, smooth_geometry: false, junction_radii: false, wreck_end_stop: true, contact_episodes: true, connector_barrier: true, brake_hold: true, heavy_brakes: true, barrier_soft_push: true, impact_reverse: true, zero_init_workgroup: false, profile: false, return_trips: true, refuel_budget_ms: f64::INFINITY,
+            resolve_rounds: 12, progress_weight: 1.0, jerk_weight: 0.5, jerk_reward: false, grade_obs: true, squeeze_delay: 15.0 * 60.0, deadlock_break: 0, reroute: true, keep_events: false, record_events: true, record_share: false, missed_at_out_edge: false, indirect_resolve: true, fused_resolve: true, sorted_order: true, fast_scan: true, fast_search: true, cpu_connector_join: true, contact_tangent: true, deterministic_contacts: true, deterministic_spawn: true, deterministic_events: true, deterministic_leaders: true, wreck_real_mass: true, curvature_dynamics: false, smooth_geometry: false, junction_radii: false, wreck_end_stop: true, contact_episodes: true, connector_barrier: true, brake_hold: false, heavy_brakes: true, barrier_soft_push: true, impact_reverse: true, zero_init_workgroup: false, profile: false, return_trips: true, refuel_budget_ms: f64::INFINITY,
             route_threads: std::thread::available_parallelism().map_or(1, |n| n.get()), route_ahead: 300.0, route_cache: 0 }
     }
 }

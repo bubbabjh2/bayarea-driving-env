@@ -21,6 +21,9 @@ pub const MERGE_ROOM: f64 = 15.0;
 /// seconds of departures whose refuel plans are prefetched in one batch
 pub const PLAN_LOOKAHEAD: f64 = 60.0;
 
+/// SimOpts::steer_delay default (s)
+pub const STEER_DELAY: f64 = 0.15;
+
 /// SIM_DEFAULTS (the step-relevant keys).
 #[derive(Clone, Debug)]
 pub struct SimOpts {
@@ -83,6 +86,19 @@ pub struct SimOpts {
     /// Model fix (default ON; false = the JS): a braked car below 0.02 m/s is held by static friction (the JS let
     /// stopped cars creep at up to 0.02 m/s under a held brake).
     pub brake_hold: bool,
+    /// Model fix (default ON; false = the JS), replacing `brake_hold` (now default off: it counted rolling resistance
+    /// as holding force, so a car pulling away with gas under ~3 % stayed parked for ever, ENV-REQUESTS #17): below
+    /// 0.05 m/s the brake holds the car at 0 when the brake force alone beats the drive force minus the grade force;
+    /// with no drive and no brake, rolling resistance holds it unless the grade force exceeds it.
+    pub static_hold: bool,
+    /// Model fix (default ON; false = the JS): automatic idle creep. The drive force never drops below an idle force
+    /// of 4 x the rolling resistance at rest, fading to 0 at 2 m/s, so a car with no pedals on the flat creeps at about
+    /// 1.5 m/s and a small brake (about 7 %) holds it.
+    pub idle_creep: bool,
+    /// Model fix (default 0.15 s; negative = the JS): steering is applied after this delay (neuromuscular lag)
+    /// instead of the full reaction time (0.6 - 1.8 s through the control ring) that still delays the pedals
+    /// (ENV-REQUESTS #16). Capped at the reaction delay.
+    pub steer_delay: f64,
     /// Model fix (default ON; false = the JS): trucks and buses brake at 4.7 m/s^2 (100-0 km/h in about 80 m, as
     /// loaded heavy vehicles; the JS's 6.5 gave 58 m)
     pub heavy_brakes: bool,
@@ -105,10 +121,11 @@ impl Pose { fn of(c: &Car, g: &World) -> Pose { let mut pc = *c; pc.update_pose(
 
 impl SimOpts {
     /// the integrate-side model fixes
-    pub fn model_flags(&self) -> crate::vehicle::ModelFlags { crate::vehicle::ModelFlags { fixes: crate::physics::Fixes { hold: self.brake_hold, heavy_brakes: self.heavy_brakes, reverse: self.impact_reverse }, curvature: self.curvature_dynamics, wreck_end_stop: self.wreck_end_stop } }
+    pub fn model_flags(&self) -> crate::vehicle::ModelFlags { crate::vehicle::ModelFlags { fixes: crate::physics::Fixes { hold: self.brake_hold, heavy_brakes: self.heavy_brakes, reverse: self.impact_reverse, static_hold: self.static_hold, idle_creep: self.idle_creep }, curvature: self.curvature_dynamics, wreck_end_stop: self.wreck_end_stop,
+        steer_delay_steps: if self.steer_delay < 0.0 { -1 } else { jm::round(self.steer_delay / self.dt) as i32 } } }
     /// The JS sim's model (oracle checks, trace_check / v2_check, JS-port tests): Default with the model fixes off
     /// (replan_at_missed_event = false). Checkpoints trained on the JS CPU sim saw this model.
-    pub fn js() -> SimOpts { SimOpts { replan_at_missed_event: false, lane_index_snapshot: false, wreck_real_mass: false, curvature_dynamics: false, smooth_geometry: false, junction_radii: false, spawn_clearance: false, wreck_end_stop: false, contact_episodes: false, connector_barrier: false, brake_hold: false, heavy_brakes: false, barrier_soft_push: false, impact_reverse: false, ..SimOpts::default() } }
+    pub fn js() -> SimOpts { SimOpts { replan_at_missed_event: false, lane_index_snapshot: false, wreck_real_mass: false, curvature_dynamics: false, smooth_geometry: false, junction_radii: false, spawn_clearance: false, wreck_end_stop: false, contact_episodes: false, connector_barrier: false, brake_hold: false, static_hold: false, idle_creep: false, steer_delay: -1.0, heavy_brakes: false, barrier_soft_push: false, impact_reverse: false, ..SimOpts::default() } }
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -121,7 +138,7 @@ impl Default for SimOpts {
             cell_size: 25.0, table_bits: 18, leader_lookahead: 250.0, merge_lookahead: 80.0, lane_end_lookahead: 450.0, control_lookahead: 250.0,
             reroute: true, reroute_sight: 2000.0, squeeze_delay: 900.0, squeeze_speed: 3.0, density_interval: 60.0, path_sight: 0.0,
             deadlock_break: 0.0, spawn_lane_route: 0.0, junction_sight: 0.0, position_mode: true, traffic_mode: TrafficMode::Full, fuel: true,
-            seed: 1.0, wrecks: 0, default_action: Action { steer: Some(0.0), steer_rate: None, gas: 0.0, brake: 0.3 }, fuel_cfg: Default::default(), slot_pool: 0, parallel: false, replan_at_missed_event: true, batch_dynamics: true, lane_index_snapshot: true, wreck_real_mass: true, curvature_dynamics: false, smooth_geometry: false, junction_radii: false, spawn_clearance: false, spawn_clearance_m: 18.0, wreck_end_stop: true, contact_episodes: true, connector_barrier: true, brake_hold: true, heavy_brakes: true, barrier_soft_push: true, impact_reverse: true }
+            seed: 1.0, wrecks: 0, default_action: Action { steer: Some(0.0), steer_rate: None, gas: 0.0, brake: 0.3 }, fuel_cfg: Default::default(), slot_pool: 0, parallel: false, replan_at_missed_event: true, batch_dynamics: true, lane_index_snapshot: true, wreck_real_mass: true, curvature_dynamics: false, smooth_geometry: false, junction_radii: false, spawn_clearance: false, spawn_clearance_m: 18.0, wreck_end_stop: true, contact_episodes: true, connector_barrier: true, brake_hold: false, static_hold: true, idle_creep: true, steer_delay: STEER_DELAY, heavy_brakes: true, barrier_soft_push: true, impact_reverse: true }
     }
 }
 

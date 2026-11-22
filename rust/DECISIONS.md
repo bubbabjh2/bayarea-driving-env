@@ -648,3 +648,34 @@ Each entry: date, decision, why, alternatives, numbers, and one line to say it o
   - Until then `Env(backend="gpu", spawn_clearance=True)` is an error.
 - **On camera:** "Our junction corners were tighter than a car can turn. So we moved where each turn starts, until a
   car could follow the curve and a truck could take the big roads."
+
+## 35. A stopped car can pull away; automatics creep (`static_hold`, `idle_creep`)
+
+- **Date:** 2026-11-21
+- **Decision:** The first hold (`brake_hold`, entry 27) is replaced and now defaults off. It counted rolling resistance
+  as holding force: a car with gas under about 3 % (2 % gas is 112 N of drive against 162 N of rolling resistance for
+  a sedan), or with a light gas-plus-brake mix, stayed parked for ever.
+  - `static_hold` holds a car below 0.05 m/s only while the brake force alone beats the drive force minus the grade
+    force. Rolling resistance holds it only when there is no drive and no brake at all.
+  - `idle_creep` gives the drive force a floor at an automatic's idle creep: 4 × the rolling resistance at rest,
+    fading to 0 at 2 m/s. With no pedals on the flat a car settles at about 1.5 m/s, and about 7 % brake holds it.
+  - Both are on by default, on the CPU and (once mirrored) the GPU; `SimOpts::js()` turns them off.
+- **Why:** reported by the training side (ENV-REQUESTS #17). With 1,000 commuters, `brake_hold` alone cut arrivals
+  from 81.9 % to 69.1 %; 226 of the 264 unfinished cars were still on the road at the end.
+- **Numbers:** 20 s from rest with 2 % gas: 0.00 m with the first hold, 23 m now. No pedals: 1.48 m/s creep. 10 %
+  brake against the creep: 1 mm. On the brake from 0.015 m/s: still 0 creep (entry 27's test).
+- **On camera:** "Our parking brake was so good that cars couldn't drive away. A real automatic creeps forward the
+  moment you lift off the brake, so now ours does too."
+
+## 36. Steering has its own, short delay (`steer_delay`)
+
+- **Date:** 2026-11-21
+- **Decision:** Commands go through the control ring with each driver's reaction time (0.6–1.8 s). Steering is now
+  read from the ring after `steer_delay` (0.15 s, rounded to steps, capped at the reaction delay). The pedals and
+  hazard responses keep the full reaction time. A negative `steer_delay` (and `SimOpts::js()`) restores the JS.
+- **Why:** following a path is closed-loop control with a neuromuscular lag of about 0.1–0.2 s, not a reaction to
+  a surprise. A whole-second steering delay made every curve a crash once the road stopped turning the car
+  (`curvature_dynamics`, entry 23). Reported by the training side (ENV-REQUESTS #16).
+- **Numbers:** driver with a 1 s reaction time: the first steering response after 0.20 s (dt 0.05; JS 1.05 s), the
+  first brake response still after 1.05 s.
+- **On camera:** "Our drivers needed a full second to turn the wheel, as if every bend in the road was a surprise."

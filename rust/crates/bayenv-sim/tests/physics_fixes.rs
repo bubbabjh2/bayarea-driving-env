@@ -468,3 +468,54 @@ fn spawn_clearance_keeps_spawns_off_junction_entries() {
     eprintln!("scenario cuts, movements: {close} have their in-edge's spawn point within 50 m of the entry ({moved} spawn further along with spawn_clearance), {kept} keep the first edge");
     assert!(close > 0 && moved == close);
 }
+
+#[test]
+fn static_hold_and_idle_creep_pull_away() {
+    // ENV-REQUESTS #17: the first brake_hold counted rolling resistance as holding force, so a car pulling away with
+    // a little gas (or gas + some brake) stayed parked for ever
+    let Some(g) = common::shared_world("road3") else { return bayenv_world::oracle::skip("physics_fixes", "fixtures") };
+    let run = |opts: SimOpts, gas: f64, brake: f64| {
+        let mut sim = sim_with(&g, opts);
+        let a = place(&mut sim, SEDAN, &[0], 100.0, 0, 0.0);
+        for _ in 0..400 { hold(&mut sim, a, 0.0, gas, brake); sim.step(); }
+        (sim.vs.s[a] as f64 - 100.0, sim.vs.speed[a] as f64)
+    };
+    let v1 = SimOpts { brake_hold: true, static_hold: false, idle_creep: false, ..SimOpts::default() };
+    let (d_v1, _) = run(v1, 0.02, 0.0);
+    let (d_new, _) = run(SimOpts::default(), 0.02, 0.0);
+    let (_, u_creep) = run(SimOpts::default(), 0.0, 0.0);
+    let (d_brk, _) = run(SimOpts::default(), 0.0, 0.1);
+    let (d_js, _) = run(SimOpts::js(), 0.0, 0.0);
+    eprintln!("20 s from rest: gas 2 %: brake_hold v1 {d_v1:.2} m, now {d_new:.1} m; no pedals: creep {u_creep:.2} m/s (js {d_js:.2} m); brake 10 %: {d_brk:.3} m");
+    assert!(d_v1 < 0.01, "v1 strands the car");
+    assert!(d_new > 10.0, "gas 2 % pulls away");
+    assert!((1.2..=1.8).contains(&u_creep), "idle creep about 1.5 m/s: {u_creep}");
+    assert!(d_brk < 0.01, "a light brake holds against the creep");
+    assert!(d_js < 0.01, "the JS: no creep");
+}
+
+#[test]
+fn steer_delay_is_short_pedals_keep_reaction_time() {
+    // ENV-REQUESTS #16: steering waits steer_delay (0.15 s), the pedals the reaction time
+    let Some(g) = common::shared_world("road3") else { return bayenv_world::oracle::skip("physics_fixes", "fixtures") };
+    let run = |opts: SimOpts| {
+        let mut sim = sim_with(&g, opts);
+        let a = place(&mut sim, SEDAN, &[0], 100.0, 1, 10.0);
+        sim.vs.set_reaction_time(a, 1.0, sim.dt);
+        for _ in 0..30 { hold(&mut sim, a, 0.0, 0.0, 0.0); sim.step(); }
+        let (mut t_steer, mut t_brake) = (-1.0, -1.0);
+        let u0 = sim.vs.speed[a] as f64;
+        for k in 0..60 {
+            hold(&mut sim, a, 0.3, 0.0, 1.0); sim.step();
+            let t = (k + 1) as f64 * sim.dt;
+            if t_steer < 0.0 && sim.vs.steer_angle[a].abs() > 1e-4 { t_steer = t; }
+            if t_brake < 0.0 && (sim.vs.speed[a] as f64) < u0 - 0.5 { t_brake = t; }
+        }
+        (t_steer, t_brake)
+    };
+    let ((s, b), (js, jb)) = (run(SimOpts::default()), run(SimOpts::js()));
+    eprintln!("first response (s): steer {s:.2}, brake {b:.2}; js steer {js:.2}, brake {jb:.2}");
+    assert!(s <= 0.25 && s > 0.0, "steering after about 0.15 s: {s}");
+    assert!(b >= 1.0, "pedals keep the 1 s reaction time: {b}");
+    assert!(js >= 1.0, "the JS delays steering by the reaction time: {js}");
+}
