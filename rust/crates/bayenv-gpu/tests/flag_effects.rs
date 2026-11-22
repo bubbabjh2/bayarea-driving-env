@@ -84,6 +84,7 @@ const FLIPS: &[Flip] = &[
     ("barrier_soft_push", |o| o.barrier_soft_push = false, |s| s.barrier_soft_push = false),
     ("impact_reverse", |o| o.impact_reverse = false, |s| s.impact_reverse = false),
     ("mountable_kerbs", |o| o.mountable_kerbs = false, |s| s.mountable_kerbs = false),
+    ("hill_rollback", |o| o.hill_rollback = false, |s| s.hill_rollback = false),
     ("spawn_clearance", |o| o.spawn_clearance = true, |s| s.spawn_clearance = true),
 ];
 

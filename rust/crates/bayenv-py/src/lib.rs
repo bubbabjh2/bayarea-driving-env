@@ -167,7 +167,7 @@ impl Env {
     ///     accidents=True, collisions=True, fuel=True, controls=True, junctions=True, steer="position", decide_every=1,
     ///     keep_events=False, population=None, pop_seed=42, streaming=False, return_trips=True, stations=True,
     ///     refuel_budget_ms=None, cpu_connector_join=True, contact_tangent=True, replan_at_missed_event=True, wreck_real_mass=True,
-    ///     curvature_dynamics=False, wreck_end_stop=True, contact_episodes=True, connector_barrier=True, box_barrier=True, lane_drop_hop=True, brake_hold=False, static_hold=True, mountable_kerbs=True, idle_creep=True, steer_delay=0.15,
+    ///     curvature_dynamics=False, wreck_end_stop=True, contact_episodes=True, connector_barrier=True, box_barrier=True, lane_drop_hop=True, brake_hold=False, static_hold=True, mountable_kerbs=True, hill_rollback=True, idle_creep=True, steer_delay=0.15,
     ///     heavy_brakes=True, barrier_soft_push=True, impact_reverse=True, route_threads=None, heading_preview=False)
     /// heading_preview (gpu, default False): compute the heading_preview() buffer after every step (the cpu computes it on demand).
     /// Loads the world (~0.1 s warm), builds the GPU buffers and scatters `n_cars` cars at rest on random routes
@@ -188,7 +188,7 @@ impl Env {
     /// route_threads (streaming): worker threads that route departures up to 300 sim s ahead (default: the machine's
     /// cores; 0 = serial A* at departure). Every value gives the same routes and the same spawn steps.
     /// wreck_real_mass, curvature_dynamics, wreck_end_stop, contact_episodes, connector_barrier, box_barrier, lane_drop_hop, brake_hold (the first hold, default False: superseded by static_hold), heavy_brakes,
-    /// barrier_soft_push, impact_reverse, static_hold, mountable_kerbs, idle_creep, steer_delay (s; negative = the JS: steering delayed by the
+    /// barrier_soft_push, impact_reverse, static_hold, mountable_kerbs, hill_rollback, idle_creep, steer_delay (s; negative = the JS: steering delayed by the
     /// reaction time) (cpu and gpu, default True except curvature_dynamics=False): the physics-audit model fixes
     /// smooth_geometry (cpu and gpu, default False; needs curvature_dynamics=True): load the world with the smoothed frame
     /// geometry (lane and connector polylines filleted to realistic minimum radii, rust/DECISIONS.md 33)
@@ -200,14 +200,14 @@ impl Env {
     #[new]
     #[pyo3(signature = (data_dir, n_cars=10000, seed=1, backend="gpu", capacity=None, obs="v2", dt=0.05, start_time=None,
         accidents=true, collisions=true, fuel=true, controls=true, junctions=true, steer="position", decide_every=1, keep_events=false,
-        population=None, pop_seed=42.0, streaming=false, return_trips=true, stations=true, refuel_budget_ms=None, crash_share=false, missed_at_out_edge=false, cpu_connector_join=true, contact_tangent=true, replan_at_missed_event=true, wreck_real_mass=true, curvature_dynamics=false, smooth_geometry=false, junction_radii=false, spawn_clearance=false, wreck_end_stop=true, contact_episodes=true, connector_barrier=true, box_barrier=true, lane_drop_hop=true, brake_hold=false, static_hold=true, mountable_kerbs=true, idle_creep=true, steer_delay=0.15, heavy_brakes=true, barrier_soft_push=true, impact_reverse=true, route_threads=None, heading_preview=false))]
+        population=None, pop_seed=42.0, streaming=false, return_trips=true, stations=true, refuel_budget_ms=None, crash_share=false, missed_at_out_edge=false, cpu_connector_join=true, contact_tangent=true, replan_at_missed_event=true, wreck_real_mass=true, curvature_dynamics=false, smooth_geometry=false, junction_radii=false, spawn_clearance=false, wreck_end_stop=true, contact_episodes=true, connector_barrier=true, box_barrier=true, lane_drop_hop=true, brake_hold=false, static_hold=true, mountable_kerbs=true, hill_rollback=true, idle_creep=true, steer_delay=0.15, heavy_brakes=true, barrier_soft_push=true, impact_reverse=true, route_threads=None, heading_preview=false))]
     #[allow(clippy::too_many_arguments)]
     fn new(py: Python<'_>, data_dir: &str, n_cars: usize, seed: u32, backend: &str, capacity: Option<usize>, obs: &str, dt: f64, start_time: Option<f64>,
            accidents: bool, collisions: bool, fuel: bool, controls: bool, junctions: bool, steer: &str, decide_every: u32, keep_events: bool,
            population: Option<usize>, pop_seed: f64, streaming: bool, return_trips: bool, stations: bool, refuel_budget_ms: Option<f64>, crash_share: bool, missed_at_out_edge: bool, cpu_connector_join: bool, contact_tangent: bool, replan_at_missed_event: bool,
-           wreck_real_mass: bool, curvature_dynamics: bool, smooth_geometry: bool, junction_radii: bool, spawn_clearance: bool, wreck_end_stop: bool, contact_episodes: bool, connector_barrier: bool, box_barrier: bool, lane_drop_hop: bool, brake_hold: bool, static_hold: bool, mountable_kerbs: bool, idle_creep: bool, steer_delay: f64, heavy_brakes: bool, barrier_soft_push: bool, impact_reverse: bool, route_threads: Option<usize>, heading_preview: bool) -> PyResult<Env> {
+           wreck_real_mass: bool, curvature_dynamics: bool, smooth_geometry: bool, junction_radii: bool, spawn_clearance: bool, wreck_end_stop: bool, contact_episodes: bool, connector_barrier: bool, box_barrier: bool, lane_drop_hop: bool, brake_hold: bool, static_hold: bool, mountable_kerbs: bool, hill_rollback: bool, idle_creep: bool, steer_delay: f64, heavy_brakes: bool, barrier_soft_push: bool, impact_reverse: bool, route_threads: Option<usize>, heading_preview: bool) -> PyResult<Env> {
         check_dt(dt)?;
-        let fx = PhysFixes { wreck_real_mass, curvature_dynamics, smooth_geometry, junction_radii, spawn_clearance, wreck_end_stop, contact_episodes, connector_barrier, box_barrier, lane_drop_hop, brake_hold, static_hold, mountable_kerbs, idle_creep, steer_delay, heavy_brakes, barrier_soft_push, impact_reverse };
+        let fx = PhysFixes { wreck_real_mass, curvature_dynamics, smooth_geometry, junction_radii, spawn_clearance, wreck_end_stop, contact_episodes, connector_barrier, box_barrier, lane_drop_hop, brake_hold, static_hold, mountable_kerbs, hill_rollback, idle_creep, steer_delay, heavy_brakes, barrier_soft_push, impact_reverse };
         if backend == "cpu" {
             let cobs = match obs { "v2" => CpuObs::V2, "v3" => CpuObs::V3, "flat" => CpuObs::Flat, "none" => CpuObs::None, _ => return Err(PyValueError::new_err("obs must be 'v2', 'v3', 'flat' or 'none'")) };
             // CPU reference sim (crate bayenv-sim): commuter population (population.js, n_cars commuters, seed),
@@ -666,13 +666,13 @@ impl VecEnv {
 #[pymethods]
 impl VecEnv {
     #[new]
-    #[pyo3(signature = (data_dir, n_envs, n_cars=1000, seed=1, capacity=None, obs="v2", dt=0.05, start_time=None, accidents=true, collisions=true, fuel=true, backend="gpu", cpu_connector_join=true, contact_tangent=true, wreck_real_mass=true, curvature_dynamics=false, smooth_geometry=false, junction_radii=false, spawn_clearance=false, wreck_end_stop=true, contact_episodes=true, connector_barrier=true, box_barrier=true, lane_drop_hop=true, brake_hold=false, static_hold=true, mountable_kerbs=true, idle_creep=true, steer_delay=0.15, heavy_brakes=true, barrier_soft_push=true, impact_reverse=true))]
+    #[pyo3(signature = (data_dir, n_envs, n_cars=1000, seed=1, capacity=None, obs="v2", dt=0.05, start_time=None, accidents=true, collisions=true, fuel=true, backend="gpu", cpu_connector_join=true, contact_tangent=true, wreck_real_mass=true, curvature_dynamics=false, smooth_geometry=false, junction_radii=false, spawn_clearance=false, wreck_end_stop=true, contact_episodes=true, connector_barrier=true, box_barrier=true, lane_drop_hop=true, brake_hold=false, static_hold=true, mountable_kerbs=true, hill_rollback=true, idle_creep=true, steer_delay=0.15, heavy_brakes=true, barrier_soft_push=true, impact_reverse=true))]
     #[allow(clippy::too_many_arguments)]
     fn new(py: Python<'_>, data_dir: &str, n_envs: usize, n_cars: usize, seed: u32, capacity: Option<usize>, obs: &str, dt: f64, start_time: Option<f64>,
            accidents: bool, collisions: bool, fuel: bool, backend: &str, cpu_connector_join: bool, contact_tangent: bool,
-           wreck_real_mass: bool, curvature_dynamics: bool, smooth_geometry: bool, junction_radii: bool, spawn_clearance: bool, wreck_end_stop: bool, contact_episodes: bool, connector_barrier: bool, box_barrier: bool, lane_drop_hop: bool, brake_hold: bool, static_hold: bool, mountable_kerbs: bool, idle_creep: bool, steer_delay: f64, heavy_brakes: bool, barrier_soft_push: bool, impact_reverse: bool) -> PyResult<VecEnv> {
+           wreck_real_mass: bool, curvature_dynamics: bool, smooth_geometry: bool, junction_radii: bool, spawn_clearance: bool, wreck_end_stop: bool, contact_episodes: bool, connector_barrier: bool, box_barrier: bool, lane_drop_hop: bool, brake_hold: bool, static_hold: bool, mountable_kerbs: bool, hill_rollback: bool, idle_creep: bool, steer_delay: f64, heavy_brakes: bool, barrier_soft_push: bool, impact_reverse: bool) -> PyResult<VecEnv> {
         check_dt(dt)?;
-        let fx = PhysFixes { wreck_real_mass, curvature_dynamics, smooth_geometry, junction_radii, spawn_clearance, wreck_end_stop, contact_episodes, connector_barrier, box_barrier, lane_drop_hop, brake_hold, static_hold, mountable_kerbs, idle_creep, steer_delay, heavy_brakes, barrier_soft_push, impact_reverse };
+        let fx = PhysFixes { wreck_real_mass, curvature_dynamics, smooth_geometry, junction_radii, spawn_clearance, wreck_end_stop, contact_episodes, connector_barrier, box_barrier, lane_drop_hop, brake_hold, static_hold, mountable_kerbs, hill_rollback, idle_creep, steer_delay, heavy_brakes, barrier_soft_push, impact_reverse };
         if backend == "cpu" {
             let cobs = match obs { "v2" => CpuObs::V2, "v3" => CpuObs::V3, "flat" => CpuObs::Flat, "none" => CpuObs::None, _ => return Err(PyValueError::new_err("obs must be 'v2', 'v3', 'flat' or 'none'")) };
             let data = data_dir.to_string();
@@ -819,13 +819,13 @@ impl VecEnv {
 /// The physics-audit model fixes (rust/docs/physics-audit.md), one kwarg each, default True, the same name on both
 /// backends: bayenv-sim SimOpts / bayenv-gpu GpuOptions fields of the same name.
 #[derive(Clone, Copy)]
-struct PhysFixes { wreck_real_mass: bool, curvature_dynamics: bool, smooth_geometry: bool, junction_radii: bool, spawn_clearance: bool, wreck_end_stop: bool, contact_episodes: bool, connector_barrier: bool, box_barrier: bool, lane_drop_hop: bool, brake_hold: bool, static_hold: bool, mountable_kerbs: bool, idle_creep: bool, steer_delay: f64, heavy_brakes: bool, barrier_soft_push: bool, impact_reverse: bool }
+struct PhysFixes { wreck_real_mass: bool, curvature_dynamics: bool, smooth_geometry: bool, junction_radii: bool, spawn_clearance: bool, wreck_end_stop: bool, contact_episodes: bool, connector_barrier: bool, box_barrier: bool, lane_drop_hop: bool, brake_hold: bool, static_hold: bool, mountable_kerbs: bool, hill_rollback: bool, idle_creep: bool, steer_delay: f64, heavy_brakes: bool, barrier_soft_push: bool, impact_reverse: bool }
 impl PhysFixes {
     fn sim(&self, o: &mut bayenv_sim::sim::SimOpts) {
         o.spawn_clearance = self.spawn_clearance;
         o.wreck_real_mass = self.wreck_real_mass; o.curvature_dynamics = self.curvature_dynamics; o.smooth_geometry = self.smooth_geometry; o.junction_radii = self.junction_radii; o.wreck_end_stop = self.wreck_end_stop; o.contact_episodes = self.contact_episodes;
         o.connector_barrier = self.connector_barrier; o.box_barrier = self.box_barrier; o.lane_drop_hop = self.lane_drop_hop; o.brake_hold = self.brake_hold; o.heavy_brakes = self.heavy_brakes; o.barrier_soft_push = self.barrier_soft_push; o.impact_reverse = self.impact_reverse;
-        o.static_hold = self.static_hold; o.idle_creep = self.idle_creep; o.steer_delay = self.steer_delay; o.mountable_kerbs = self.mountable_kerbs;
+        o.static_hold = self.static_hold; o.idle_creep = self.idle_creep; o.steer_delay = self.steer_delay; o.mountable_kerbs = self.mountable_kerbs; o.hill_rollback = self.hill_rollback;
     }
     /// the world load options for these flags (smooth_geometry: the smoothed frame geometry, DECISIONS.md 33)
     fn load(&self) -> LoadOptions { LoadOptions { smooth_geometry: self.smooth_geometry, junction_radii: self.junction_radii, ..Default::default() } }
@@ -834,6 +834,7 @@ impl PhysFixes {
         o.connector_barrier = self.connector_barrier; o.box_barrier = self.box_barrier; o.lane_drop_hop = self.lane_drop_hop; o.brake_hold = self.brake_hold; o.heavy_brakes = self.heavy_brakes; o.barrier_soft_push = self.barrier_soft_push; o.impact_reverse = self.impact_reverse;
         o.spawn_clearance = self.spawn_clearance;
         o.static_hold = self.static_hold; o.idle_creep = self.idle_creep; o.steer_delay = self.steer_delay; o.mountable_kerbs = self.mountable_kerbs;
+        o.hill_rollback = self.hill_rollback;
     }
 }
 fn check_dt(dt: f64) -> PyResult<()> { if dt.is_finite() && dt > 0.0 { Ok(()) } else { Err(PyValueError::new_err(format!("dt must be finite and > 0 (got {dt})"))) } }

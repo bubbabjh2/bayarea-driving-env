@@ -197,7 +197,7 @@ pub struct ModelFixes {
     pub cpu_connector_join: bool, pub contact_tangent: bool,
     pub wreck_real_mass: bool, pub curvature_dynamics: bool, pub wreck_end_stop: bool, pub contact_episodes: bool,
     pub connector_barrier: bool, pub box_barrier: bool, pub brake_hold: bool, pub heavy_brakes: bool, pub barrier_soft_push: bool, pub impact_reverse: bool,
-    pub static_hold: bool, pub idle_creep: bool, pub mountable_kerbs: bool, pub lane_drop_hop: bool,
+    pub static_hold: bool, pub idle_creep: bool, pub mountable_kerbs: bool, pub lane_drop_hop: bool, pub hill_rollback: bool,
     /// steer_delay in steps (None = the JS: steering delayed by the reaction time like the pedals)
     pub steer_delay_steps: Option<u32>,
     /// kernels/spawn_clearance.wgsl (spawn.wgsl; the host writes the start index into the spawn-queue entry)
@@ -209,12 +209,12 @@ impl ModelFixes {
     pub fn all() -> ModelFixes {
         ModelFixes { cpu_connector_join: true, contact_tangent: true, wreck_real_mass: true, curvature_dynamics: true, wreck_end_stop: true, contact_episodes: true,
             connector_barrier: true, box_barrier: true, brake_hold: true, heavy_brakes: true, barrier_soft_push: true, impact_reverse: true, spawn_clearance: true,
-            static_hold: true, idle_creep: true, mountable_kerbs: true, lane_drop_hop: true, steer_delay_steps: Some(3) }
+            static_hold: true, idle_creep: true, mountable_kerbs: true, lane_drop_hop: true, hill_rollback: true, steer_delay_steps: Some(3) }
     }
     /// kernels/model_integrate.wgsl is applied (any of its flags on)
-    pub fn integrate_on(&self) -> bool { self.curvature_dynamics || self.wreck_end_stop || self.brake_hold || self.heavy_brakes || self.impact_reverse || self.static_hold || self.idle_creep || self.lane_drop_hop || self.steer_delay_steps.is_some() }
+    pub fn integrate_on(&self) -> bool { self.curvature_dynamics || self.wreck_end_stop || self.brake_hold || self.heavy_brakes || self.impact_reverse || self.static_hold || self.idle_creep || self.lane_drop_hop || self.steer_delay_steps.is_some() || self.hill_rollback }
     /// kernels/model_contacts.wgsl is applied (any of its flags on)
-    pub fn contacts_on(&self) -> bool { self.wreck_real_mass || self.contact_episodes || self.connector_barrier || self.box_barrier || self.barrier_soft_push || self.impact_reverse || self.mountable_kerbs }
+    pub fn contacts_on(&self) -> bool { self.wreck_real_mass || self.contact_episodes || self.connector_barrier || self.box_barrier || self.barrier_soft_push || self.impact_reverse || self.mountable_kerbs || self.hill_rollback }
 }
 fn mf_consts(pairs: &[(&str, bool)]) -> String { pairs.iter().map(|(n, b)| format!("const MF_{n}: bool = {b};\n")).collect() }
 /// Model patches selected by GpuOptions (default off: the JS kernels unchanged) for the kernel file `file`.
@@ -224,14 +224,14 @@ pub fn model_patches(src: String, file: &str, m: &ModelFixes) -> String {
         "integrate" => {
             let src = if m.cpu_connector_join { patch_text(&src, "cpu_connector_join") } else { src };
             if !m.integrate_on() { return src; }
-            mf_consts(&[("HEAVY_BRAKES", m.heavy_brakes), ("BRAKE_HOLD", m.brake_hold), ("IMPACT_REVERSE", m.impact_reverse), ("WRECK_END_STOP", m.wreck_end_stop), ("CURVATURE", m.curvature_dynamics), ("STATIC_HOLD", m.static_hold), ("IDLE_CREEP", m.idle_creep), ("LANE_DROP_HOP", m.lane_drop_hop)])
+            mf_consts(&[("HEAVY_BRAKES", m.heavy_brakes), ("BRAKE_HOLD", m.brake_hold), ("IMPACT_REVERSE", m.impact_reverse), ("WRECK_END_STOP", m.wreck_end_stop), ("CURVATURE", m.curvature_dynamics), ("STATIC_HOLD", m.static_hold), ("IDLE_CREEP", m.idle_creep), ("LANE_DROP_HOP", m.lane_drop_hop), ("ROLLBACK", m.hill_rollback)])
                 + &format!("const MF_STEER_DELAY: i32 = {};\n", m.steer_delay_steps.map_or(-1, |k| k as i32))
                 + &patch_text(&src, "model_integrate")
         }
         "contacts" => {
             let src = if m.contact_tangent { patch_text(&src, "contact_tangent") } else { src };
             if !m.contacts_on() { return src; }
-            mf_consts(&[("WRECK_REAL_MASS", m.wreck_real_mass), ("IMPACT_REVERSE", m.impact_reverse), ("SOFT_PUSH", m.barrier_soft_push), ("EPISODES", m.contact_episodes), ("CONN_BARRIER", m.connector_barrier), ("BOX_BARRIER", m.box_barrier), ("MOUNTABLE_KERBS", m.mountable_kerbs)])
+            mf_consts(&[("WRECK_REAL_MASS", m.wreck_real_mass), ("IMPACT_REVERSE", m.impact_reverse), ("SOFT_PUSH", m.barrier_soft_push), ("EPISODES", m.contact_episodes), ("CONN_BARRIER", m.connector_barrier), ("BOX_BARRIER", m.box_barrier), ("MOUNTABLE_KERBS", m.mountable_kerbs), ("ROLLBACK", m.hill_rollback)])
                 + &patch_text(&src, "model_contacts")
         }
         "spawn" if m.spawn_clearance => patch_text(&src, "spawn_clearance"),
@@ -338,9 +338,9 @@ mod tests {
         let sp = super::model_patches(super::load("spawn"), "spawn", &all);
         assert!(sp.contains("v.routePos = k0;") && sp.contains("bitcast<f32>(q.p1)"));
         assert_eq!(super::model_patches(super::load("spawn"), "spawn", &ModelFixes::default_model()), super::load("spawn"), "spawn_clearance off: the JS kernel");
-        let one: [fn(&mut ModelFixes); 16] = [|m| m.box_barrier = true, |m| m.lane_drop_hop = true, |m| m.wreck_real_mass = true, |m| m.curvature_dynamics = true, |m| m.wreck_end_stop = true, |m| m.contact_episodes = true,
+        let one: [fn(&mut ModelFixes); 17] = [|m| m.box_barrier = true, |m| m.lane_drop_hop = true, |m| m.wreck_real_mass = true, |m| m.curvature_dynamics = true, |m| m.wreck_end_stop = true, |m| m.contact_episodes = true,
             |m| m.connector_barrier = true, |m| m.brake_hold = true, |m| m.heavy_brakes = true, |m| m.barrier_soft_push = true, |m| m.impact_reverse = true, |m| m.spawn_clearance = true,
-            |m| m.static_hold = true, |m| m.idle_creep = true, |m| m.steer_delay_steps = Some(3), |m| m.mountable_kerbs = true];
+            |m| m.static_hold = true, |m| m.idle_creep = true, |m| m.steer_delay_steps = Some(3), |m| m.mountable_kerbs = true, |m| m.hill_rollback = true];
         let se = super::model_patches(super::load("sense"), "sense", &all);
         assert!(se.contains("const MF_STEER_DELAY: i32 = 3;") && se.contains("pending = last sds steps"));
         assert_eq!(super::model_patches(super::load("sense"), "sense", &ModelFixes::default()), super::load("sense"), "steer_delay off: the JS kernel");

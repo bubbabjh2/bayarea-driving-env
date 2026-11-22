@@ -627,3 +627,69 @@ fn lane_drop_hop_takes_the_edge_the_lane_lands_nearest() {
     assert!(fb.map(|b| b.1 < 3.0).unwrap_or(true), "about one lane out at most: {fb:?}");
 }
 
+
+/// the real map (data/), None (skip) when missing
+fn real_world() -> Option<Arc<World>> {
+    let d = bayenv_sim::population_gen::default_data_dir();
+    if !d.join("roads.meta.json").exists() { return None; }
+    Some(bayenv_sim::env::Env::load_world(&d).expect("world"))
+}
+/// a sedan from rest at (edge e, s0) holding (gas, brake) for `secs`: (max s, final s, min speed, final speed)
+fn hill_run(g: &Arc<World>, opts: SimOpts, e: usize, s0: f64, gas: f64, brake: f64, secs: f64) -> (f64, f64, f64, f64) {
+    let mut sim = sim_with(g, opts);
+    let a = place(&mut sim, SEDAN, &[e as i32], s0, 0, 0.0);
+    let (mut smax, mut umin) = (s0, 0.0f64);
+    for _ in 0..(secs / sim.dt) as usize {
+        if sim.vs.state[a] != STATE_DRIVING { break; }
+        hold(&mut sim, a, 0.0, gas, brake); sim.step();
+        smax = smax.max(sim.vs.s[a] as f64); umin = umin.min(sim.vs.speed[a] as f64);
+    }
+    (smax, sim.vs.s[a] as f64, umin, sim.vs.speed[a] as f64)
+}
+
+#[test]
+fn hill_rollback_and_hill_starts() {
+    // trip 818's hill (edge 124811: 17 % at s 15 rising to 23 % at s 30)
+    let Some(g) = real_world() else { return bayenv_world::oracle::skip("physics_fixes", "no data dir") };
+    let e = 124811;
+    // gas 0.546 (trip 818's): drive ~3.06 kN against ~3.17 kN of grade + ~0.2 kN rolling resistance at s ~26: it
+    // stalls at the balance point (rolling resistance holds it); gas 0.45 from rest at s 20 (20 %) can't hold the grade
+    let (smax0, s_end0, umin0, _) = hill_run(&g, SimOpts::default(), e, 14.72, 0.546, 0.0, 40.0);
+    eprintln!("gas 0.546 from s 14.72: peak s {smax0:.2}, end {s_end0:.2}, min speed {umin0:.2}");
+    assert!(s_end0 > smax0 - 2.0, "at the balance point it stalls, it doesn't run away backwards");
+    let (smax, s_end, umin, _) = hill_run(&g, SimOpts::default(), e, 20.0, 0.45, 0.0, 10.0);
+    let (jmax, js_end, jumin, _) = hill_run(&g, SimOpts::js(), e, 20.0, 0.45, 0.0, 10.0);
+    eprintln!("gas 0.45 from s 20: rollback peak s {smax:.2} -> {s_end:.2} (min speed {umin:.2}); js peak {jmax:.2} -> {js_end:.2} (min speed {jumin:.2})");
+    assert!(jumin == 0.0 && (js_end - jmax).abs() < 1e-3, "the JS stops dead");
+    assert!(umin < -0.3 && s_end < smax - 2.0, "an under-powered hill start rolls back (to where the grade eases)");
+    let (smax2, _, _, _) = hill_run(&g, SimOpts::default(), e, 14.72, 0.65, 0.0, 40.0);
+    eprintln!("gas 0.65: reaches s {smax2:.1}");
+    assert!(smax2 > 60.0, "0.65 gas climbs");
+    // stopped on the 22 % part with gas off: the brake holds it, no brake rolls back
+    let (_, sb, ub, _) = hill_run(&g, SimOpts::default(), e, 25.0, 0.0, 0.6, 20.0);
+    let (_, sn, un, _) = hill_run(&g, SimOpts::default(), e, 25.0, 0.0, 0.0, 5.0);
+    eprintln!("at s 25, gas 0: brake 0.6 -> s {sb:.3} (min u {ub:.2}); no brake -> s {sn:.2} (min u {un:.2})");
+    // (the first step runs before the brake command leaves the control ring)
+    assert!((sb - 25.0).abs() < 0.02 && ub > -0.15, "the brake holds");
+    assert!(sn < 24.0 && un < -0.5, "without brake it rolls back");
+}
+
+#[test]
+fn full_gas_climbs_the_steepest_streets() {
+    // a sedan at full gas from rest climbs the steepest 30 m of street on the map (SF tops out near 31 %)
+    let Some(g) = real_world() else { return bayenv_world::oracle::skip("physics_fixes", "no data dir") };
+    let (mut best, mut be, mut bs) = (0.0f64, 0usize, 0.0f64);
+    for e in 0..g.edge_count {
+        if g.e_length[e] < 40.0 || g.is_shoulder_road(e) { continue; }
+        let mut s = 0.0;
+        while s + 30.0 < g.e_length[e] {
+            let m = (0..=6).map(|k| g.edge_grade(e, s + 5.0 * k as f64, -1)).fold(f64::INFINITY, f64::min);
+            if m > best { best = m; be = e; bs = s; }
+            s += 5.0;
+        }
+    }
+    let (smax, _, _, _) = hill_run(&g, SimOpts::default(), be, bs, 1.0, 0.0, 30.0);
+    eprintln!("steepest 30 m: edge {be} at s {bs:.0}, sustained grade {:.1} %; full gas reaches s {smax:.1}", 100.0 * best);
+    assert!(best > 0.25, "the map has SF's steep streets");
+    assert!(smax > bs + 30.0, "full gas climbs them");
+}

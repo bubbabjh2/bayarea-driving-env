@@ -267,7 +267,8 @@ impl Sim {
         // impact_reverse: a wreck keeps its backward speed; a driving car (no reverse gear) keeps it only if this
         // contact disables it (open_scene applies the stash)
         let rev = self.opts.impact_reverse && u < 0.0;
-        let keep = rev && vs.state[i] == STATE_CRASHED;
+        // hill_rollback: a driving car may roll backwards too, so it keeps a backward speed from a contact
+        let keep = (rev && vs.state[i] == STATE_CRASHED) || (self.opts.hill_rollback && u < 0.0);
         if u < 0.0 && !keep { u = 0.0; }
         vs.speed[i] = r32(u);
         if rev && !keep { self.reverse_stash.insert(i, b.vx * fx + b.vz * fz); }
