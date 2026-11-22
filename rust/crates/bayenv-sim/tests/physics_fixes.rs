@@ -519,3 +519,27 @@ fn steer_delay_is_short_pedals_keep_reaction_time() {
     assert!(b >= 1.0, "pedals keep the 1 s reaction time: {b}");
     assert!(js >= 1.0, "the JS delays steering by the reaction time: {js}");
 }
+
+#[test]
+fn mountable_kerbs_scrape_not_crash() {
+    // audit finding 10 / the teacher's low-speed junction kerb touches: a car at walking pace steering into a city kerb.
+    // Rigid kerb + contact_episodes: every step's push is an impact, the episode delta-v adds up to a disabling
+    // "crash"; with mountable_kerbs it is one minor contact and the car is not disabled.
+    let Some(g) = common::shared_world("road3") else { return bayenv_world::oracle::skip("physics_fixes", "fixtures") };
+    let run = |opts: SimOpts, u: f64, hr: f64| {
+        let mut sim = sim_with(&g, opts);
+        let i = place(&mut sim, SEDAN, &[1], 100.0, 0, u);
+        sim.vs.lat[i] = 1.0; sim.vs.heading_rel[i] = -hr as f32;
+        sim.vs.update_lanes(i, &g, 1); sim.vs.update_pose(i, &g); sim.vs.save_pose(i);
+        for _ in 0..60 { if sim.vs.state[i] != STATE_DRIVING { break; } hold(&mut sim, i, -0.15, 0.1, 0.0); sim.step(); }
+        (sim.counters.crashed_vehicles, sim.counters.minor_contacts, sim.vs.state[i])
+    };
+    let rigid = SimOpts { mountable_kerbs: false, ..SimOpts::default() };
+    let (rc, _, _) = run(rigid, 3.5, 0.45);
+    let (kc, km, ks) = run(SimOpts::default(), 3.5, 0.45);
+    eprintln!("3.5 m/s at 0.45 rad steering into the kerb: rigid {rc} crashed; mountable {kc} crashed, {km} minor contacts");
+    assert_eq!(rc, 1, "rigid: the grind adds up to a disabling crash");
+    assert!(kc == 0 && km == 1 && ks == STATE_DRIVING, "mountable: one minor scrape");
+    // residential road 1 is not rigid; the motorway (edge 0) is
+    assert!(!g.rigid_edge(1) && g.rigid_edge(0));
+}

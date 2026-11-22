@@ -10,6 +10,14 @@ use crate::world::{World, HW_PULLOVER};
 pub const DISABLE_KMH: f64 = 10.0;
 /// largest barrier penetration correction per step with SimOpts::barrier_soft_push (m)
 pub const BARRIER_PUSH_MAX: f64 = 0.25;
+/// SimOpts::mountable_kerbs: closing speed into a kerb below which it is mounted and scraped (m/s)
+pub const KERB_MOUNT_SPEED: f64 = 2.0;
+/// how far past the kerb line a mounting car may ride before the kerb pushes back (m)
+pub const KERB_MOUNT_DEPTH: f64 = 0.3;
+/// friction coefficient of a kerb scrape (tyre side wall and body on the kerb)
+pub const KERB_FRICTION: f64 = 0.6;
+/// a kerb scrape's reported delta-v is capped below the disable threshold (m/s)
+pub const KERB_SCRAPE_MAX_DV: f64 = (DISABLE_KMH - 0.5) / 3.6;
 
 /// reward.js crashShare: share of the closing speed along the normal that car A brought.
 pub fn crash_share(speed_a: f64, yaw_a: f64, speed_b: f64, yaw_b: f64, nx: f64, nz: f64) -> f64 {
@@ -194,9 +202,15 @@ impl Sim {
         let mut wb = Body { x: cx, z: cz, ..Default::default() };
         let c = Contact { depth, nx, nz, px: cx, pz: cz };
         let pre = Pre { speed: [jm::hypot(a.vx, a.vz), 0.0], heading: [a.yaw, 0.0], nx, nz };
-        let res = physics::resolve_contact(&mut a, &mut wb, &c, physics::WALL_RESTITUTION, physics::WALL_FRICTION);
+        // mountable_kerbs: a kerb (not a rigid barrier: freeway system, bridges) met at a low closing speed is mounted
+        // and scraped: no rebound, kerb friction, the car may ride up to KERB_MOUNT_DEPTH past the kerb line, a minor
+        // contact that never disables; faster strikes hit it like the wall it was before
+        let into = a.vx * nx + a.vz * nz;
+        let vs_edge_i = self.vs.edge[i] as usize;
+        let scrape = self.opts.mountable_kerbs && !g.rigid_edge(vs_edge_i) && into < KERB_MOUNT_SPEED;
+        let res = if scrape { physics::resolve_contact(&mut a, &mut wb, &c, 0.0, KERB_FRICTION) } else { physics::resolve_contact(&mut a, &mut wb, &c, physics::WALL_RESTITUTION, physics::WALL_FRICTION) };
         self.write_back(i, &a);
-        let corr = if self.opts.barrier_soft_push { jm::min(depth, BARRIER_PUSH_MAX) } else { depth };
+        let corr = if scrape { jm::min(jm::max(0.0, depth - KERB_MOUNT_DEPTH), BARRIER_PUSH_MAX) } else if self.opts.barrier_soft_push { jm::min(depth, BARRIER_PUSH_MAX) } else { depth };
         let vs = &mut self.vs;
         vs.lat[i] = r32(f(vs.lat[i]) - side * corr);
         let e = vs.edge[i] as usize;
@@ -207,10 +221,17 @@ impl Sim {
             // impacts of the episode (the first touch, then steps with delta-v >= touch_kmh) add up; a resting push
             // (small per-step impulses) neither adds nor reports
             let impact = !was || res.dva * 3.6 >= self.opts.touch_kmh;
-            let tot = if was { self.barrier_ep.get(&i).copied().unwrap_or(0.0) } else { 0.0 } + if impact { res.dva } else { 0.0 };
-            self.barrier_ep_now.insert(i, tot);
-            if res.jn > 0.0 && impact { self.crash_event_ep(&[i], &[tot], &c, res.closing, "barrier", Some(pre), was); }
-        } else if !was && res.jn > 0.0 { self.crash_event(&[i], &[res.dva], &c, res.closing, "barrier", Some(pre)); }
+            let prev = if was { self.barrier_ep.get(&i).copied().unwrap_or(0.0) } else { 0.0 };
+            if scrape {
+                // a kerb scrape: reported once (first touch, delta-v below the disable threshold), adds nothing
+                self.barrier_ep_now.insert(i, prev);
+                if res.jn > 0.0 && !was { self.crash_event_ep(&[i], &[jm::min(res.dva, KERB_SCRAPE_MAX_DV)], &c, res.closing, "barrier", Some(pre), false); }
+            } else {
+                let tot = prev + if impact { res.dva } else { 0.0 };
+                self.barrier_ep_now.insert(i, tot);
+                if res.jn > 0.0 && impact { self.crash_event_ep(&[i], &[tot], &c, res.closing, "barrier", Some(pre), was); }
+            }
+        } else if !was && res.jn > 0.0 { self.crash_event(&[i], &[if scrape { jm::min(res.dva, KERB_SCRAPE_MAX_DV) } else { res.dva }], &c, res.closing, "barrier", Some(pre)); }
         Some(())
     }
 
@@ -316,9 +337,15 @@ impl Sim {
         let mut wb = Body { x: cx, z: cz, ..Default::default() };
         let c = Contact { depth, nx, nz, px: cx, pz: cz };
         let pre = Pre { speed: [jm::hypot(a.vx, a.vz), 0.0], heading: [a.yaw, 0.0], nx, nz };
-        let res = physics::resolve_contact(&mut a, &mut wb, &c, physics::WALL_RESTITUTION, physics::WALL_FRICTION);
+        // mountable_kerbs: a kerb (not a rigid barrier: freeway system, bridges) met at a low closing speed is mounted
+        // and scraped: no rebound, kerb friction, the car may ride up to KERB_MOUNT_DEPTH past the kerb line, a minor
+        // contact that never disables; faster strikes hit it like the wall it was before
+        let into = a.vx * nx + a.vz * nz;
+        let vs_edge_i = self.vs.edge[i] as usize;
+        let scrape = self.opts.mountable_kerbs && !g.rigid_edge(vs_edge_i) && into < KERB_MOUNT_SPEED;
+        let res = if scrape { physics::resolve_contact(&mut a, &mut wb, &c, 0.0, KERB_FRICTION) } else { physics::resolve_contact(&mut a, &mut wb, &c, physics::WALL_RESTITUTION, physics::WALL_FRICTION) };
         self.write_back(i, &a);
-        let corr = if self.opts.barrier_soft_push { jm::min(depth, BARRIER_PUSH_MAX) } else { depth };
+        let corr = if scrape { jm::min(jm::max(0.0, depth - KERB_MOUNT_DEPTH), BARRIER_PUSH_MAX) } else if self.opts.barrier_soft_push { jm::min(depth, BARRIER_PUSH_MAX) } else { depth };
         let vs = &mut self.vs;
         vs.lat[i] = r32(f(vs.lat[i]) - side * corr);
         vs.update_lanes(i, &g, e); vs.update_pose(i, &g);
@@ -328,10 +355,17 @@ impl Sim {
             // impacts of the episode (the first touch, then steps with delta-v >= touch_kmh) add up; a resting push
             // (small per-step impulses) neither adds nor reports
             let impact = !was || res.dva * 3.6 >= self.opts.touch_kmh;
-            let tot = if was { self.barrier_ep.get(&i).copied().unwrap_or(0.0) } else { 0.0 } + if impact { res.dva } else { 0.0 };
-            self.barrier_ep_now.insert(i, tot);
-            if res.jn > 0.0 && impact { self.crash_event_ep(&[i], &[tot], &c, res.closing, "barrier", Some(pre), was); }
-        } else if !was && res.jn > 0.0 { self.crash_event(&[i], &[res.dva], &c, res.closing, "barrier", Some(pre)); }
+            let prev = if was { self.barrier_ep.get(&i).copied().unwrap_or(0.0) } else { 0.0 };
+            if scrape {
+                // a kerb scrape: reported once (first touch, delta-v below the disable threshold), adds nothing
+                self.barrier_ep_now.insert(i, prev);
+                if res.jn > 0.0 && !was { self.crash_event_ep(&[i], &[jm::min(res.dva, KERB_SCRAPE_MAX_DV)], &c, res.closing, "barrier", Some(pre), false); }
+            } else {
+                let tot = prev + if impact { res.dva } else { 0.0 };
+                self.barrier_ep_now.insert(i, tot);
+                if res.jn > 0.0 && impact { self.crash_event_ep(&[i], &[tot], &c, res.closing, "barrier", Some(pre), was); }
+            }
+        } else if !was && res.jn > 0.0 { self.crash_event(&[i], &[if scrape { jm::min(res.dva, KERB_SCRAPE_MAX_DV) } else { res.dva }], &c, res.closing, "barrier", Some(pre)); }
         true
     }
 
