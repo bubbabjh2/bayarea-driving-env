@@ -13,6 +13,17 @@
 //                       epBase() + slot (barrier, f32), epBase() + cap + 2 pairSlot (pair, f32 i / j); the host sizes the
 //                       contacts buffer for them when the flag is on.
 //   MF_CONN_BARRIER     connector_barrier: cars on a junction connector get the in-edge's kerbs as lateral walls.
+//   MF_MOUNTABLE_KERBS  mountable_kerbs (bayenv-sim contacts.rs, DECISIONS.md 38): a barrier contact on a non-rigid edge (not
+//                       the freeway system, edge flag 64, nor a bridge, edge flag 2) closing at under 2 m/s is a kerb scrape:
+//                       restitution 0, friction 0.6, correction min(max(0, depth - 0.3), 0.25), the episode total is not
+//                       increased, one event on the first touch with delta-v capped below the disable threshold.
+//#orig barrier-resolve
+  let res = resolveContact(&A, &Wb, c, E_WALL, MU_WALL);
+//#end
+//#patch barrier-resolve
+  let scrape = kerbScrape(e, A, c.nx, c.nz);
+  let res = resolveContact(&A, &Wb, c, select(E_WALL, 0.0, scrape), select(MU_WALL, KERB_FRICTION, scrape));
+//#end
 //#orig moving
 fn isMoving(v: Veh) -> bool { return v.state == DRIVING || v.speed > 0.01 || abs(v.vLat) > 0.01; }
 //#end
@@ -20,13 +31,24 @@ fn isMoving(v: Veh) -> bool { return v.state == DRIVING || v.speed > 0.01 || abs
 fn isMoving(v: Veh) -> bool { return v.state == DRIVING || select(v.speed, abs(v.speed), MF_IMPACT_REVERSE) > 0.01 || abs(v.vLat) > 0.01; }
 const BARRIER_PUSH_MAX: f32 = 0.25;
 fn barrierCorr(d: f32) -> f32 { return select(d, min(d, BARRIER_PUSH_MAX), MF_SOFT_PUSH); }
+const KERB_MOUNT_SPEED: f32 = 2.0; const KERB_MOUNT_DEPTH: f32 = 0.3; const KERB_FRICTION: f32 = 0.6;
+const KERB_SCRAPE_MAX_DV: f32 = (DISABLE_KMH - 0.5) / 3.6;
+// mountable_kerbs: a low-speed contact with a kerb that is not a rigid barrier (freeway system / bridge) is a scrape
+fn kerbScrape(e: u32, A: Body, nx: f32, nz: f32) -> bool { return MF_MOUNTABLE_KERBS && (eFlags(e) & 66u) == 0u && A.vx * nx + A.vz * nz < KERB_MOUNT_SPEED; }
+fn barrierCorrK(d: f32, scrape: bool) -> f32 { if (scrape) { return min(max(0.0, d - KERB_MOUNT_DEPTH), BARRIER_PUSH_MAX); } return barrierCorr(d); }
 // impact_reverse: backward speeds of DRIVING cars from the current contact (writeBack), applied if it disables them
 var<private> revN: u32 = 0u;
 var<private> revSlot: array<u32, 2>;
 var<private> revU: array<f32, 2>;
 fn epBase() -> u32 { return ccBase() + P.cap; }
 // barrier event (JS: first touch only; MF_EPISODES: every impact step, delta-v = the episode total)
-fn barrierEvent(i: u32, prev: bool, res: Res, cx: f32, cz: f32, sp: f32, nx: f32, nz: f32) {
+fn barrierEvent(i: u32, prev: bool, res: Res, cx: f32, cz: f32, sp: f32, nx: f32, nz: f32, scrape: bool) {
+  if (scrape) {
+    // a kerb scrape: reported once (first touch, delta-v below the disable threshold), the episode total carried
+    if (MF_EPISODES) { let o = epBase() + i; atomicStore(&contacts[o], bitcast<u32>(select(0.0, bitcast<f32>(atomicLoad(&contacts[o])), prev))); }
+    if (!prev && res.jn > 0.0) { crashEvent(i, NONE, min(res.dvA, KERB_SCRAPE_MAX_DV), 0.0, res.closing, cx, cz, sp, 0.0, nx, nz, NONE, -1e9); }
+    return;
+  }
   if (!MF_EPISODES) {
     if (!prev && res.jn > 0.0) { crashEvent(i, NONE, res.dvA, 0.0, res.closing, cx, cz, sp, 0.0, nx, nz, NONE, -1e9); }
     return;
@@ -69,12 +91,13 @@ fn connBarrier(i: u32, v0: Veh, prev: bool) {
   var c: Contact; c.ok = true; c.depth = depth; c.nx = nx; c.nz = nz; c.px = cx; c.pz = cz;
   var A = bodyOf(i, true);
   var Wb: Body; Wb.x = cx; Wb.z = cz; Wb.yaw = 0.0; Wb.vx = 0.0; Wb.vz = 0.0; Wb.w = 0.0; Wb.hl = 0.0; Wb.hw = 0.0; Wb.invMass = 0.0; Wb.invInertia = 0.0;
-  let res = resolveContact(&A, &Wb, c, E_WALL, MU_WALL);
+  let scrape = kerbScrape(e, A, nx, nz);
+  let res = resolveContact(&A, &Wb, c, select(E_WALL, 0.0, scrape), select(MU_WALL, KERB_FRICTION, scrape));
   writeBack(i, A, A.x, A.z);
-  veh[i].lat = veh[i].lat - side * barrierCorr(depth);
+  veh[i].lat = veh[i].lat - side * barrierCorrK(depth, scrape);
   refreshPose(i);
   veh[i].flags = veh[i].flags | F_WALL;
-  barrierEvent(i, prev, res, cx, cz, v0.speed, nx, nz);
+  barrierEvent(i, prev, res, cx, cz, v0.speed, nx, nz, scrape);
 }
 //#end
 //#orig fixed
@@ -110,13 +133,13 @@ fn connBarrier(i: u32, v0: Veh, prev: bool) {
   veh[i].lat = veh[i].lat - side * depth;
 //#end
 //#patch barrier-push
-  veh[i].lat = veh[i].lat - side * barrierCorr(depth);
+  veh[i].lat = veh[i].lat - side * barrierCorrK(depth, scrape);
 //#end
 //#orig barrier-event
   if (!prev && res.jn > 0.0) { crashEvent(i, NONE, res.dvA, 0.0, res.closing, cx, cz, v0.speed, 0.0, c.nx, c.nz, NONE, -1e9); }
 //#end
 //#patch barrier-event
-  barrierEvent(i, prev, res, cx, cz, v0.speed, c.nx, c.nz);
+  barrierEvent(i, prev, res, cx, cz, v0.speed, c.nx, c.nz, scrape);
 //#end
 //#orig resolve-start
 fn resolveOne(k: u32) {

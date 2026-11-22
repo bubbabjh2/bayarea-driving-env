@@ -741,5 +741,12 @@ Each entry: date, decision, why, alternatives, numbers, and one line to say it o
   - rigid: 7 contact events with an accumulated Δv rising 2.6 → 11.0 km/h, disabled at step 10;
   - mountable: one minor contact of 2.4 km/h, still driving;
   - JS model: one contact of 2.6 km/h.
+- **GPU:** `GpuOptions::mountable_kerbs` (default on; `js_model()` off), in `kernels/model_contacts.wgsl` for edge and
+  connector barriers alike. "Rigid" is the edge flags already in the blob: freeway system (bit 64) or bridge (bit 2).
+  The scrape uses the same pre-impulse closing speed, restitution / friction, correction, carried episode total and
+  capped first-touch Δv. `tests/kerbs.rs` runs one car on a real residential edge on both backends, and they agree
+  exactly. At 0.45 rad, rigid gives 2 minor contacts and no disable on both (this edge's geometry stops the grind
+  sooner than the road3 fixture); at 0.7 rad, rigid disables after 3 minor contacts on both. Mountable gives 1 minor
+  contact, still driving, on both.
 - **On camera:** "Touching a kerb at walking pace used to write the car off. Now it just scrapes, like it does in real
   life, unless you hit a freeway barrier."
