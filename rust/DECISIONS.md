@@ -1036,3 +1036,25 @@ Each entry: date, decision, why, alternatives, numbers, and one line to say it o
   (every lane and leader pass would see a car "on" the bridge 37 m above it).
 - **On camera:** "Bridge rails are crash-tested: a two-tonne pickup at 100 km/h, 25 degrees. That's 156 kilojoules
   sideways. Hit it harder than that, and in our sim you go over the edge."
+
+## 47. Input version 3 gets the junction-box fixes (`guide_in_box`, `junction_obstacle` for ObsMode::V3; CPU `SimOpts::v3_guide_in_box` / `v3_junction_obstacle`, default on)
+
+- **Problem:** DECISIONS.md 43 and 45 fixed two GPU input differences at junction boxes for obs v2 only:
+  - guidance inside a box reported the junction being crossed at a negative distance;
+  - the junction-conflict obstacle was missing from the own-ahead slot.
+
+  The v3 rows (358 floats, the 16-body view) kept the JS GPU behaviour, and bayenv-sim's V3Encoder mirrored it. So a v3 net was blind to a blocked box ahead in both places. This is the suspected cause of the extra stuck cars (~1,000) that v3-family nets left on the GPU at 10k; not yet re-measured.
+- **Decision:**
+  - The GPU stops gating both flags on `obs != V3`: `GpuOptions::guide_in_box` and `junction_obstacle` now apply to v2 and v3.
+  - The CPU mirrors them in obs_v3.rs:
+    - `gpu_guidance`: more than 1 m past the in-edge's end, the maneuver being crossed counts as passed, and the distance is clamped at ≥ 0.
+    - `gpu_neighbours`: the junction-conflict gap goes into input 8 / 9 as a stopped obstacle, by the same rule as obs v2 / model_jyield.wgsl.
+  - Both are new SimOpts flags, default on. `SimOpts::js()` and `GpuOptions::js_model()` are off, which gives the old v3 rows.
+- **Alternatives:**
+  - Leave v3 on the JS rows. Rejected: it is the junction blindness that DECISIONS.md 45 measured as the main 10k GPU/CPU gap.
+  - Mirror only on the GPU. Rejected: CPU-trained v3 nets (teacher / DAgger) would then see different inputs from the GPU eval.
+- **Tests:** `tests/obs_v3_parity.rs` (1k and 10k commuters, steer delay 0.15 and the JS delay, steps 5 / 45 / 200 / 600) passes with both on.
+  - Two diagnostics were added to it. `OBS_V3_CPU_JS=1` turns the fixes off on the CPU only and must fail; it does, with input 20 in up to 42 / 2,973 rows and input 8 in extra rows at steps 45 / 200. `OBS_V3_BASE=1` turns them off on both backends.
+  - The residual input 8..11 differences are identical with the fixes on and in the base run, so they come from elsewhere (pre-existing).
+- **Trainer note:** v3 nets trained before this see a slightly different input distribution at boxes. Retrain or DAgger them on this pin rather than mixing pins.
+- **On camera:** "The bigger brain could see sixteen cars around it, but it couldn't see a blocked intersection right in front of it. One line fixed that."
