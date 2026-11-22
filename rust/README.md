@@ -178,7 +178,9 @@ pop.place_obstacles(count=40, seed=3); pop.place_wrecks(10); pop.reset_day()
   `step(1)` is 3.6-3.7 ms. Details in rust/BENCHMARKS.md.
 * `backend="cpu"`: the CPU reference sim (`bayenv-sim`) behind the same calls and shapes: `act`, `step`,
   `step_observe`, `observe` (`obs="v2"` 70 floats via the v2 encoder, sensed after every step like the JS driver loop;
-  `"v3"` 358; `"flat"` 77, CPU only), `state()`, `events()`, `crash_flags`, `signals`, `stats`. It uses a commuter
+  `"v3"` 358 via `bayenv_sim::obs_v3::V3Encoder`, the same row as the GPU's `obs="v3"` (v2 inputs 0..69, v3 inputs
+  70..101, 16 bodies 102..357; `DECISIONS.md` 42), also sensed after every step; `"v3_perception"` 358, the JS
+  `env.observe({v3: true})` vector with 0..69 and 94..101 left at 0 (what `"v3"` returned before); `"flat"` 77, CPU only), `state()`, `events()`, `crash_flags`, `signals`, `stats`. It uses a commuter
   population of `n_cars` (population.js, `seed`), and cars spawn on their trip schedule, so `n_slots` grows; rows are slots.
   `bayenv.VecEnv(..., backend="cpu")` steps its envs in parallel (rayon). It pads rows to the largest env, and `env_slots()`
   gives the per-env counts.
