@@ -348,9 +348,9 @@ Each entry: date, decision, why, alternatives, numbers, and one line to say it o
   The typical crash: a car at 5 m/s meets a lane polyline that turns 0.7 rad within 2.5 m (a radius of about 3.5 m,
   not a real road). It reacts after its reaction time, by which point it has already hit the kerb. Adding a yaw-rate
   feed-forward from the lane-heading change to that driver did not help (698 crashed). So the flag ships off.
-  Next: smooth the lane and connector centrelines to realistic minimum radii by road class, add a lane-heading
-  preview to the observation, then turn the flag on once a look-ahead driver drives at JS-level crash and arrival
-  rates.
+  Next: smooth the lane and connector centrelines to realistic minimum radii by road class (done, entry 33), add a
+  lane-heading preview to the observation, then turn the flag on once a look-ahead driver drives at JS-level crash
+  and arrival rates.
 - **Alternatives:** smooth the polylines first (changes the world build and every position); bound the absorbed
   curvature by tyre grip (still free steering below the bound).
 - **On camera:** "Our cars were taking freeway-speed right turns at 14 g. The road was secretly turning them. When
@@ -451,3 +451,270 @@ Each entry: date, decision, why, alternatives, numbers, and one line to say it o
 - **Why:** Each one needs either new world data or a change to the action space. None of them let an agent exploit
   the sim the way the fixed findings did.
 - **On camera:** "There are still things our sim gets wrong, and we're telling you which ones."
+
+## 33. Smoothed frame geometry for `curvature_dynamics` (`smooth_geometry`, default off)
+
+- **Date:** 2026-11-21
+- **Decision:** A second, smoothed copy of the geometry the dynamics follow is derived deterministically at load time
+  (`bayenv_world::smooth`, `LoadOptions::smooth_geometry` / `World::smooth_geometry`). It replaces the lane-geometry
+  reference polylines (`LaneGeometry` vx / vy / vz / vs / mx / mz) and the junction connector points
+  (`JunctionSet.pts`, with `mInfo` firstPt / ptCount). Everything reads them from there: on the CPU `lat_point`,
+  `edge_point_dir`, bounds and barriers, `map_lat`, `connector_point`, the connector conflict paths; on the GPU the
+  world blob, which is packed from the smoothed world. So positions and frames always agree. The flag is
+  `SimOpts::smooth_geometry` / `GpuOptions::smooth_geometry` / `Env(smooth_geometry=True)`. It must match the world
+  (`Sim::new` panics, `GpuSim` returns an error) and it needs `curvature_dynamics`. Default off, and `js()` turns it
+  off.
+  - **Fillets:** every vertex becomes a circular arc tangent to its two segments, sampled every 0.04 rad on edges
+    (the lane frame heading is constant along a segment) and 0.1 rad on connectors (`connector_point` blends it).
+    Neighbouring fillets split a shared segment max-min fairly. Where the segments are too short, the largest radius
+    that fits is used. Runs of short kinks merge into one fillet at the intersection of the outer segments when that
+    gives a larger radius. Merging runs in symmetric rounds, so a polyline and its reverse smooth alike.
+  - **Joins:** consecutive edges at a pass-through node (no junction box, no other edge bar the twins; 19,763 joins
+    in 14,895 chains) are smoothed as one polyline. Both edge ends move to the same arc point and take its normal.
+  - **Connectors:** each is re-fitted to the smoothed lanes. Its ends are the smoothed lane points at s_in / s_out,
+    their tangents the smoothed lane headings (a 0.5 m lead segment when they are off), and the interior is filleted.
+  - **s is preserved:** kept vertices keep their s exactly, and an arc spans the s-range of the polyline it replaces.
+    So lengths, s_exit / s_stop, gore points, controls, connector s_in / s_out / lengths / conflict positions and the
+    hop maps are unchanged. Inside a fillet the world speed is (arc / replaced polyline) times the s-rate, at most
+    about 0.8 on a 90-degree corner, the same kind of distortion the JS lanes already have off the reference line.
+- **Radius table** (the target is for the innermost lane centre; the reference line gets the inner lane offset
+  added): R = clamp(v² / (g (e + f)), floor, cap), with v the edge's speed limit, f the AASHTO side friction
+  (0.35 at 20 km/h, 0.23 at 40, 0.17 at 60, 0.14 at 80, 0.12 at 100, 0.09 at 120) and per class:
+
+  | class | e | floor | cap |
+  |---|---|---|---|
+  | motorway, trunk | 0.06 | 150 m | 900 m |
+  | motorway_link, trunk_link | 0.06 | 30 m | 250 m |
+  | primary | 0.04 | 20 m | 150 m |
+  | primary_link | 0.04 | 15 m | 80 m |
+  | secondary | 0.04 | 15 m | 120 m |
+  | secondary_link | 0.04 | 12 m | 60 m |
+  | tertiary | 0.02 | 12 m | 60 m |
+  | tertiary_link | 0.02 | 12 m | 40 m |
+  | unclassified, residential | 0 | 10 m | 15 m |
+  | living_street | 0 | 10 m | 12 m |
+  | junction connectors | | 12 m | 30 m (min of the in- and out-edge targets) |
+
+  So a 65 mph motorway gets about 480 m, a 35 mph primary about 120 m, and residential streets 15 m. Two caps keep
+  the lanes where the roads are. A fillet's apex may move at most 1 m from its vertex (`dev_max`), unless that would
+  take the radius below the class floor. It never moves more than 5 m (`dev_hard`), so a hairpin keeps a tight
+  radius rather than cutting off its corner. Turns over 2.6 rad (dead-end stubs that turn back) are not filleted.
+- **Why (b), load time, and not (a), the world build:** (b) leaves the data files, the manifest, the JS sim and the
+  JS oracle untouched. Every JS-oracle check keeps passing as it was, and with the flag off nothing changes, bit for
+  bit. It is rebuildable by construction: under a second on the real world, multi-threaded, no cache. (a) would
+  change every position in the JS sim and in earlier training runs, needs the 30–60 min oracle regeneration and a
+  JS reader for the new data. It also makes "with and without smoothing" a different world rather than a switch.
+- **Alternatives:**
+  - Clothoid blending: continuous curvature, but the lane frame heading is piecewise constant per segment anyway, and
+    an arc gives exact radius guarantees.
+  - Laplacian or Chaikin smoothing: moves straight roads and guarantees no radius.
+  - Moving the connector mouths (s_in / s_out) to lift junction-turn radii: changes junction data, stop lines and
+    conflicts. Rejected, see Consequence.
+- **Numbers** (`examples/geom_radius -- ../data [--smooth]`, real world):
+  - **Geometry size:** lane vertices 1.93M → 4.59M, connector points 8.68M → 11.75M. 1,051,795 edge fillets, of
+    which 34,290 (3.3 %) are fit-limited (largest radius that fits) and 1,383 are not filleted. 2,736,721 connector
+    fillets, of which 720,604 (26 %) are fit-limited. Largest apex move on straight-ish roads (fillets turning
+    < 0.1 rad): 0.63 m. Largest overall: 5.0 m.
+  - **Share of path length tighter than R** (heading change over a 2 m window, every metre; innermost lane centre;
+    raw → smoothed):
+
+    | | < 5 m | < 10 m |
+    |---|---|---|
+    | residential lanes | 0.09 % → 0.02 % | 0.39 % → 0.22 % |
+    | motorway_link lanes | 0.05 % → 0.01 % | 0.48 % → 0.04 % |
+    | joins, residential | 78.7 % → 0.9 % | 82.8 % → 10.9 % |
+    | joins, primary | 5.9 % → 0 | 13.1 % → 0.2 % |
+    | connectors, residential | 0.75 % → 0.78 % | 64.9 % → 65.2 % |
+
+    Under 15 m: residential lanes 2.2 % → 1.5 %, motorway 0.27 % → 0. Smoothing trades a metre of 3 m kink for tens of
+    metres at the target radius, so the shares between 15 and 60 m grow (residential < 30 m: 3.8 % → 4.3 %).
+  - **Tightest point per turning connector** (> 0.3 rad), under 10 m: residential 92.5 % → 92.9 %, primary 82.6 % →
+    84.1 %. The vertex census of entry 23, now on the frame geometry: residential lane vertices under 10 m 16.1 % →
+    25.2 %. This is not comparable, because the arcs add vertices, and a 15 m arc sampled per vertex counts as
+    15 cos(0.02) m; the path-length census above is the measure.
+  - **The kink of entry 23** (edge 212045, 1.7 rad within 5.4 m, about 3.2 m): it becomes an arc of about 6 m. It is
+    fit-limited by the edge's 5 m dead-end start segment.
+  - **Continuity** (`tests/smooth_world.rs`): 42,149 strict lane hops at nodes without a junction box. None has a
+    larger lane-point jump than raw; smoothed joins jump at most 7e-7 m. Frame heading steps above 0.1 rad at those
+    hops: 16,148 → 3,886 (the rest are merges and diverges, which are not pass-through). Connector entry / exit: at
+    most 2.8 mm, and heading 0.094 / 0.056 rad (raw 0.157 / 0.083). s: every edge runs 0 .. length strictly
+    increasing, and every connector 0 .. its length.
+  - **Rollouts with curvature_dynamics** (`physics_audit sim ../data 3000 1200`, 504 cars spawned), crashed
+    vehicles, raw geometry → smoothed:
+    - keep policy (curvature off: 30): 419 → 419.
+    - pure-pursuit look-ahead driver (`pursuit`, aims 2 m + 0.8 s plus the reaction delay ahead): 313 → 311.
+    - Heading jumps over 0.3 rad: 0 in both. Teleports: 0 → 1 (keep, a wreck sliding backwards 7 m off a connector
+      centre, 0.6 m) and 2 → 3 (pursuit).
+    - S1 (108 km/h, steer 0): 0 g with and without.
+  - **cpu_vs_gpu** (curvature on, smoothed): crashed 733 / 733, contacts 1,909 / 1,903, barrier 1,906 / 1,900,
+    missed exits 13 / 15, violations 342 / 343. On raw geometry it was 751 / 751.
+- **Consequence:** smoothing removes the lane and join kinks: no frame heading steps at joins, and the hairpins hidden
+  in the lanes are gone. The crash counts barely move, though, because those kinks were not where these drivers
+  crash. About half the crashes are on junction connectors and half in the first metres after one (keep: 208 / 211).
+  They happen just after cars spawn at rest 1–5 m before a junction turn and act with their 0.5–1.2 s reaction delay.
+  Junction-turn radii (4–9 m) are set by the junction box, not by polyline kinks. For fixed lane points and headings,
+  no curve has a smaller maximum curvature than the shorter tangent leg allows (R ≤ leg / tan(turn / 2)). The JS
+  builder already fits that arc, so connectors stay fit-limited, and 26 % of their fillets get less than the target.
+  Larger turning radii would need the mouths (s_in / s_out) moved back: new junction data. The keep policy's
+  ±0.15 rad steering clamp limits it to radii above about 18 m anyway. `curvature_dynamics` still ships off. Turning it
+  on needs a driver that slows for junction turns and anticipates its reaction delay.
+- **On camera:** "The roads had 3-metre hairpins hiding in them. We rounded every corner to the radius a real road of
+  that class would have, and the cars still crashed, at the junctions. Turns that tight are real, and the drivers
+  just weren't looking ahead."
+
+## 34. Junction turns a vehicle can make (`junction_radii`), and spawn clearance (`spawn_clearance`), default off
+
+- **Date:** 2026-11-21
+- **Decision:** Two companion flags for `curvature_dynamics`, both default off. `SimOpts::js()` leaves them off, so
+  every JS-oracle check is unaffected.
+  - **`junction_radii`:** `LoadOptions` / `SimOpts` / `GpuOptions` / `Env(junction_radii=True)`; needs
+    `smooth_geometry`, must match the world. At load, after the smoothing (`bayenv_world::junction_radii`), every
+    turning connector (0.3–2.6 rad) whose arc is below the target is rebuilt as one circular arc with tangent entry
+    and exit. Its s_in moves back on the in-edge and its s_out forward on the out-edge until the arc fits.
+  - **`spawn_clearance`:** `SimOpts` / `GpuOptions` / `Env(spawn_clearance=True)` (both backends). A car whose first route edge
+    leaves less than 18 m (`spawn_clearance_m`) between its spawn point (s_exit) and the junction entry its route
+    takes next starts on the next route edge instead, as if it had driven the skipped ones (route position and
+    distance set to match). It is its own flag because it changes where cars start on the raw world too.
+- **Targets:** by the lower class of the two edges, never below 6 m where it fits.
+  - Local streets (residential, unclassified, living_street): 8 m, real corner kerb-return paths of 6–9 m.
+  - Arterials (primary to tertiary and their links): 12 m. That is also above a truck's or bus's 11.5 m full-lock
+    radius (`examples/turn_feasibility.rs`: sedan 4.3 m, SUV 4.7 m, truck 11.3 m, bus 11.5 m).
+  - Freeway system: 15 m.
+  - Heavy vehicles get 12 m where they mostly drive. 12 m on every residential corner would move the entries
+    another 4–10 m on short blocks and cut far past the kerbs, so local corners keep 8 m (trucks there take them with
+    a wider swing, as in reality).
+- **Limits on the move:**
+  - At most 30 m.
+  - Never past another movement's s_in on the same in-lane, or s_out on the same out-lane.
+  - Never past the edge's other mouth (s_exit + 1 m / s_stop − 1 m) or its ends.
+  - When a limit stops the move, the connector gets the largest radius that fits.
+- **Kept consistent:**
+  - Rebuilt from the arrays: the movement's s_in / s_out / length (`mF`), its points (s = true metres), and the
+    conflict positions. These are recomputed on the new paths with the builder's own `pair_conflict` (754,474), or
+    scaled by the length ratio where the paths no longer meet (12,499).
+  - Everything that reads those arrays follows: lane index, leaders, yield, controls lookahead, CPU conflict paths,
+    the GPU blob.
+  - Unchanged: mouths and gores (so edge s_exit / s_stop, stop lines and controls), turn angles, the conflict list,
+    hop maps.
+  - s_in before the stop line is a state the JS builder already produces: 225,877 movements raw, 324,790 after. The
+    sim uses min(s_stop, s_in) in its junction logic, and the controls keep measuring the in-edge s on the connector.
+- **Why:** entry 33 showed the junction box bounds a connector's radius at min(tangent leg) / tan(turn / 2), so only
+  moving its ends widens the turn. Doing it at load time keeps the data files, the JS and the oracle untouched.
+- **Alternatives:**
+  - Move the mouths (s_stop / s_exit) instead: shifts stop lines, the controls and every movement of the edge.
+  - Compound curves or clothoids within the old ends: they cannot beat the shorter-leg bound.
+- **Numbers** (real world, `examples/geom_radius -- ../data --junction-radii`):
+  - **Movements:** 394,804 turning connectors.
+    - 46,693 already at target.
+    - 260,843 rebuilt at target.
+    - 69,244 fit-limited: 47,152 by another movement on the same lane, 20,914 by the edge, 1,178 by the 30 m cap.
+    - 18,024 not improvable.
+    - Largest moves: 30 m back and 30 m forward.
+  - **Arc radius (leg fit) per turning connector:** below 6 m 57,960 → 21,852. Below 11.5 m (heavy vehicles)
+    365,124 → 280,653, mostly residential corners at their 8 m target.
+  - **Tightest point per turning connector** (2 m heading window; < 6 m and < 11.5 m, before → after):
+
+    | class | < 6 m | < 11.5 m |
+    |---|---|---|
+    | residential | 18.1 % → 3.6 % | 94.2 % → 84.4 % |
+    | tertiary | 21.2 % → 8.0 % | 89.8 % → 36.4 % |
+    | secondary | 24.6 % → 13.4 % | 87.0 % → 42.9 % |
+    | primary | 29.4 % → 16.7 % | 88.0 % → 49.7 % |
+    | motorway_link | 24.9 % → 14.9 % | 85.0 % → 38.1 % |
+
+  - **Continuity** (`tests/smooth_world.rs`): 330,087 movements moved, with entry / exit on the lanes within 2.7 mm,
+    tangent within 0.017 / 0.015 rad, s 0 .. length. Mouths, gores, turns and the conflict list are unchanged.
+  - **Spawn clearance:** 73 of 504 spawns in the rollout start one or more edges further along.
+  - **Rollouts** (`physics_audit sim ../data 3000 1200`, curvature on; crashed vehicles of 504):
+
+    | | smoothed | + junction_radii | + spawn_clearance |
+    |---|---|---|---|
+    | keep policy | 419 | 420 | 415 |
+    | pursuit | 311 | 295 | 287 |
+
+    - Pursuit on raw geometry with curvature on: 317. Keep policy, smoothed + spawn_clearance only: 413.
+    - Heading jumps: 0. Teleports: 1 (keep) and 6 (pursuit, edge hops after connector exits).
+    - Crash sites (pursuit) are now mostly later and faster, on edges after a curve. The car overshoots the end of
+      the curve after its 0.5–1.2 s reaction delay and crosses into the far kerb. That is a driver limitation, not
+      geometry.
+  - **cpu_vs_gpu** (curvature + smooth + junction_radii): crashed 734 / 734, contacts 2,023 / 2,015, barrier
+    2,019 / 2,011, missed exits 13 / 15, violations 337 / 337.
+- **Heavy vehicles on residential corners:** local corners stay at 8 m, below the truck and bus minimum turning radius
+  of about 11.5 m. This is deliberate: real buses and trucks swing wide or crawl around tight corners. In the sim they
+  may strike the kerb there.
+- **GPU spawn clearance:** `GpuOptions::spawn_clearance` (default off; off = the JS kernels and host unchanged).
+  - The host picks the start index while it writes the trip's spawn-queue entry (`host.rs spawn_start`, the CPU's
+    `spawn_edge_index` on the same world arrays: f32 s_in / s_exit / s_stop, movements by in-edge in ascending order).
+  - It stores the index in the entry's spare word 26 and the skipped route distance (f64 sum, as f32) in word 27.
+    `kernels/spawn_clearance.wgsl` makes `spawn.wgsl` (and the `spawn_order.wgsl` claim / commit passes) spawn on that
+    route edge at its s_exit, with that route position and distance; the entry lane is chosen against the next route
+    edge, as on the CPU.
+  - One difference: the CPU runs its synchronous refuel check first and keeps the car on edge 0 when a refuel plan
+    replaced the route. GPU refuel plans are asynchronous (made later from the car's current edge), so a GPU car
+    always starts on the clearance edge.
+  - `cpu_vs_gpu` (curvature + smooth + junction_radii + spawn_clearance, with static_hold / idle_creep / steer_delay):
+    all 834 spawns start on the same route position and edge, within 2 m in s; 127 start past route edge 0 on both.
+    Crashed 745 / 745, contacts 1,759 / 1,771, missed exits 14 / 18, violations 375 / 376. `Env(backend="gpu", spawn_clearance=True)` works.
+- **On camera:** "Our junction corners were tighter than a car can turn. So we moved where each turn starts, until a
+  car could follow the curve and a truck could take the big roads."
+
+## 35. A stopped car can pull away; automatics creep (`static_hold`, `idle_creep`)
+
+- **Date:** 2026-11-21
+- **Decision:** The first hold (`brake_hold`, entry 27) is replaced and now defaults off. It counted rolling resistance
+  as holding force: a car with gas under about 3 % (2 % gas is 112 N of drive against 162 N of rolling resistance for
+  a sedan), or with a light gas-plus-brake mix, stayed parked for ever.
+  - `static_hold` holds a car below 0.05 m/s only while the brake force alone beats the drive force minus the grade
+    force. Rolling resistance holds it only when there is no drive and no brake at all.
+  - `idle_creep` gives the drive force a floor at an automatic's idle creep: 4 × the rolling resistance at rest,
+    fading to 0 at 2 m/s. With no pedals on the flat a car settles at about 1.5 m/s, and about 7 % brake holds it.
+  - Both are on by default on both backends; `SimOpts::js()` and `GpuOptions::js_model()` turn them off. GPU:
+    `GpuOptions::static_hold` / `idle_creep` (`kernels/model_integrate.wgsl`, same sub-step as the CPU, so power and
+    fuel see the creep force). `tests/pedals.rs` (300 scattered cars, medians): 2 % gas 20.8 m in 20 s, creep
+    1.42 m/s, 10 % brake 0.000 m, JS model 0.00 m.
+- **Why:** reported by the training side (ENV-REQUESTS #17). With 1,000 commuters, `brake_hold` alone cut arrivals
+  from 81.9 % to 69.1 %; 226 of the 264 unfinished cars were still on the road at the end.
+- **Numbers:** 20 s from rest with 2 % gas: 0.00 m with the first hold, 23 m now. No pedals: 1.48 m/s creep. 10 %
+  brake against the creep: 1 mm. On the brake from 0.015 m/s: still 0 creep (entry 27's test).
+- **On camera:** "Our parking brake was so good that cars couldn't drive away. A real automatic creeps forward the
+  moment you lift off the brake, so now ours does too."
+
+## 36. Steering has its own, short delay (`steer_delay`)
+
+- **Date:** 2026-11-21
+- **Decision:** Commands go through the control ring with each driver's reaction time (0.6–1.8 s). Steering is now
+  read from the ring after `steer_delay` (0.15 s, rounded to steps, capped at the reaction delay). The pedals and
+  hazard responses keep the full reaction time. A negative `steer_delay` (and `SimOpts::js()`) restores the JS.
+- **Why:** following a path is closed-loop control with a neuromuscular lag of about 0.1–0.2 s, not a reaction to
+  a surprise. A whole-second steering delay made every curve a crash once the road stopped turning the car
+  (`curvature_dynamics`, entry 23). Reported by the training side (ENV-REQUESTS #16).
+- **Numbers:** driver with a 1 s reaction time: the first steering response after 0.20 s (dt 0.05; JS 1.05 s), the
+  first brake response still after 1.05 s.
+- **GPU:** `GpuOptions::steer_delay` (seconds, default 0.15, negative = the JS): the integrate ring read takes the steer
+  word round(steer_delay / dt) steps back when that is below the car's delay steps (`kernels/model_integrate.wgsl`).
+  `tests/pedals.rs` (median over scattered cars): steer 0.20 s, brake 1.05 s; JS model steer 0.95 s.
+- **On camera:** "Our drivers needed a full second to turn the wheel, as if every bend in the road was a surprise."
+
+## 37. The lane-heading preview on the GPU (`heading_preview`, default off)
+
+- **Date:** 2026-11-21
+- **Decision:** `GpuOptions::heading_preview` / `Env(heading_preview=True)` (GPU backend) adds
+  `kernels/heading_preview.wgsl`, dispatched after `integrate` in every step. It writes a cap × 4 f32 buffer
+  (`hpreview`). Row i is slot i: the road frame's world heading change (rad, wrapped to (−π, π]) between the car's
+  position and 5, 10, 20, 40 m further along its planned path, as `bayenv_sim::obs::heading_preview`. Rows of slots
+  that are not driving are 0. `GpuSim::heading_preview()` and `Env.heading_preview()` read it back; the GPU returns
+  (capacity, 4) float64 and the CPU (n_slots, 4).
+- **How:** the kernel walks the same pieces as the CPU, step for step. It follows the current edge or connector, then
+  the route: the connector the car's lane takes into the next route edge (any lane as a fallback), or a plain hop.
+  The route-position bookkeeping and the 16-hop limit are the same as on the CPU.
+  - Connector heading: `connPointJ`. The connector points are f32 in the world data on both backends, so they match.
+  - Edge heading: a per-vertex chord angle buffer (`hpdir`), computed on the host in f64 from the same lane-geometry
+    vertices the CPU uses. The blob's f32 vertex coordinates (ulp 4–8 mm at 30–60 km from the origin) gave up to
+    7e-3 rad of error on short segments; with `hpdir` the error is 2e-6 rad.
+- **Layout:** four f32 per slot, distances fixed at `HEADING_PREVIEW_D` = [5, 10, 20, 40] m, kept simple so it can
+  become part of the v2 / v3 observation once the feature list is fixed.
+- **Numbers** (`tests/heading_preview.rs`: GPU population, then every driving car's edge, connector, s, lane, route
+  position and route words copied into a CPU vehicle store and the CPU function evaluated): raw world, 495 cars, max
+  |GPU − CPU| 1.3e-6 rad; smoothed + `junction_radii`, 267 cars, 1.4e-6 rad (all under 2.1e-6 in earlier runs).
+- **Alternatives:** computing it on the host from a state readback (a cap-sized readback every step); folding it into
+  `sense.wgsl` now (it would change the obs layout before the feature list is settled).

@@ -10,6 +10,12 @@
 //                       |speed| > 0.01 still integrates
 //   MF_WRECK_END_STOP   wreck_end_stop: a sliding wreck clamped at the end of its edge / connector (or at s < 0 moving
 //                       backwards) gets speed 0
+//   MF_IDLE_CREEP       idle_creep: the drive force never drops below 4 x the rolling resistance at rest, fading to 0 at
+//                       2 m/s (an automatic's idle creep, ~1.5 m/s on the flat)
+//   MF_STATIC_HOLD      static_hold: below 0.05 m/s the brake holds the car at 0 when the brake force alone beats drive
+//                       minus grade; with no drive and no brake, rolling resistance holds it against a smaller grade force
+//   MF_STEER_DELAY      steer_delay (i32 steps, -1 = the JS): steering read from the control ring this many steps back
+//                       when that is shorter than the car's reaction delay; the pedals keep the reaction delay
 //   MF_CURVATURE        curvature_dynamics: the world heading changes by the car's own yaw only (headingRel takes up the
 //                       road frame's rotation between the start and the end pose, connector / edge transitions included)
 //#orig brake-fb
@@ -17,6 +23,23 @@
 //#end
 //#patch brake-fb
     let Fb = bk * m * select(PT_BRAKE[t], 4.7, MF_HEAVY_BRAKES && m > 5000.0);
+//#end
+//#orig idle-creep
+    if (locked || u >= PT_VMAX[t]) { Fd = 0.0; }
+//#end
+//#patch idle-creep
+    if (locked || u >= PT_VMAX[t]) { Fd = 0.0; }
+    if (MF_IDLE_CREEP && !locked && u < 2.0) {   // bayenv-sim IDLE_CREEP_ROLL = 4, IDLE_CREEP_U = 2
+      let fi = 4.0 * PT_CRR[t] * sf.z * m * G_ACC * cosG * (1.0 - max(0.0, u) / 2.0);
+      if (fi > Fd) { Fd = fi; }
+    }
+//#end
+//#orig steer-delay
+      let sr = ring[o]; var gas = ring[o + 1u]; var brake = ring[o + 2u];
+//#end
+//#patch steer-delay
+      var sr = ring[o]; var gas = ring[o + 1u]; var brake = ring[o + 2u];
+      if (MF_STEER_DELAY >= 0 && MF_STEER_DELAY < i32(pi.delaySteps)) { sr = ring[(base + (step + CTRL_RING - u32(max(MF_STEER_DELAY, 0))) % CTRL_RING) * CTRL_STRIDE]; }
 //#end
 //#orig u-clamp
     var un = u + (FxBody / m + v * r) * h;
@@ -34,6 +57,10 @@
     if (MF_BRAKE_HOLD && !locked && u <= 0.05) {
       let roll = PT_CRR[t] * sf.z * m * G_ACC * cosG;
       if (Fb + roll >= abs(Fd - Wg) && un <= 0.05) { un = 0.0; }
+    }
+    if (MF_STATIC_HOLD && !locked && u <= 0.05 && un <= 0.05) {
+      let roll = PT_CRR[t] * sf.z * m * G_ACC * cosG;
+      if ((b_ > 0.0 && Fb >= abs(Fd - Wg)) || (Fd == 0.0 && b_ == 0.0 && abs(Wg) <= roll)) { un = 0.0; }
     }
     var vn = select(v + (FyBody / m - u * r) * h, vr + FyBody / m * h, exactRot);
 //#end

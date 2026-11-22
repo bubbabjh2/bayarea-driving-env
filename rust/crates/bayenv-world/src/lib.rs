@@ -21,6 +21,7 @@ pub mod hops;
 pub mod jsjson;
 pub mod jsmath;
 pub mod jsmath_x2;
+pub mod junction_radii;
 pub mod junctions;
 pub mod junctions_build;
 pub mod lanegraph;
@@ -29,6 +30,7 @@ pub mod lanes_build;
 pub mod nav;
 pub mod oracle;
 pub mod roadpack;
+pub mod smooth;
 pub mod verify;
 pub mod world;
 

@@ -40,7 +40,12 @@ pub const PHYS_DT: f64 = 0.01;
 pub const HEAVY_BRAKE_DECEL: f64 = 4.7;
 /// Model fixes inside step_dynamics (all false = the JS)
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
-pub struct Fixes { pub hold: bool, pub heavy_brakes: bool, pub reverse: bool }
+pub struct Fixes { pub hold: bool, pub heavy_brakes: bool, pub reverse: bool, pub static_hold: bool, pub idle_creep: bool }
+/// idle creep (SimOpts::idle_creep): an automatic's idle drive force, IDLE_CREEP_ROLL x the rolling resistance at rest,
+/// fading linearly to 0 at IDLE_CREEP_U; on the flat a car with no pedals settles at
+/// IDLE_CREEP_U x (1 - 1 / IDLE_CREEP_ROLL) = 1.5 m/s
+pub const IDLE_CREEP_ROLL: f64 = 4.0;
+pub const IDLE_CREEP_U: f64 = 2.0;
 pub const KIN_BLEND_LO: f64 = 0.7;
 pub const KIN_BLEND_HI: f64 = 1.4;
 pub const ABS_LONG: f64 = 0.95;
@@ -109,7 +114,7 @@ pub fn step_dynamics4(c: [(&mut DynState, f64, f64, f64, &VehicleParams, f64, bo
 #[derive(Clone, Copy)]
 struct Dyn<'a> {
     h: f64, m: f64, iz: f64, a: f64, b: f64, l: f64, hcg: f64, cf: f64, cr: f64, mu: f64, k_slide: f64, crr_mul: f64,
-    sr: f64, g_: f64, b_: f64, cos_g: f64, sin_g: f64, wg: f64, tgt: f64, k_lag: f64, slew: f64, locked: bool, position: bool, hold: bool, rev: bool, bd: f64,
+    sr: f64, g_: f64, b_: f64, cos_g: f64, sin_g: f64, wg: f64, tgt: f64, k_lag: f64, slew: f64, locked: bool, position: bool, hold: bool, rev: bool, shold: bool, creep: bool, bd: f64,
     p: &'a VehicleParams, grade: f64,
     u: f64, v: f64, r: f64, steer: f64, ax: f64, hr: f64, lat: f64, s: f64, sl: f64, fuel: f64, power: f64,
     m_steer: f64, m_cd: f64, m_sd: f64, m_hr: f64, m_ch: f64, m_sh: f64,
@@ -120,6 +125,7 @@ impl<'a> Dyn<'a> {
     #[inline(always)]
     fn new(st: &DynState, steer_rate: f64, gas: f64, brake: f64, p: &'a VehicleParams, dt: f64, grade: f64, locked: bool, position: bool, surf: Option<Surf>, fx: Fixes) -> (Dyn<'a>, i64) {
     let (hold, rev) = (fx.hold, fx.reverse);
+    let (shold, creep) = (fx.static_hold, fx.idle_creep);
     // heavy-vehicle brake calibration (SimOpts::heavy_brakes): trucks / buses 100-0 km/h in about 80 m (FMVSS 121)
     let bd = if fx.heavy_brakes && p.m > 5000.0 { HEAVY_BRAKE_DECEL } else { p.brake_decel };
     let n = jm::max(1.0, jm::ceil(dt / PHYS_DT - 1e-9));
@@ -143,13 +149,13 @@ impl<'a> Dyn<'a> {
     // memo of cos/sin(steer): the same input gives the same bits, so reuse while the wheel angle is unchanged
     let (mut m_steer, mut m_cd, mut m_sd) = (f64::NAN, 0.0, 0.0);
     let (mut m_hr, mut m_ch, mut m_sh) = (f64::NAN, 0.0, 0.0);
-        (Dyn { h, m, iz, a, b, l, hcg, cf, cr, mu, k_slide, crr_mul, sr, g_, b_, cos_g, sin_g, wg, tgt, k_lag, slew, locked, position, hold, rev, bd, p, grade, u, v, r, steer, ax, hr, lat, s, sl, fuel, power, m_steer, m_cd, m_sd, m_hr, m_ch, m_sh }, n)
+        (Dyn { h, m, iz, a, b, l, hcg, cf, cr, mu, k_slide, crr_mul, sr, g_, b_, cos_g, sin_g, wg, tgt, k_lag, slew, locked, position, hold, rev, shold, creep, bd, p, grade, u, v, r, steer, ax, hr, lat, s, sl, fuel, power, m_steer, m_cd, m_sd, m_hr, m_ch, m_sh }, n)
     }
 
     #[inline(always)]
     #[allow(unused_assignments)]
     fn substep(&mut self) {
-        let Dyn { h, m, iz, a, b, l, hcg, cf, cr, mu, k_slide, crr_mul, sr, g_, b_, cos_g, sin_g, wg, tgt, k_lag, slew, locked, position, hold, rev, bd, p, grade, .. } = *self;
+        let Dyn { h, m, iz, a, b, l, hcg, cf, cr, mu, k_slide, crr_mul, sr, g_, b_, cos_g, sin_g, wg, tgt, k_lag, slew, locked, position, hold, rev, shold, creep, bd, p, grade, .. } = *self;
         let Dyn { mut u, mut v, mut r, mut steer, mut ax, mut hr, mut lat, mut s, mut sl, mut fuel, mut power, mut m_steer, mut m_cd, mut m_sd, mut m_hr, mut m_ch, mut m_sh, .. } = *self;
         if !locked {
             if position { sl += (tgt - sl) * k_lag; let d = sl - steer; steer += if d > slew { slew } else if d < -slew { -slew } else { d }; }
@@ -162,6 +168,11 @@ impl<'a> Dyn<'a> {
         if fzf < fl { fzf = fl; }
         if fzr < fl { fzr = fl; }
         let fd = if locked || u >= p.vmax { 0.0 } else { g_ * jm::min(p.f0, p.pmax / jm::max(u, 0.1)) };
+        // idle creep (SimOpts::idle_creep): the drive force never drops below the automatic's idle creep
+        let fd = if creep && !locked && u < IDLE_CREEP_U {
+            let fi = IDLE_CREEP_ROLL * p.crr * crr_mul * m * G * cos_g * (1.0 - jm::max(0.0, u) / IDLE_CREEP_U);
+            if fi > fd { fi } else { fd }
+        } else { fd };
         let moving = u > 0.02;
         let fb = (if locked { 1.0 } else { b_ }) * m * bd;
         let (mut fxf, mut fxr) = match p.drive { Drive::Front => (fd, 0.0), Drive::Rear => (0.0, fd), Drive::All => { let f = fd * fzf / (fzf + fzr); (f, fd - f) } };
@@ -235,6 +246,12 @@ impl<'a> Dyn<'a> {
             // they exceed the drive minus grade force (static friction)
             let roll = p.crr * crr_mul * m * G * cos_g;
             if fb + roll >= jm::abs(fd - wg) && un <= 0.05 { un = 0.0; }
+        }
+        // static hold (SimOpts::static_hold): below 0.05 m/s the brake holds the car at 0 when the brake force alone
+        // beats drive minus grade; with no drive and no brake, rolling resistance holds it against a grade it exceeds
+        if shold && !locked && u <= 0.05 && un <= 0.05 {
+            let roll = p.crr * crr_mul * m * G * cos_g;
+            if (b_ > 0.0 && fb >= jm::abs(fd - wg)) || (fd == 0.0 && b_ == 0.0 && jm::abs(wg) <= roll) { un = 0.0; }
         }
         let mut vn = if exact { vr + fy_body / m * h } else { v + (fy_body / m - u * r) * h };
         let mut rn = r + ((a * (fxf * sd + fyf * cd) - b * fyr) / iz) * h;
