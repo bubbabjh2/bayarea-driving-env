@@ -45,12 +45,17 @@ fn run(w: &Arc<bayenv_world::World>, n: usize, steer_delay: f64, checks: &[usize
     let cap = (n + 1023) / 1024 * 1024;
     let mut o = GpuOptions { capacity: cap, start_time: START, seed: 42, obs: ObsMode::V3, refuel_budget_ms: f64::INFINITY, ..Default::default() };
     o.steer_delay = steer_delay;
+    // diagnostics: OBS_V3_BASE=1 = both backends without the v3 junction fixes (the rows before DECISIONS.md 47)
+    let base = std::env::var("OBS_V3_BASE").is_ok();
+    if base { o.guide_in_box = false; o.junction_obstacle = false; }
     assert!(o.obs_after_step);
     let mut gpu = match bayenv_gpu::env::create(w.clone(), o) { Ok(s) => s, Err(e) => { eprintln!("obs_v3_parity: no GPU ({e}): not run"); return None } };
     gpu.set_population(Arc::new(GpuPopulation::generate(w, n, 42.0, true).unwrap()), true);
     let sw = Arc::new(bayenv_sim::world::World::from_bayenv(w));
     let pop = Arc::new(bayenv_sim::population::Population::generate_like_env(&sw, "real", n, 42.0, Some(data)).unwrap());
     let mut opts = bayenv_sim::sim::SimOpts::default(); opts.dt = 0.05; opts.seed = 42.0; opts.steer_delay = steer_delay;
+    // diagnostics: OBS_V3_CPU_JS=1 = the CPU without the v3 junction fixes (the GPU keeps them), to see they are exercised
+    if base || std::env::var("OBS_V3_CPU_JS").is_ok() { opts.v3_guide_in_box = false; opts.v3_junction_obstacle = false; }
     let cfg = bayenv_sim::env::EnvConfig { opts, start_time: Some(START), static_obstacles: Vec::new(), scenario_obstacles: Vec::new(), obstacles: None };
     let mut cpu = bayenv_sim::env::Env::new(sw.clone(), pop, cfg, Box::new(|w| bayenv_sim::harness::router_for(&w)));
     let mut enc = bayenv_sim::obs_v3::V3Encoder::new(&sw);

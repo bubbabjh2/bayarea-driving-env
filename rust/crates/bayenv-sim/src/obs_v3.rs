@@ -72,16 +72,20 @@ pub fn gpu_guidance(gd: &Guidance, sim: &Sim, i: usize, row: &mut [f32]) {
     let next_ty = it.peek().map_or(man::ARRIVE, |c| c.1);
     let e = vs.edge[i] as usize;
     let mut d = (g.e_length[e] as f32 - vs.s[i]) as f64;
+    let gib = sim.opts.v3_guide_in_box;
     let (mut k, mut typ, mut sd, mut found) = (rp, 0u8, 0u8, false);
     for _ in 0..256 {
         if vs.refuel_state[i] == 1 && vs.stop_pos[i] == k as i32 { typ = man::REFUEL; sd = SIDE_RIGHT; found = true; break; }
         while it.peek().map_or(false, |c| c.0 < k) { it.next(); }
-        if let Some(&(_, t, s)) = it.peek().filter(|c| c.0 == k) { typ = t; sd = s; found = true; break; }
+        // v3_guide_in_box (GpuOptions::guide_in_box, model_sense.wgsl MF_GUIDE_BOX): > 1 m past the in-edge's end
+        // (inside the box) the maneuver being crossed counts as passed
+        if let Some(&(_, t, s)) = it.peek().filter(|c| c.0 == k && !(gib && d < -1.0)) { typ = t; sd = s; found = true; break; }
         if k + 1 >= n || d > 2000.0 { break; }
         k += 1;
         d += g.e_length[route[k] as usize];
     }
     if !found { typ = next_ty; sd = 0; d = 1e9; }
+    if gib { d = d.max(0.0); }
     for x in row[MANEUVER_OFFSET..TRAIT_OFFSET].iter_mut() { *x = 0.0; }
     row[MANEUVER_OFFSET] = (d / 2000.0).min(1.0) as f32;
     row[MANEUVER_OFFSET + 1 + (typ as usize).min(8)] = 1.0;
@@ -92,8 +96,8 @@ pub fn gpu_guidance(gd: &Guidance, sim: &Sim, i: usize, row: &mut [f32]) {
 
 /// Neighbour inputs 8..19 as the GPU's sense.wgsl writes them: the six lane slots from the footprint lane lists
 /// (eyes.js, as v2), then only the side lanes' ends as stopped obstacles (adjust.js putEnd), the lane end looked up
-/// from the car's route position and its position on the edge. Differs from the v2 (JS driver) inputs: no junction-
-/// conflict obstacle in the own-ahead slot (the GPU has none), and the side lane ends are not found through the
+/// from the car's route position and its position on the edge. Differs from the v2 (JS driver) inputs: the junction-
+/// conflict obstacle in the own-ahead slot only with opts.v3_junction_obstacle (the JS GPU had none), and the side lane ends are not found through the
 /// route distance (which misses the spawn offset).
 pub fn gpu_neighbours(sim: &Sim, i: usize, o: &Obs, row: &mut [f32]) {
     let (vs, g) = (&sim.vs, sim.gw());
@@ -111,6 +115,18 @@ pub fn gpu_neighbours(sim: &Sim, i: usize, o: &Obs, row: &mut [f32]) {
         else { row[at] = (gap.max(0.0) / RANGE) as f32; row[at + 1] = ((nb[2 * k + 1] as f64) / REL_SPEED_NORM).max(-1.0).min(1.0) as f32; }
     }
     let rel = (-v / REL_SPEED_NORM).max(-1.0).min(1.0);
+    // v3_junction_obstacle (GpuOptions::junction_obstacle, model_jyield.wgsl / model_sense.wgsl MF_JUNC_OBST): the
+    // junction-conflict obstacle into the own-ahead slot, as obs v2 (obs_v2.rs encode_core / adjust.js junctionObs)
+    if sim.opts.v3_junction_obstacle {
+        let jn = &o.junction;
+        if jn.distance < 1e8 {
+            let my_t = (jn.distance + vs.length[i] as f64) / v.max(1.0);
+            if jn.stopped || jn.time_to_conflict < my_t + 2.0 {
+                let gap = (jn.distance - 2.0).max(0.0);
+                if gap < RANGE && gap / RANGE < row[NEIGHBOR_OFFSET] as f64 { row[NEIGHBOR_OFFSET] = (gap / RANGE) as f32; row[NEIGHBOR_OFFSET + 1] = rel as f32; }
+            }
+        }
+    }
     let half = 0.5 * vs.length[i] as f64 + 1.0;
     let lane = vs.lane[i] as i32;
     let (route, rp) = (&vs.routes[i], vs.route_pos[i]);
