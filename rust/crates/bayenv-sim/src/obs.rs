@@ -561,6 +561,9 @@ pub fn sense_commands(sim: &Sim, i: usize, out: &mut [f32]) {
     let slot = |st: i64| (i * CTRL_RING + (((st % ring) + ring) % ring) as usize) * CTRL_STRIDE;
     let now = slot(if d >= 1 { s - d } else { s - 1 }); let last = slot(s - 1);
     out[HIST_OFF] = r[now]; out[HIST_OFF + 1] = r[now + 1]; out[HIST_OFF + 2] = r[now + 2];
+    // steer_delay: the steer being applied now left the ring after the steer delay, not the reaction delay
+    let sds = vs.model.steer_delay_steps as i64;
+    if sds >= 0 && sds < d { out[HIST_OFF] = r[slot(if sds >= 1 { s - sds } else { s - 1 })]; }
     out[HIST_OFF + 3] = r[last]; out[HIST_OFF + 4] = r[last + 1]; out[HIST_OFF + 5] = r[last + 2];
     out[HIST_VISIBLE] = 1.0;
 }
