@@ -988,3 +988,51 @@ Each entry: date, decision, why, alternatives, numbers, and one line to say it o
   waits_prev_step 2972 / 2670 / 1860; all three 3000 / 2664 / 1830 (30 min: CPU 1014, before 1032, after 1005).
   Spawned identical (8099). Crash events / minor contacts stay ~25 % lower on the GPU (14504 / 12814 vs 10183 /
   8559), a separate contact-counting difference not addressed here.
+
+## 46. Cars can go through a bridge rail and fall (`barrier_breach`, default off)
+
+- **Date:** 2026-11-22
+- **Decision:** With `SimOpts::barrier_breach` (CPU only; **default off**, also off in `SimOpts::js()`, so training,
+  the GPU and the JS oracle are unchanged), a driving car that strikes the outer (right-hand) barrier of a bridge edge
+  (the graph's bridge flag, which OSM sets on viaducts and overpasses too) goes through it when the impact severity
+  IS = ½ m (v · n)² exceeds the rail's capacity `breach_is_kj`. Then (`src/breach.rs`):
+  - the rail absorbs its capacity from the normal motion; rail friction (μ 0.4) takes the matching share of the
+    speed along it; at least 1 m/s carries the car over the edge;
+  - bookkeeping as a disabling barrier crash: CRASHED event, the trip fails as a crash, a crash record with cause
+    `"breach"` that blocks no lane (the car left the road). The car leaves the vehicle store, so it can never arrive
+    and no lane, leader or contact sees it;
+  - it lives on as a free rigid body in `Sim::falls`: it slides over the deck edge until its centre is past the rail
+    line, then falls under gravity (10 ms sub-steps) with a constant tumble (roll toward the outside 0.25 rad/s per
+    m/s of normal impact speed, clamped to 0.8–3 rad/s, plus 0.6 rad/s nose-down; visual, not computed from the
+    contact). It lands on `Sim::ground`: `breach::DemGround` (the committed 20 m ground grid, `data/dem/compact`; water
+    cells are sea level 0) or sea level 0 without one. On land it slides to rest at 0.7 g and settles onto its wheels or
+    its roof, whichever is nearer; in the water it sinks to 1.2 m below the surface;
+  - `Fall::frame()` is the film replay frame `[x, y, z, heading, speed, state, qx, qy, qz, qw]` (full orientation as
+    a quaternion), which `src/film/replayTraffic.js` in the video repo renders.
+- **Threshold and source:** AASHTO MASH (2016), Test Level 3, test 3-11 (the strength test of a rail for high-speed
+  roads): a 2270 kg pickup at 100 km/h and 25°, IS = ½ · 2270 · (27.78 sin 25°)² = **156 kJ** (MASH tabulates
+  115 kip-ft). IS is the same measure NCHRP Report 350 used. A rail certified at TL-3 is only guaranteed to contain
+  that impact, so the sim lets it fail above it. Caltrans bridge rails are often TL-4 (a 10 t truck at 90 km/h and
+  15°, about 210 kJ), so 156 kJ is on the weak side for the newest rails; `breach_is_kj` is the knob.
+- **What it means:** an SUV (2.1 t) at 30 m/s and 25° (169 kJ) goes through; a sedan (1.5 t) at the same speed and
+  angle (120 kJ) is contained, as a real TL-3 rail must contain it (MASH also tests a 1100 kg car at 100 km/h, 25°);
+  a 5° scrape at 30 m/s is 7 kJ. Trucks and buses breach at shallow angles: a 15 t box truck at 25 m/s needs only
+  about 10.5° (TL-3 rails are not built for them).
+- **Not modelled:** a fall hits nothing on the way (no lower deck, no cars below; on the Bay Bridge's stacked west
+  span an upper-deck breach would really meet the lower deck). The left-hand barrier never breaches: on a one-way edge
+  it is usually the median. No GPU port, no Python keyword.
+- **Tests:** `tests/barrier_breach.rs`. On "road3" with its motorway flagged as a bridge over flat ground 30 m down:
+  the SUV at 30 m/s, 25° breaches (IS 169.4 kJ), lands after 2.90 s (free fall 2.47 s + 0.43 s over the deck edge)
+  at 24.2 m/s (√(2gh) = 24.3), comes to rest flat outside the rail; the same run twice is bit-identical. A 5° scrape,
+  the sedan at 25°, the left-hand barrier and a non-bridge edge do not breach; a TL-2 rail (76 kJ) lets the sedan
+  through. With the flag off the breaching strike is an ordinary contained crash, and every non-breaching run is
+  bit-identical with the flag on and off. On the real map: an SUV at 30 m/s, 25° through the Bay Bridge east span's
+  rail (edge 17109, deck 37.3 m) hits the bay after 3.19 s at 27.1 m/s.
+- **Film:** `tools/film-export breach <data> <out.json> [edge] [type] [steer]` in the video repo. The demo: a box
+  truck on the east span swerves (steer −0.6 for 1.2 s) into the outer rail at 10 m/s normal speed (752 kJ), drops
+  36 m and hits the water at 26.6 m/s, with nine cars of traffic around it.
+- **Alternatives:** a speed-angle table (IS already combines the two the way the crash-test standards do); a
+  probabilistic breach (not deterministic, and nothing to cite for the curve); keeping the fallen car in the store
+  (every lane and leader pass would see a car "on" the bridge 37 m above it).
+- **On camera:** "Bridge rails are crash-tested: a two-tonne pickup at 100 km/h, 25 degrees. That's 156 kilojoules
+  sideways. Hit it harder than that, and in our sim you go over the edge."

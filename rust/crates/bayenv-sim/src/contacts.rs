@@ -118,6 +118,8 @@ impl Sim {
                 // its start mouth sExit or past its end mouth sStop); box_barrier gives the box part widened walls
                 let in_box = g.j.is_some() && (s < g.e_s_exit[eb] + 1.0 || s > g.e_s_stop[eb]);
                 if (!in_box || self.opts.box_barrier) && self.barrier(i, in_box) && par && !touched[i] { touched[i] = true; touched_list.push(i); }
+                // barrier_breach: the car went through the rail and left the store
+                if self.opts.barrier_breach && self.vs.state[i] == STATE_FREE { continue; }
             } else if si == STATE_DRIVING && !self.empty && self.opts.connector_barrier && g.j.is_some() {
                 if self.connector_barrier(i, true).is_some() && par && !touched[i] { touched[i] = true; touched_list.push(i); }
             }
@@ -361,6 +363,8 @@ impl Sim {
         let mut wb = Body { x: cx, z: cz, ..Default::default() };
         let c = Contact { depth, nx, nz, px: cx, pz: cz };
         let pre = Pre { speed: [jm::hypot(a.vx, a.vz), 0.0], heading: [a.yaw, 0.0], nx, nz };
+        // barrier_breach (default off): a strike above the bridge rail's capacity goes through it (breach.rs)
+        if self.opts.barrier_breach { if let Some((vn, is)) = self.breach_test(e, side, in_box, &a, nx, nz) { self.breach(i, &a, &c, vn, is); return true; } }
         // mountable_kerbs: a kerb (not a rigid barrier: freeway system, bridges) met at a low closing speed is mounted
         // and scraped: no rebound, kerb friction, the car may ride up to KERB_MOUNT_DEPTH past the kerb line, a minor
         // contact that never disables; faster strikes hit it like the wall it was before
