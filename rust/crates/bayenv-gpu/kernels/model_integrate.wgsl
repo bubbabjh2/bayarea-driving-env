@@ -16,6 +16,8 @@
 //                       minus grade; with no drive and no brake, rolling resistance holds it against a smaller grade force
 //   MF_STEER_DELAY      steer_delay (i32 steps, -1 = the JS): steering read from the control ring this many steps back
 //                       when that is shorter than the car's reaction delay; the pedals keep the reaction delay
+//   MF_LANE_DROP_HOP    lane_drop_hop: a strict hop from a lane that continues onto no out-edge takes the strict out-edge
+//                       its lane overshoots least (EV_MISSED if not the planned one; JS: the planned edge, strict lat)
 //   MF_CURVATURE        curvature_dynamics: the world heading changes by the car's own yaw only (headingRel takes up the
 //                       road frame's rotation between the start and the end pose, connector / edge transitions included)
 //#orig brake-fb
@@ -112,4 +114,42 @@
       if (MF_CURVATURE) { let d = (poseOf(v).w + v.headingRel) - (v.pyaw - yawDh); v.headingRel = atan2(sin(d), cos(d)); }
       veh[i] = v;
       if (false) {
+//#end
+//#orig lane-drop-hop
+            let nd = eTo(v.edge);
+            for (var q = outStart(nd); q < outStart(nd + 1u); q = q + 1u) {
+              let o = outEdge(q);
+              if (o == en || i32(o) == eRev(v.edge) || hopMap(v.edge, o).x != 1) { continue; }
+              let l3 = mapLane(v.edge, o, ln);
+              if (l3 >= 0 && l3 < i32(eLanes(o))) {
+                routes[pi.routeOff + nxt] = o;   // no maneuver code: the CPU replaces the route from here
+                emit(EV_MISSED, i, o, pi.trip);
+                en = o; break;
+              }
+            }
+//#end
+//#patch lane-drop-hop
+            let nd = eTo(v.edge);
+            var found = false;
+            for (var q = outStart(nd); q < outStart(nd + 1u); q = q + 1u) {
+              let o = outEdge(q);
+              if (o == en || i32(o) == eRev(v.edge) || hopMap(v.edge, o).x != 1) { continue; }
+              let l3 = mapLane(v.edge, o, ln);
+              if (l3 >= 0 && l3 < i32(eLanes(o))) {
+                routes[pi.routeOff + nxt] = o;   // no maneuver code: the CPU replaces the route from here
+                emit(EV_MISSED, i, o, pi.trip);
+                en = o; found = true; break;
+              }
+            }
+            // lane_drop_hop (bayenv-sim vehicle.rs): my lane continues nowhere -> the strict out-edge it overshoots least
+            if (!found && MF_LANE_DROP_HOP) {
+              var best = en; let l0 = mapLane(v.edge, en, ln); var bo = select(select(0, l0 - i32(eLanes(en)) + 1, l0 >= i32(eLanes(en))), -l0, l0 < 0);
+              for (var q = outStart(nd); q < outStart(nd + 1u); q = q + 1u) {
+                let o = outEdge(q);
+                if (o == en || i32(o) == eRev(v.edge) || hopMap(v.edge, o).x != 1) { continue; }
+                let lo2 = mapLane(v.edge, o, ln); let ov = select(select(0, lo2 - i32(eLanes(o)) + 1, lo2 >= i32(eLanes(o))), -lo2, lo2 < 0);
+                if (ov < bo) { bo = ov; best = o; }
+              }
+              if (best != en) { routes[pi.routeOff + nxt] = best; emit(EV_MISSED, i, best, pi.trip); en = best; }
+            }
 //#end

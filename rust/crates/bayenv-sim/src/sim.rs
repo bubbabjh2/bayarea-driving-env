@@ -83,6 +83,19 @@ pub struct SimOpts {
     /// the same barrier response as edges. The JS had none: cars drifted up to 15 m off a connector and were pushed
     /// back in one step at the exit.
     pub connector_barrier: bool,
+    /// Model fix (default ON; false = the JS): the junction-box parts of an edge (before its start mouth sExit + 1, past
+    /// its end mouth sStop) have walls too: the edge's own barrier lines widened by `contacts::BOX_MARGIN` for the
+    /// junction's corners. The JS had none there, so a car crossing the box at a large heading error (or pushed off its
+    /// line in a collision) could drive tens to thousands of metres sideways in the edge frame; the first edge-barrier
+    /// check past the box then met it at that depth: a "phantom wall" strike with delta-v near the full speed, at the
+    /// kerb line, after a 1-2 s excursion off the road (DECISIONS.md 39).
+    pub box_barrier: bool,
+    /// Model fix (default ON; false = the JS): at a strict hop (freeway diverge) from a lane that continues onto no
+    /// out-edge (a lane dropped at the node, e.g. 6 lanes -> 4 + a 1-lane ramp), the car takes the strict out-edge its
+    /// lane overshoots least (a missed exit if that is not the planned edge). The JS kept the planned edge with the
+    /// strict lat, so a car in the dropped far-left lane routed onto a right-hand ramp landed 16.6 m past the ramp's
+    /// barrier line: a deep barrier contact (a teleport in the JS) on hr = 0 (DECISIONS.md 39).
+    pub lane_drop_hop: bool,
     /// Model fix (default ON; false = the JS): a braked car below 0.02 m/s is held by static friction (the JS let
     /// stopped cars creep at up to 0.02 m/s under a held brake).
     pub brake_hold: bool,
@@ -126,11 +139,11 @@ impl Pose { fn of(c: &Car, g: &World) -> Pose { let mut pc = *c; pc.update_pose(
 
 impl SimOpts {
     /// the integrate-side model fixes
-    pub fn model_flags(&self) -> crate::vehicle::ModelFlags { crate::vehicle::ModelFlags { fixes: crate::physics::Fixes { hold: self.brake_hold, heavy_brakes: self.heavy_brakes, reverse: self.impact_reverse, static_hold: self.static_hold, idle_creep: self.idle_creep }, curvature: self.curvature_dynamics, wreck_end_stop: self.wreck_end_stop,
+    pub fn model_flags(&self) -> crate::vehicle::ModelFlags { crate::vehicle::ModelFlags { fixes: crate::physics::Fixes { hold: self.brake_hold, heavy_brakes: self.heavy_brakes, reverse: self.impact_reverse, static_hold: self.static_hold, idle_creep: self.idle_creep }, curvature: self.curvature_dynamics, wreck_end_stop: self.wreck_end_stop, lane_drop_hop: self.lane_drop_hop,
         steer_delay_steps: if self.steer_delay < 0.0 { -1 } else { jm::round(self.steer_delay / self.dt) as i32 } } }
     /// The JS sim's model (oracle checks, trace_check / v2_check, JS-port tests): Default with the model fixes off
     /// (replan_at_missed_event = false). Checkpoints trained on the JS CPU sim saw this model.
-    pub fn js() -> SimOpts { SimOpts { replan_at_missed_event: false, lane_index_snapshot: false, wreck_real_mass: false, curvature_dynamics: false, smooth_geometry: false, junction_radii: false, spawn_clearance: false, wreck_end_stop: false, contact_episodes: false, connector_barrier: false, brake_hold: false, static_hold: false, mountable_kerbs: false, idle_creep: false, steer_delay: -1.0, heavy_brakes: false, barrier_soft_push: false, impact_reverse: false, ..SimOpts::default() } }
+    pub fn js() -> SimOpts { SimOpts { replan_at_missed_event: false, lane_index_snapshot: false, wreck_real_mass: false, curvature_dynamics: false, smooth_geometry: false, junction_radii: false, spawn_clearance: false, wreck_end_stop: false, contact_episodes: false, connector_barrier: false, box_barrier: false, lane_drop_hop: false, brake_hold: false, static_hold: false, mountable_kerbs: false, idle_creep: false, steer_delay: -1.0, heavy_brakes: false, barrier_soft_push: false, impact_reverse: false, ..SimOpts::default() } }
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -143,7 +156,7 @@ impl Default for SimOpts {
             cell_size: 25.0, table_bits: 18, leader_lookahead: 250.0, merge_lookahead: 80.0, lane_end_lookahead: 450.0, control_lookahead: 250.0,
             reroute: true, reroute_sight: 2000.0, squeeze_delay: 900.0, squeeze_speed: 3.0, density_interval: 60.0, path_sight: 0.0,
             deadlock_break: 0.0, spawn_lane_route: 0.0, junction_sight: 0.0, position_mode: true, traffic_mode: TrafficMode::Full, fuel: true,
-            seed: 1.0, wrecks: 0, default_action: Action { steer: Some(0.0), steer_rate: None, gas: 0.0, brake: 0.3 }, fuel_cfg: Default::default(), slot_pool: 0, parallel: false, replan_at_missed_event: true, batch_dynamics: true, lane_index_snapshot: true, wreck_real_mass: true, curvature_dynamics: false, smooth_geometry: false, junction_radii: false, spawn_clearance: false, spawn_clearance_m: 18.0, wreck_end_stop: true, contact_episodes: true, connector_barrier: true, brake_hold: false, static_hold: true, mountable_kerbs: true, idle_creep: true, steer_delay: STEER_DELAY, heavy_brakes: true, barrier_soft_push: true, impact_reverse: true }
+            seed: 1.0, wrecks: 0, default_action: Action { steer: Some(0.0), steer_rate: None, gas: 0.0, brake: 0.3 }, fuel_cfg: Default::default(), slot_pool: 0, parallel: false, replan_at_missed_event: true, batch_dynamics: true, lane_index_snapshot: true, wreck_real_mass: true, curvature_dynamics: false, smooth_geometry: false, junction_radii: false, spawn_clearance: false, spawn_clearance_m: 18.0, wreck_end_stop: true, contact_episodes: true, connector_barrier: true, box_barrier: true, lane_drop_hop: true, brake_hold: false, static_hold: true, mountable_kerbs: true, idle_creep: true, steer_delay: STEER_DELAY, heavy_brakes: true, barrier_soft_push: true, impact_reverse: true }
     }
 }
 
@@ -290,6 +303,8 @@ pub struct Sim {
     pub(crate) off_lane: crate::fx::ListMap<i32>,
     pub(crate) touch: HashSet<i64>,
     pub(crate) barrier_touch: HashSet<usize>, pub(crate) barrier_now: HashSet<usize>,
+    /// diagnostics: Some = every barrier() contact is recorded here (None by default; no effect on the sim)
+    pub barrier_dbg: Option<Vec<crate::contacts::BarrierDbg>>,
     /// contact_episodes: accumulated delta-v of the barrier / pair contact episodes (last step, this step)
     pub(crate) barrier_ep: HashMap<usize, f64>, pub(crate) barrier_ep_now: HashMap<usize, f64>,
     pub(crate) touch_ep: HashMap<i64, (f64, f64)>, pub(crate) touch_ep_now: HashMap<i64, (f64, f64)>,
@@ -370,7 +385,7 @@ impl Sim {
             trips, trip_ptr: 0, pending: Vec::new(), lot: Vec::new(), crashes: Vec::new(), active: Vec::new(), edge_crashes: HashMap::default(), edge_has_crash: vec![0; ne],
             counters: Counters::default(), accum: Accum::default(), live: Live::default(), density: Density::default(), obstacle_rng: None, brake_every: (15.0, 40.0),
             spawned_keys: HashSet::default(), spawn_dirty: HashSet::default(), plan_prefetch: HashMap::default(), plan_horizon: f64::NEG_INFINITY, phase_a: Vec::new(), indexed: Vec::new(), pair_event: HashMap::default(), stuck_labelled: HashMap::default(), conn_cars: Default::default(), node_conn: Default::default(),
-            passers: Default::default(), conflict_with: HashMap::default(), off_lane: Default::default(), touch: HashSet::default(), barrier_touch: HashSet::default(), barrier_now: HashSet::default(), barrier_ep: HashMap::default(), barrier_ep_now: HashMap::default(), touch_ep: HashMap::default(), touch_ep_now: HashMap::default(), reverse_stash: HashMap::default(),
+            passers: Default::default(), conflict_with: HashMap::default(), off_lane: Default::default(), touch: HashSet::default(), barrier_touch: HashSet::default(), barrier_now: HashSet::default(), barrier_dbg: None, barrier_ep: HashMap::default(), barrier_ep_now: HashMap::default(), touch_ep: HashMap::default(), touch_ep_now: HashMap::default(), reverse_stash: HashMap::default(),
             yield_by: None, creep_until: Vec::new(), creep_ignore: Vec::new(), edge_speed: HashMap::default(), traffic_penalty: None,
             last_reroute: HashMap::default(), next_traffic: 0.0, next_reroute: 0.0, next_density: start, edge_count_scratch: vec![0; ne], fwy, fwy_lane_km,
             near_buf: Vec::new(), static_obstacles: Vec::new(), obstacles: Vec::new(), profile: std::env::var("BAYENV_PROFILE").is_ok(), phase_ns: [0; 10], sub_ns: [0; 12], events: StepEvents::default(), event_log: Vec::new(), p2_reruns: 0, collided_last: Vec::new(), batch_policy: None,

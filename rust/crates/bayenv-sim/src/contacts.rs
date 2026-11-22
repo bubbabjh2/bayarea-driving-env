@@ -10,6 +10,9 @@ use crate::world::{World, HW_PULLOVER};
 pub const DISABLE_KMH: f64 = 10.0;
 /// largest barrier penetration correction per step with SimOpts::barrier_soft_push (m)
 pub const BARRIER_PUSH_MAX: f64 = 0.25;
+/// SimOpts::box_barrier: how far past an edge's barrier lines its junction-box parts reach (corner radii, the mouth of the
+/// cross street) before a wall (m)
+pub const BOX_MARGIN: f64 = 3.5;
 /// SimOpts::mountable_kerbs: closing speed into a kerb below which it is mounted and scraped (m/s)
 pub const KERB_MOUNT_SPEED: f64 = 2.0;
 /// how far past the kerb line a mounting car may ride before the kerb pushes back (m)
@@ -67,6 +70,16 @@ pub(crate) fn frame_end(g: &World, vs: &VehicleStore, i: usize) -> f64 {
     g.e_length[vs.edge[i] as usize]
 }
 
+/// One barrier() contact (Sim::barrier_dbg diagnostics).
+#[derive(Clone, Copy, Debug)]
+pub struct BarrierDbg {
+    pub step: u64, pub slot: usize, pub edge: i32, pub s: f64, pub lat: f64, pub heading_rel: f64, pub speed: f64, pub v_lat: f64,
+    pub side: f64, pub depth: f64, pub right: f64, pub left: f64, pub pad_r: f64, pub pad_l: f64, pub b_right: f64, pub b_left: f64, pub b_r: f64,
+    pub ext: f64, pub nx: f64, pub nz: f64, pub vx: f64, pub vz: f64, pub dva: f64, pub jn: f64, pub scrape: bool, pub x: f64, pub y: f64, pub z: f64,
+    /// on a junction-box part of the edge (SimOpts::box_barrier walls)
+    pub in_box: bool,
+}
+
 impl Sim {
     pub(crate) fn contacts(&mut self) {
         self.reverse_stash.clear();
@@ -101,7 +114,10 @@ impl Sim {
             if si == STATE_DRIVING && !self.empty && self.vs.conn[i] < 0 {
                 let eb = self.vs.edge[i] as usize;
                 let s = f(self.vs.s[i]);
-                if !(g.j.is_some() && (s < g.e_s_exit[eb] + 1.0 || s > g.e_s_stop[eb])) && self.barrier(i) && par && !touched[i] { touched[i] = true; touched_list.push(i); }
+                // the JS has no edge barriers inside a junction box (on a connector, or on the box part of an edge: before
+                // its start mouth sExit or past its end mouth sStop); box_barrier gives the box part widened walls
+                let in_box = g.j.is_some() && (s < g.e_s_exit[eb] + 1.0 || s > g.e_s_stop[eb]);
+                if (!in_box || self.opts.box_barrier) && self.barrier(i, in_box) && par && !touched[i] { touched[i] = true; touched_list.push(i); }
             } else if si == STATE_DRIVING && !self.empty && self.opts.connector_barrier && g.j.is_some() {
                 if self.connector_barrier(i, true).is_some() && par && !touched[i] { touched[i] = true; touched_list.push(i); }
             }
@@ -277,7 +293,8 @@ impl Sim {
         if si == STATE_DRIVING && !self.empty && vs.conn[i] < 0 {
             let eb = vs.edge[i] as usize;
             let s = f(vs.s[i]);
-            if !(g.j.is_some() && (s < g.e_s_exit[eb] + 1.0 || s > g.e_s_stop[eb])) && self.barrier_hit(i) { return true; }
+            let in_box = g.j.is_some() && (s < g.e_s_exit[eb] + 1.0 || s > g.e_s_stop[eb]);
+            if (!in_box || self.opts.box_barrier) && self.barrier_hit(i, in_box) { return true; }
         } else if si == STATE_DRIVING && !self.empty && self.opts.connector_barrier && g.j.is_some() && self.connector_barrier_hit(i) { return true; }
         if self.empty && si == STATE_DRIVING { return false; }
         let mov_i = si == STATE_DRIVING || vs.speed[i].abs() > 0.01 || jm::abs(f(vs.v_lat[i])) > 0.01;
@@ -307,7 +324,8 @@ impl Sim {
     }
 
     /// Returns whether slot i touched a barrier (state changed).
-    pub(crate) fn barrier(&mut self, i: usize) -> bool {
+    /// `in_box`: the car is on a junction-box part of its edge (SimOpts::box_barrier): the limits widen by BOX_MARGIN.
+    pub(crate) fn barrier(&mut self, i: usize, in_box: bool) -> bool {
         let g = self.gw();
         let vs = &self.vs;
         let e = vs.edge[i] as usize;
@@ -316,8 +334,9 @@ impl Sim {
         let (mut pad_r, mut pad_l) = (0.0, g.e_lanes[e] as f64 * w);
         if let Some(lg) = &g.lg { let bd = lg.bounds(e, s); pad_r = bd.r - bd.right; pad_l = bd.r - bd.left; }
         else { let taper = if f(vs.taper[i]) > s { w } else { 0.0 }; if vs.lat[i] < 0.0 { pad_r -= taper; } if f(vs.lat[i]) > pad_l { pad_l += taper; } }
-        let right = pad_r - if g.is_shoulder_road(e) { self.opts.freeway_shoulder } else { self.opts.shoulder };
-        let left = pad_l + if g.e_rev[e] >= 0 { jm::or(g.e_opp[e] as f64, g.e_lanes[e] as f64) * w + self.opts.opposite_margin } else { self.opts.shoulder };
+        let mut right = pad_r - if g.is_shoulder_road(e) { self.opts.freeway_shoulder } else { self.opts.shoulder };
+        let mut left = pad_l + if g.e_rev[e] >= 0 { jm::or(g.e_opp[e] as f64, g.e_lanes[e] as f64) * w + self.opts.opposite_margin } else { self.opts.shoulder };
+        if in_box { right -= BOX_MARGIN; left += BOX_MARGIN; }
         let hr = f(vs.heading_rel[i]);
         let (sh, ch) = (jm::sin(hr), jm::cos(hr));
         let (hl, hw, lat) = (f(vs.hl[i]), f(vs.hw[i]), f(vs.lat[i]));
@@ -348,7 +367,15 @@ impl Sim {
         let into = (a.vx - a.w * (c.pz - a.z)) * nx + (a.vz + a.w * (c.px - a.x)) * nz;
         let vs_edge_i = self.vs.edge[i] as usize;
         let scrape = self.opts.mountable_kerbs && !g.rigid_edge(vs_edge_i) && into < KERB_MOUNT_SPEED;
+        let (avx, avz) = (a.vx, a.vz);
         let res = if scrape { physics::resolve_contact(&mut a, &mut wb, &c, 0.0, KERB_FRICTION) } else { physics::resolve_contact(&mut a, &mut wb, &c, physics::WALL_RESTITUTION, physics::WALL_FRICTION) };
+        if self.barrier_dbg.is_some() {
+            let vs = &self.vs;
+            let bd = g.lg.as_ref().map(|lg| lg.bounds(e, s)).unwrap_or(crate::world::Bounds { right: f64::NAN, left: f64::NAN, r: f64::NAN });
+            let d = BarrierDbg { step: self.step_count as u64, slot: i, edge: e as i32, s, lat, heading_rel: hr, speed: f(vs.speed[i]), v_lat: f(vs.v_lat[i]), side, depth, right, left, pad_r, pad_l,
+                b_right: bd.right, b_left: bd.left, b_r: bd.r, ext, nx, nz, vx: avx, vz: avz, dva: res.dva, jn: res.jn, scrape, x: f(vs.x[i]), y: f(vs.y[i]), z: f(vs.z[i]), in_box };
+            self.barrier_dbg.as_mut().unwrap().push(d);
+        }
         self.write_back(i, &a);
         let corr = if scrape { jm::min(jm::max(0.0, depth - KERB_MOUNT_DEPTH), BARRIER_PUSH_MAX) } else if self.opts.barrier_soft_push { jm::min(depth, BARRIER_PUSH_MAX) } else { depth };
         let vs = &mut self.vs;
@@ -378,7 +405,7 @@ impl Sim {
     }
 
     /// Whether _barrier(i) would act (pure; same expressions).
-    fn barrier_hit(&self, i: usize) -> bool {
+    fn barrier_hit(&self, i: usize, in_box: bool) -> bool {
         let g = self.gw();
         let vs = &self.vs;
         let e = vs.edge[i] as usize;
@@ -387,8 +414,9 @@ impl Sim {
         let (mut pad_r, mut pad_l) = (0.0, g.e_lanes[e] as f64 * w);
         if let Some(lg) = &g.lg { let bd = lg.bounds(e, s); pad_r = bd.r - bd.right; pad_l = bd.r - bd.left; }
         else { let taper = if f(vs.taper[i]) > s { w } else { 0.0 }; if vs.lat[i] < 0.0 { pad_r -= taper; } if f(vs.lat[i]) > pad_l { pad_l += taper; } }
-        let right = pad_r - if g.is_shoulder_road(e) { self.opts.freeway_shoulder } else { self.opts.shoulder };
-        let left = pad_l + if g.e_rev[e] >= 0 { jm::or(g.e_opp[e] as f64, g.e_lanes[e] as f64) * w + self.opts.opposite_margin } else { self.opts.shoulder };
+        let mut right = pad_r - if g.is_shoulder_road(e) { self.opts.freeway_shoulder } else { self.opts.shoulder };
+        let mut left = pad_l + if g.e_rev[e] >= 0 { jm::or(g.e_opp[e] as f64, g.e_lanes[e] as f64) * w + self.opts.opposite_margin } else { self.opts.shoulder };
+        if in_box { right -= BOX_MARGIN; left += BOX_MARGIN; }
         let hr = f(vs.heading_rel[i]);
         let (sh, ch) = (jm::sin(hr), jm::cos(hr));
         let (hl, hw, lat) = (f(vs.hl[i]), f(vs.hw[i]), f(vs.lat[i]));
