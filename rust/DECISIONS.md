@@ -1058,3 +1058,38 @@ Each entry: date, decision, why, alternatives, numbers, and one line to say it o
   - The residual input 8..11 differences are identical with the fixes on and in the base run, so they come from elsewhere (pre-existing).
 - **Trainer note:** v3 nets trained before this see a slightly different input distribution at boxes. Retrain or DAgger them on this pin rather than mixing pins.
 - **On camera:** "The bigger brain could see sixteen cars around it, but it couldn't see a blocked intersection right in front of it. One line fixed that."
+
+## 48. Contact counts at density; lane-end "into", junction candidate lists, own-behind after a footprint change (`lane_end_into`, `junction_cand_cap`, `sense_list_behind`, default on)
+
+- **Date:** 2026-11-22
+- **Question:** at 10,000 commuters (closed-loop obs-v2 driver of entry 45, 2 h) the GPU logged ~25 % fewer crash
+  events / minor contacts than the CPU (14504 / 12814 vs 10183 / 8559) with arrivals matched.
+- **Where the gap is:** by event kind (examples/density.rs), pair contacts and crashes match (60 min: CONTACT pair
+  CPU 2623 / GPU 2458, CRASHED pair 1243 / 1224, crashed vehicles 1311 / 1283); the whole gap is single-car barrier
+  (kerb) CONTACT rows, and those come from a handful of trips: at 60 min 64 CPU / 66 GPU trips had a barrier contact,
+  but the top 20 of them made 93 % of the rows (one trip up to ~1200 rows an hour). They are cars whose lane keeper
+  weaves against a kerb: every re-touch after a step without contact is a new episode and one CONTACT row.
+- **Barrier physics is exact:** `examples/contact_diff.rs` (the CPU vehicle store imported into the GPU, both stepped
+  with the CPU policy's actions, re-imported each step): every barrier touch, push, speed and lateral velocity
+  equal, delta-v equal up to the GPU's 0.1 km/h event packing. Run closed loop from one import, the same cars stay
+  equal for 1000+ steps; their divergences, traced to the first differing input, gave the three fixes below.
+- **lane_end_into:** sim.js `_laneEnd` (and bayenv-sim) put the lane-end obstacle of a merging car whose footprint
+  already reaches the lane it merges toward 30 m past the node (`into && laneGeom ? dEnd + 30 : atNode`); the JS GPU
+  kernel had only `atNode`, so such a car braked to the node of its ending lane (input 8: GPU gap 30 m shorter).
+  `kernels/model_leaders.wgsl` MF_LANE_END_INTO.
+- **sense_list_behind (with obs_after_step):** the row is sensed after integrate, the lane lists (vidx) are from
+  before; behindIn indexed vidx with the post-step laneLo, so after a footprint change it read another lane's entry
+  (input 10 = 0 for one step where the CPU's index snapshot has no car behind). `kernels/model_sense.wgsl`
+  MF_LIST_BEHIND looks the car up in its lane's list.
+- **junction_cand_cap:** the swept-path (32) and path-body (48) candidate lists of jperceive / pathBodies hold 128
+  (bayenv-sim: unlimited); a candidate dropped for room after the filters is counted in GPU stats 62 / 63. Overflow
+  at 10,000 commuters over 2 h: 0 / 0 with the JS sizes and with 128 (the cap is not a factor).
+- **Numbers (10,000 commuters, 2 h):** crash events / minor contacts / barrier CONTACT rows / arrived: CPU 14504 /
+  12814 / 10699 / 2999; GPU before (same runner, lane_end_into and the cap off) 9330 / 7708 / 5585 / 2972; after 12248 /
+  10599 / 8456 / 2986. The rest is run-to-run variance of the grinding trips: perturbing the steering gain by
+  0.1 % / 0.2 % moves the 60-min barrier rows CPU 7357 → 5296, GPU 4551 → 3856 / 6396 (pair contacts within 4 %).
+  A per-trip residual (GPU mean ~20 % below the CPU over these few runs) is not resolved; the events of one step from
+  the same state match.
+- **Test:** `tests/junction_obstacle.rs` now also checks every lane-end leader (-2) gap and the own-behind input
+  against the CPU after each import (rows on edges where either backend spawned a car in the step are skipped: the
+  spawn queue is not imported); the flag-off variants must differ.
