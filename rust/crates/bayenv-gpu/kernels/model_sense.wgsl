@@ -51,7 +51,7 @@
 //#end
 //#patch commands-now
   var ons = on;
-  if (MF_STEER_DELAY >= 0 && MF_STEER_DELAY < i32(pi.delaySteps)) { ons = (i * CTRL_RING + select(S - u32(max(MF_STEER_DELAY, 0)), S - 1u, MF_STEER_DELAY == 0) % CTRL_RING) * CTRL_STRIDE; }
+  if (MF_STEER_DELAY >= 0 && MF_STEER_DELAY < i32(pi.delaySteps)) { ons = (i * CTRL_RING + (S + CTRL_RING - select(u32(max(MF_STEER_DELAY, 0)), 1u, MF_STEER_DELAY == 0)) % CTRL_RING) * CTRL_STRIDE; }
   inputs[b + 87u] = ring[ons]; inputs[b + 88u] = ring[on + 1u]; inputs[b + 89u] = ring[on + 2u];
 //#end
 // MF_GUIDE_BOX (GpuOptions::guide_in_box): inside a junction box the car's s (in-edge frame) runs past the in-edge's
@@ -70,5 +70,16 @@
 //#end
 //#patch guide-distance
   inputs[b + OFF_MAN] = min(select(d, max(d, 0.0), MF_GUIDE_BOX) / 2000.0, 1.0);
+//#end
+// MF_RING_FIX (GpuOptions::obs_ring_fix): senseV3's "now" command index S - d is u32; while the step counter is below
+// the car's delay (the first <= 39 steps of a sim) it wraps (2^32 is not a multiple of the 40-entry ring) and inputs
+// 87..89 read a written entry instead of the unwritten (0) one bayenv-sim's modular index reads. The patch indexes
+// (S + ring - d) % ring.
+//#orig ring-now
+  var sn = S - 1u; if (dl >= 1u) { sn = S - dl; }
+//#end
+//#patch ring-now
+  var sn = S - 1u; if (dl >= 1u) { sn = S - dl; }
+  if (MF_RING_FIX) { sn = S + CTRL_RING - 1u; if (dl >= 1u) { sn = S + CTRL_RING - dl; } }
 //#end
 
