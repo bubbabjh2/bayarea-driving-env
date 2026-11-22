@@ -158,12 +158,12 @@ pub struct GpuOptions {
     /// Guidance inside junction boxes as on the CPU (default ON; kernels/model_sense.wgsl MF_GUIDE_BOX): once the car is
     /// past the in-edge's end in a box, obs input 20..32 show the next maneuver (distance >= 0), not the junction being
     /// crossed with a negative distance (the JS GPU kernel).
-    /// obs v2 only for now: the v3 rows keep the JS GPU guidance, which bayenv-sim's V3Encoder mirrors (DECISIONS.md 42 / 43).
+    /// obs v2 and v3 (v3 since DECISIONS.md 46; bayenv-sim's V3Encoder mirrors it with SimOpts::v3_guide_in_box).
     pub guide_in_box: bool,
     /// obs v3 command-ring index without u32 wrap in the first steps (default ON; kernels/model_sense.wgsl MF_RING_FIX)
     pub obs_ring_fix: bool,
     /// The junction-conflict obstacle in the own-ahead obs slot (inputs 8 / 9) as bayenv-sim's encoder (default ON;
-    /// kernels/model_jyield.wgsl + model_sense.wgsl; the JS GPU never put it, DECISIONS.md 45). obs v2 only (as guide_in_box).
+    /// kernels/model_jyield.wgsl + model_sense.wgsl; the JS GPU never put it, DECISIONS.md 45). obs v2 and v3 (v3 since DECISIONS.md 46; CPU mirror SimOpts::v3_junction_obstacle).
     pub junction_obstacle: bool,
     /// Junction perception's "waits for me" reads the other car's leader / conflict partner of the previous step's end,
     /// as bayenv-sim's slot-order pass (default ON; kernels/model_leaders.wgsl, with deterministic_leaders; DECISIONS.md 45).
@@ -235,7 +235,7 @@ impl GpuOptions {
         kernels::ModelFixes { cpu_connector_join: self.cpu_connector_join, contact_tangent: self.contact_tangent, wreck_real_mass: self.wreck_real_mass,
             curvature_dynamics: self.curvature_dynamics, wreck_end_stop: self.wreck_end_stop, contact_episodes: self.contact_episodes, connector_barrier: self.connector_barrier, box_barrier: self.box_barrier,
             brake_hold: self.brake_hold, heavy_brakes: self.heavy_brakes, barrier_soft_push: self.barrier_soft_push, impact_reverse: self.impact_reverse, spawn_clearance: self.spawn_clearance,
-            static_hold: self.static_hold, idle_creep: self.idle_creep, mountable_kerbs: self.mountable_kerbs, hill_rollback: self.hill_rollback, obs_after_step: self.obs_after_step, guide_in_box: self.guide_in_box && self.obs != ObsMode::V3, obs_ring_fix: self.obs_ring_fix, junction_obstacle: self.junction_obstacle && self.obs != ObsMode::V3, waits_prev_step: self.waits_prev_step && self.deterministic_leaders, box_standstill: self.box_standstill, lane_drop_hop: self.lane_drop_hop, steer_delay_steps: if self.steer_delay < 0.0 { None } else { Some(jsmath::round(self.steer_delay / self.dt) as u32) } }
+            static_hold: self.static_hold, idle_creep: self.idle_creep, mountable_kerbs: self.mountable_kerbs, hill_rollback: self.hill_rollback, obs_after_step: self.obs_after_step, guide_in_box: self.guide_in_box, obs_ring_fix: self.obs_ring_fix, junction_obstacle: self.junction_obstacle, waits_prev_step: self.waits_prev_step && self.deterministic_leaders, box_standstill: self.box_standstill, lane_drop_hop: self.lane_drop_hop, steer_delay_steps: if self.steer_delay < 0.0 { None } else { Some(jsmath::round(self.steer_delay / self.dt) as u32) } }
     }
     /// Every model fix off: the JS kernels (oracle checks, legacy checkpoints).
     pub fn js_model(mut self) -> GpuOptions {
