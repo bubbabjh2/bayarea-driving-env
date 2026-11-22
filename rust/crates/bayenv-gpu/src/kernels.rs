@@ -62,6 +62,7 @@ pub const HOST_SOURCES: &[(&str, &str)] = &[
     ("model_sense", include_str!("../kernels/model_sense.wgsl")),
     ("model_jyield", include_str!("../kernels/model_jyield.wgsl")),
     ("model_leaders", include_str!("../kernels/model_leaders.wgsl")),
+    ("model_perceive", include_str!("../kernels/model_perceive.wgsl")),
     ("model_junction", include_str!("../kernels/model_junction.wgsl")),
     ("heading_preview", include_str!("../kernels/heading_preview.wgsl")),
 ];
@@ -138,6 +139,20 @@ pub fn source(spec: &KernelSpec, obs: ObsMode, cap: usize) -> String {
 /// `parseBindings`: `@group(g) @binding(b) var<space[, access]> name`.
 #[derive(Clone, Debug, PartialEq)]
 pub struct Decl { pub group: u32, pub binding: u32, pub space: String, pub access: String, pub name: String }
+/// Storage buffers a kernel binds (WebGPU maxStorageBuffersPerShaderStage counts them over all groups of the stage).
+pub fn storage_buffers(code: &str) -> u32 { parse_bindings(code).iter().filter(|d| d.space != "uniform").count() as u32 }
+/// The adapter's maxStorageBuffersPerShaderStage against what kernel `label` binds: a clear error before pipeline
+/// creation (the device check only requires 10; with steer_delay >= 0 and obs_after_step the sense kernel also binds
+/// `actions`, with junction_obstacle `jobst`).
+pub fn check_storage_limit(label: &str, code: &str, limit: u32) -> Result<(), String> {
+    let n = storage_buffers(code);
+    if n > limit {
+        return Err(format!("kernel {label} binds {n} storage buffers but the GPU adapter allows {limit} per shader stage (maxStorageBuffersPerShaderStage); \
+            the sense kernel's model patches add `actions` (steer_delay >= 0 with obs_after_step) and `jobst` (junction_obstacle): \
+            turn those GpuOptions off or use a larger adapter"));
+    }
+    Ok(())
+}
 pub fn parse_bindings(code: &str) -> Vec<Decl> {
     let mut out = Vec::new(); let b = code.as_bytes(); let mut i = 0;
     while let Some(p) = code[i..].find("@group(") {
@@ -219,6 +234,10 @@ pub struct ModelFixes {
     pub junction_cand_cap: bool,
     /// GpuOptions::sense_list_behind (kernels/model_sense.wgsl MF_LIST_BEHIND)
     pub sense_list_behind: bool,
+    /// GpuOptions::guide_odometer (kernels/model_sense.wgsl MF_GUIDE_ODO)
+    pub guide_odometer: bool,
+    /// GpuOptions::sector_snap (kernels/model_perceive.wgsl MF_SECTOR_SNAP)
+    pub sector_snap: bool,
     /// steer_delay in steps (None = the JS: steering delayed by the reaction time like the pedals)
     pub steer_delay_steps: Option<u32>,
     /// kernels/spawn_clearance.wgsl (spawn.wgsl; the host writes the start index into the spawn-queue entry)
@@ -230,7 +249,7 @@ impl ModelFixes {
     pub fn all() -> ModelFixes {
         ModelFixes { cpu_connector_join: true, contact_tangent: true, wreck_real_mass: true, curvature_dynamics: true, wreck_end_stop: true, contact_episodes: true,
             connector_barrier: true, box_barrier: true, brake_hold: true, heavy_brakes: true, barrier_soft_push: true, impact_reverse: true, spawn_clearance: true,
-            static_hold: true, idle_creep: true, mountable_kerbs: true, lane_drop_hop: true, hill_rollback: true, obs_after_step: true, guide_in_box: true, obs_ring_fix: true, junction_obstacle: true, waits_prev_step: true, box_standstill: true, lane_end_into: true, junction_cand_cap: true, sense_list_behind: true, steer_delay_steps: Some(3) }
+            static_hold: true, idle_creep: true, mountable_kerbs: true, lane_drop_hop: true, hill_rollback: true, obs_after_step: true, guide_in_box: true, obs_ring_fix: true, junction_obstacle: true, waits_prev_step: true, box_standstill: true, lane_end_into: true, junction_cand_cap: true, sense_list_behind: true, guide_odometer: true, sector_snap: true, steer_delay_steps: Some(3) }
     }
     /// kernels/model_integrate.wgsl is applied (any of its flags on)
     pub fn integrate_on(&self) -> bool { self.curvature_dynamics || self.wreck_end_stop || self.brake_hold || self.heavy_brakes || self.impact_reverse || self.static_hold || self.idle_creep || self.lane_drop_hop || self.steer_delay_steps.is_some() || self.hill_rollback }
@@ -256,11 +275,12 @@ pub fn model_patches(src: String, file: &str, m: &ModelFixes) -> String {
                 + &patch_text(&src, "model_contacts")
         }
         "spawn" if m.spawn_clearance => patch_text(&src, "spawn_clearance"),
+        "perceive" if m.sector_snap => format!("const MF_SECTOR_SNAP: bool = {};\n", m.sector_snap) + &patch_text(&src, "model_perceive"),
         "leaders" if m.waits_prev_step || m.lane_end_into => format!("const MF_WAITS_PREV: bool = {};\nconst MF_LANE_END_INTO: bool = {};\n", m.waits_prev_step, m.lane_end_into) + &patch_text(&src, "model_leaders"),
         "junction" if m.box_standstill || m.junction_cand_cap => format!("const MF_BOX_STILL: bool = {};\nconst CAND_SWEPT: u32 = {}u;\nconst CAND_PATH: u32 = {}u;\n", m.box_standstill, if m.junction_cand_cap { 128 } else { 32 }, if m.junction_cand_cap { 128 } else { 48 }) + &patch_text(&src, "model_junction"),
         "jyield" if m.junction_obstacle => format!("const MF_JUNC_OBST: bool = {};\n", m.junction_obstacle) + &patch_text(&src, "model_jyield"),
-        "sense" if (m.steer_delay_steps.is_some() || m.obs_after_step || m.guide_in_box || m.obs_ring_fix || m.junction_obstacle || m.sense_list_behind) && std::env::var("BAYENV_NO_SENSE_PATCH").is_err() =>   // diagnostics: BAYENV_NO_SENSE_PATCH=1 = the JS window
-            format!("const MF_STEER_DELAY: i32 = {};\nconst MF_OBS_AFTER: bool = {};\nconst MF_GUIDE_BOX: bool = {};\nconst MF_RING_FIX: bool = {};\nconst MF_JUNC_OBST: bool = {};\nconst MF_LIST_BEHIND: bool = {};\n", m.steer_delay_steps.map_or(-1, |k| k as i32), m.obs_after_step, m.guide_in_box, m.obs_ring_fix, m.junction_obstacle, m.sense_list_behind) + &patch_text(&src, "model_sense"),
+        "sense" if (m.steer_delay_steps.is_some() || m.obs_after_step || m.guide_in_box || m.obs_ring_fix || m.junction_obstacle || m.sense_list_behind || m.guide_odometer) && std::env::var("BAYENV_NO_SENSE_PATCH").is_err() =>   // diagnostics: BAYENV_NO_SENSE_PATCH=1 = the JS window
+            format!("const MF_STEER_DELAY: i32 = {};\nconst MF_OBS_AFTER: bool = {};\nconst MF_GUIDE_BOX: bool = {};\nconst MF_RING_FIX: bool = {};\nconst MF_JUNC_OBST: bool = {};\nconst MF_LIST_BEHIND: bool = {};\nconst MF_GUIDE_ODO: bool = {};\n", m.steer_delay_steps.map_or(-1, |k| k as i32), m.obs_after_step, m.guide_in_box, m.obs_ring_fix, m.junction_obstacle, m.sense_list_behind, m.guide_odometer) + &patch_text(&src, "model_sense"),
         _ => src,
     }
 }
@@ -301,6 +321,29 @@ pub fn patch(src: &str) -> String {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn sector_snap_files_aligned_bodies_alike() {
+        // a body straight behind with a +-0.1 mm lateral offset: without the snap sectors 7 / 0, with it the same
+        use bayenv_sim::obs::{sector_of, snap_left};
+        assert_ne!(sector_of(-35.0, snap_left(1e-4, false)), sector_of(-35.0, snap_left(-1e-4, false)));
+        assert_eq!(sector_of(-35.0, snap_left(1e-4, true)), sector_of(-35.0, snap_left(-1e-4, true)));
+        assert_eq!(sector_of(35.0, snap_left(1e-4, true)), sector_of(35.0, snap_left(-1e-4, true)));
+        let m = super::ModelFixes { sector_snap: true, ..super::ModelFixes::default() };
+        assert!(super::model_patches(super::load("perceive"), "perceive", &m).contains("snapLeft3(dx * s - dz * c)"));
+    }
+    #[test]
+    fn sense_storage_buffers_checked_against_the_limit() {
+        // default model: steer delay + obs_after_step bind `actions`, junction_obstacle `jobst`
+        let m = super::ModelFixes::default_model();
+        let src = super::model_patches(super::load("sense"), "sense", &m);
+        let n = super::storage_buffers(&src);
+        let js = super::storage_buffers(&super::load("sense"));
+        assert_eq!(n, js + 2, "patched sense: {n} storage buffers, JS {js}");
+        assert!(super::check_storage_limit("sense", &src, n).is_ok());
+        let e = super::check_storage_limit("sense", &src, n - 1).unwrap_err();
+        assert!(e.contains("maxStorageBuffersPerShaderStage") && e.contains("steer_delay"), "{e}");
+        eprintln!("sense storage buffers: JS {js}, default model {n}");
+    }
     use super::ModelFixes;
     fn only(f: impl Fn(&mut ModelFixes)) -> ModelFixes { let mut m = ModelFixes::default(); f(&mut m); m }
     #[test]
@@ -362,12 +405,12 @@ mod tests {
         let sp = super::model_patches(super::load("spawn"), "spawn", &all);
         assert!(sp.contains("v.routePos = k0;") && sp.contains("bitcast<f32>(q.p1)"));
         assert_eq!(super::model_patches(super::load("spawn"), "spawn", &ModelFixes::default_model()), super::load("spawn"), "spawn_clearance off: the JS kernel");
-        let one: [fn(&mut ModelFixes); 26] = [|m| m.box_barrier = true, |m| m.lane_drop_hop = true, |m| m.wreck_real_mass = true, |m| m.curvature_dynamics = true, |m| m.wreck_end_stop = true, |m| m.contact_episodes = true,
+        let one: [fn(&mut ModelFixes); 28] = [|m| m.box_barrier = true, |m| m.lane_drop_hop = true, |m| m.wreck_real_mass = true, |m| m.curvature_dynamics = true, |m| m.wreck_end_stop = true, |m| m.contact_episodes = true,
             |m| m.connector_barrier = true, |m| m.brake_hold = true, |m| m.heavy_brakes = true, |m| m.barrier_soft_push = true, |m| m.impact_reverse = true, |m| m.spawn_clearance = true,
-            |m| m.static_hold = true, |m| m.idle_creep = true, |m| m.steer_delay_steps = Some(3), |m| m.mountable_kerbs = true, |m| m.hill_rollback = true, |m| m.obs_after_step = true, |m| m.guide_in_box = true, |m| m.obs_ring_fix = true, |m| m.junction_obstacle = true, |m| m.waits_prev_step = true, |m| m.box_standstill = true, |m| m.lane_end_into = true, |m| m.junction_cand_cap = true, |m| m.sense_list_behind = true];
+            |m| m.static_hold = true, |m| m.idle_creep = true, |m| m.steer_delay_steps = Some(3), |m| m.mountable_kerbs = true, |m| m.hill_rollback = true, |m| m.obs_after_step = true, |m| m.guide_in_box = true, |m| m.obs_ring_fix = true, |m| m.junction_obstacle = true, |m| m.waits_prev_step = true, |m| m.box_standstill = true, |m| m.lane_end_into = true, |m| m.junction_cand_cap = true, |m| m.sense_list_behind = true, |m| m.guide_odometer = true, |m| m.sector_snap = true];
         let se = super::model_patches(super::load("sense"), "sense", &all);
         assert!(se.contains("const MF_STEER_DELAY: i32 = 3;") && se.contains("pending = last sds steps"));
         assert_eq!(super::model_patches(super::load("sense"), "sense", &ModelFixes::default()), super::load("sense"), "steer_delay off: the JS kernel");
-        for f in one { let m = only(f); for file in ["integrate", "contacts", "spawn", "sense", "jyield", "leaders", "junction"] { let _ = super::model_patches(super::load(file), file, &m); } }
+        for f in one { let m = only(f); for file in ["integrate", "contacts", "spawn", "sense", "jyield", "leaders", "junction", "perceive"] { let _ = super::model_patches(super::load(file), file, &m); } }
     }
 }
