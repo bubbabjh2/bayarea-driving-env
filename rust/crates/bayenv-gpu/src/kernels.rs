@@ -238,6 +238,8 @@ pub struct ModelFixes {
     pub guide_odometer: bool,
     /// GpuOptions::sector_snap (kernels/model_perceive.wgsl MF_SECTOR_SNAP)
     pub sector_snap: bool,
+    /// GpuOptions::guide_stop_spawn (kernels/model_sense.wgsl MF_GUIDE_STOP)
+    pub guide_stop_spawn: bool,
     /// steer_delay in steps (None = the JS: steering delayed by the reaction time like the pedals)
     pub steer_delay_steps: Option<u32>,
     /// kernels/spawn_clearance.wgsl (spawn.wgsl; the host writes the start index into the spawn-queue entry)
@@ -249,7 +251,7 @@ impl ModelFixes {
     pub fn all() -> ModelFixes {
         ModelFixes { cpu_connector_join: true, contact_tangent: true, wreck_real_mass: true, curvature_dynamics: true, wreck_end_stop: true, contact_episodes: true,
             connector_barrier: true, box_barrier: true, brake_hold: true, heavy_brakes: true, barrier_soft_push: true, impact_reverse: true, spawn_clearance: true,
-            static_hold: true, idle_creep: true, mountable_kerbs: true, lane_drop_hop: true, hill_rollback: true, obs_after_step: true, guide_in_box: true, obs_ring_fix: true, junction_obstacle: true, waits_prev_step: true, box_standstill: true, lane_end_into: true, junction_cand_cap: true, sense_list_behind: true, guide_odometer: true, sector_snap: true, steer_delay_steps: Some(3) }
+            static_hold: true, idle_creep: true, mountable_kerbs: true, lane_drop_hop: true, hill_rollback: true, obs_after_step: true, guide_in_box: true, obs_ring_fix: true, junction_obstacle: true, waits_prev_step: true, box_standstill: true, lane_end_into: true, junction_cand_cap: true, sense_list_behind: true, guide_odometer: true, sector_snap: true, guide_stop_spawn: true, steer_delay_steps: Some(3) }
     }
     /// kernels/model_integrate.wgsl is applied (any of its flags on)
     pub fn integrate_on(&self) -> bool { self.curvature_dynamics || self.wreck_end_stop || self.brake_hold || self.heavy_brakes || self.impact_reverse || self.static_hold || self.idle_creep || self.lane_drop_hop || self.steer_delay_steps.is_some() || self.hill_rollback }
@@ -279,8 +281,8 @@ pub fn model_patches(src: String, file: &str, m: &ModelFixes) -> String {
         "leaders" if m.waits_prev_step || m.lane_end_into => format!("const MF_WAITS_PREV: bool = {};\nconst MF_LANE_END_INTO: bool = {};\n", m.waits_prev_step, m.lane_end_into) + &patch_text(&src, "model_leaders"),
         "junction" if m.box_standstill || m.junction_cand_cap => format!("const MF_BOX_STILL: bool = {};\nconst CAND_SWEPT: u32 = {}u;\nconst CAND_PATH: u32 = {}u;\n", m.box_standstill, if m.junction_cand_cap { 128 } else { 32 }, if m.junction_cand_cap { 128 } else { 48 }) + &patch_text(&src, "model_junction"),
         "jyield" if m.junction_obstacle => format!("const MF_JUNC_OBST: bool = {};\n", m.junction_obstacle) + &patch_text(&src, "model_jyield"),
-        "sense" if (m.steer_delay_steps.is_some() || m.obs_after_step || m.guide_in_box || m.obs_ring_fix || m.junction_obstacle || m.sense_list_behind || m.guide_odometer) && std::env::var("BAYENV_NO_SENSE_PATCH").is_err() =>   // diagnostics: BAYENV_NO_SENSE_PATCH=1 = the JS window
-            format!("const MF_STEER_DELAY: i32 = {};\nconst MF_OBS_AFTER: bool = {};\nconst MF_GUIDE_BOX: bool = {};\nconst MF_RING_FIX: bool = {};\nconst MF_JUNC_OBST: bool = {};\nconst MF_LIST_BEHIND: bool = {};\nconst MF_GUIDE_ODO: bool = {};\n", m.steer_delay_steps.map_or(-1, |k| k as i32), m.obs_after_step, m.guide_in_box, m.obs_ring_fix, m.junction_obstacle, m.sense_list_behind, m.guide_odometer) + &patch_text(&src, "model_sense"),
+        "sense" if (m.steer_delay_steps.is_some() || m.obs_after_step || m.guide_in_box || m.obs_ring_fix || m.junction_obstacle || m.sense_list_behind || m.guide_odometer || m.guide_stop_spawn) && std::env::var("BAYENV_NO_SENSE_PATCH").is_err() =>   // diagnostics: BAYENV_NO_SENSE_PATCH=1 = the JS window
+            format!("const MF_STEER_DELAY: i32 = {};\nconst MF_OBS_AFTER: bool = {};\nconst MF_GUIDE_BOX: bool = {};\nconst MF_RING_FIX: bool = {};\nconst MF_JUNC_OBST: bool = {};\nconst MF_LIST_BEHIND: bool = {};\nconst MF_GUIDE_ODO: bool = {};\nconst MF_GUIDE_STOP: bool = {};\n", m.steer_delay_steps.map_or(-1, |k| k as i32), m.obs_after_step, m.guide_in_box, m.obs_ring_fix, m.junction_obstacle, m.sense_list_behind, m.guide_odometer, m.guide_stop_spawn) + &patch_text(&src, "model_sense"),
         _ => src,
     }
 }
@@ -405,9 +407,9 @@ mod tests {
         let sp = super::model_patches(super::load("spawn"), "spawn", &all);
         assert!(sp.contains("v.routePos = k0;") && sp.contains("bitcast<f32>(q.p1)"));
         assert_eq!(super::model_patches(super::load("spawn"), "spawn", &ModelFixes::default_model()), super::load("spawn"), "spawn_clearance off: the JS kernel");
-        let one: [fn(&mut ModelFixes); 28] = [|m| m.box_barrier = true, |m| m.lane_drop_hop = true, |m| m.wreck_real_mass = true, |m| m.curvature_dynamics = true, |m| m.wreck_end_stop = true, |m| m.contact_episodes = true,
+        let one: [fn(&mut ModelFixes); 29] = [|m| m.box_barrier = true, |m| m.lane_drop_hop = true, |m| m.wreck_real_mass = true, |m| m.curvature_dynamics = true, |m| m.wreck_end_stop = true, |m| m.contact_episodes = true,
             |m| m.connector_barrier = true, |m| m.brake_hold = true, |m| m.heavy_brakes = true, |m| m.barrier_soft_push = true, |m| m.impact_reverse = true, |m| m.spawn_clearance = true,
-            |m| m.static_hold = true, |m| m.idle_creep = true, |m| m.steer_delay_steps = Some(3), |m| m.mountable_kerbs = true, |m| m.hill_rollback = true, |m| m.obs_after_step = true, |m| m.guide_in_box = true, |m| m.obs_ring_fix = true, |m| m.junction_obstacle = true, |m| m.waits_prev_step = true, |m| m.box_standstill = true, |m| m.lane_end_into = true, |m| m.junction_cand_cap = true, |m| m.sense_list_behind = true, |m| m.guide_odometer = true, |m| m.sector_snap = true];
+            |m| m.static_hold = true, |m| m.idle_creep = true, |m| m.steer_delay_steps = Some(3), |m| m.mountable_kerbs = true, |m| m.hill_rollback = true, |m| m.obs_after_step = true, |m| m.guide_in_box = true, |m| m.obs_ring_fix = true, |m| m.junction_obstacle = true, |m| m.waits_prev_step = true, |m| m.box_standstill = true, |m| m.lane_end_into = true, |m| m.junction_cand_cap = true, |m| m.sense_list_behind = true, |m| m.guide_odometer = true, |m| m.sector_snap = true, |m| m.guide_stop_spawn = true];
         let se = super::model_patches(super::load("sense"), "sense", &all);
         assert!(se.contains("const MF_STEER_DELAY: i32 = 3;") && se.contains("pending = last sds steps"));
         assert_eq!(super::model_patches(super::load("sense"), "sense", &ModelFixes::default()), super::load("sense"), "steer_delay off: the JS kernel");

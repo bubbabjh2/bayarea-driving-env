@@ -746,6 +746,7 @@ impl GpuSim {
         let mut block = Vec::with_capacity(words.len() + 2); block.push(plan.stop_index as u32 + 1); block.push(f32bits(total)); block.extend_from_slice(&words);
         let off = self.append_route(&block) + 2;
         self.op(op::SET_ROUTE_REFUEL, slot, off as u32, edges.len() as u32);
+        if self.refuel_live.remove(&slot) && self.opts.model_fixes().guide_stop_spawn { self.op(op::SET_FLAGS, slot, flag::GUIDE_STOP, 0); }
         self.slot_route[2 * slot as usize] = off as u32; self.slot_route[2 * slot as usize + 1] = edges.len() as u32;
         self.slot_station[slot as usize] = plan.station as i32;
         self.counters.refuel_planned += 1;
@@ -1046,7 +1047,7 @@ impl GpuSim {
         self.free = (0..self.cap as u32).rev().collect();
         self.slot_trip.iter_mut().for_each(|x| *x = -1); self.slot_station.iter_mut().for_each(|x| *x = -1);
         self.queue_free = (0..self.opts.spawn_queue as u32).rev().collect();
-        self.queue_high = 0; self.ops_pending.clear(); self.wrecks.clear(); self.in_crash.clear(); self.refuel_queue.clear(); self.x.pumping.clear(); self.lot = 0; self.x.in_lot.clear();
+        self.queue_high = 0; self.ops_pending.clear(); self.wrecks.clear(); self.in_crash.clear(); self.refuel_queue.clear(); self.refuel_live.clear(); self.x.pumping.clear(); self.lot = 0; self.x.in_lot.clear();
         self.crashes.clear(); self.active.clear(); self.edge_head.iter_mut().for_each(|x| *x = 0); self.block_next.iter_mut().for_each(|x| *x = 0);
         self.block_free = (0..self.opts.max_blocks as u32).rev().collect();
         self.counters = Default::default(); self.crash_x.clear();
