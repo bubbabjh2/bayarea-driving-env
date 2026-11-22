@@ -3,7 +3,8 @@
 //! system, not a bridge) while steering into it. With rigid kerbs the contact episode adds up to a disabling crash;
 //! with mountable kerbs it is one minor contact and the car keeps driving. The same scenario runs on the CPU sim on the
 //! same edge for comparison; both backends agree (on this real edge 0.45 rad, the CPU fixture's angle, grinds without
-//! disabling on both: rigid 2 minor contacts, mountable 1; at 0.7 rad rigid disables on both after 3 minor contacts). The car is one of a few scattered cars on the
+//! disabling on both; at 0.7 rad rigid disables on both after 3 minor contacts, and with mountable kerbs the car keeps
+//! driving with no contact row on both: the grind's steps no longer add up, and its first touch is below touch_kmh). The car is one of a few scattered cars on the
 //! real world, chosen alone on a long non-rigid edge; its state is written into the veh buffer. Skips without the
 //! world data or a GPU.
 use bayenv_gpu::{defines::ObsMode, layout as L, sim::GpuOptions};
@@ -80,8 +81,9 @@ fn gpu_mountable_kerbs_scrape_not_crash() {
     let (ckc, ckm, ckd) = run_cpu(&w, true, e, s0);
     eprintln!("{U0} m/s at {HR} rad steering into a kerb (edge {e}, s {s0:.0}): GPU rigid disabled {rd} (minor {rm}, driving {rdrv}), mountable disabled {kd}, minor {km}, driving {kdrv}; CPU rigid crashed {crc} (minor {crm}, driving {crd}), mountable crashed {ckc}, minor {ckm}, driving {ckd}");
     assert!(rd && !rdrv, "rigid: the grind adds up to a disabling crash");
-    assert!(!kd && km == 1 && kdrv, "mountable: one minor scrape");
-    assert!(ckc == 0 && ckm == 1 && ckd, "CPU mountable: one minor scrape");
+    assert!(!kd && km <= 1 && kdrv, "mountable: at most one minor scrape, still driving");
+    assert!(ckc == 0 && ckm <= 1 && ckd, "CPU mountable: at most one minor scrape, still driving");
+    assert_eq!(km, ckm as usize, "mountable: GPU and CPU minor contacts");
     assert_eq!(rdrv, crd, "rigid: GPU and CPU agree on the outcome");
     assert_eq!(rd, crc > 0, "rigid: GPU and CPU agree on the outcome");
 }
