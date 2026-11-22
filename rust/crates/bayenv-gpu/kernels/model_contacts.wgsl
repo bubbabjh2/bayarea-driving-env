@@ -123,7 +123,7 @@ fn connBarrier(i: u32, v0: Veh, prev: bool) {
 //#end
 //#patch writeback-speed
   let uB = b.vx * fx + b.vz * fz;
-  let keepRev = MF_IMPACT_REVERSE && uB < 0.0 && veh[i].state == CRASHED;
+  let keepRev = uB < 0.0 && ((MF_IMPACT_REVERSE && veh[i].state == CRASHED) || MF_ROLLBACK);   // hill_rollback: driving cars too
   veh[i].speed = select(max(0.0, uB), uB, keepRev);
   if (MF_IMPACT_REVERSE && uB < 0.0 && !keepRev && revN < 2u) { revSlot[revN] = i; revU[revN] = uB; revN = revN + 1u; }
 //#end

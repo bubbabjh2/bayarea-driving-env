@@ -588,7 +588,7 @@ impl VehicleStore {
         c.odometer = (f(c.odometer) + jm::abs(ds)) as f32;
         c.route_dist = (f(c.route_dist) + ds) as f32;
         if st.u < 0.2 && jm::abs(st.v) < 0.2 { if c.stopped_since < 0.0 { c.stopped_since = now as f32; } } else { c.stopped_since = -1.0; }
-        if s < 0.0 { s = 0.0; if locked && mf.wreck_end_stop && c.speed < 0.0 { c.speed = 0.0; } }
+        if s < 0.0 { s = 0.0; if ((locked && mf.wreck_end_stop) || (!locked && mf.fixes.rollback)) && c.speed < 0.0 { c.speed = 0.0; } }
         let mut ret = 0;
         let mut s_arrive = s0;
         loop {
