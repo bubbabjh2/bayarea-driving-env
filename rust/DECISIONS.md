@@ -758,3 +758,36 @@ Each entry: date, decision, why, alternatives, numbers, and one line to say it o
   Contact events dropped from 145 to 58.
 - **On camera:** "Touching a kerb at walking pace used to write the car off. Now it just scrapes, like it does in real
   life, unless you hit a freeway barrier."
+
+## 39. Phantom walls: walls on the junction-box parts of edges (`box_barrier`), dropped lanes at diverges (`lane_drop_hop`)
+
+- **Date:** 2026-11-21
+- **Finding:** the video's "wall" wrecks in west SF (four cars at 127–147 km/h, delta-v about equal to the speed,
+  in-lane on city streets, the chase cam under the terrain 1–2 s before) are not a geometry or elevation fault at
+  the crash site. They are the end of an excursion off the road through a junction box. The JS has no lateral limit on
+  junction connectors nor on the box parts of edges (s < sExit + 1, s > sStop). A car crossing a box at a large
+  heading error (an untrained policy; or after a spin, which the JS's first-touch-only barrier events let a car survive
+  without being disabled) drives sideways in the road frame without limit; on a connector with heading_rel past
+  ±90° its `s` is pinned at the start and `lat` runs to hundreds or thousands of metres, while its y stays the road's
+  (so the camera is under the hills). The first edge-barrier check past the box then meets it at that depth: the wall
+  impulse at a near-perpendicular heading removes about the whole speed, and the JS's full-depth correction teleports
+  the car back to the kerb line, in its lane. Reproduced in the Rust env (`SimOpts::js()`, 600 SF commuters, seed
+  777, 07:00, a noisy constant-steer policy at full gas): 9–10 such contacts in 40 min, depths 24 m to 16 km, e.g. a
+  primary at (−27195, −24149) inside the reported box: lat −726 m, delta-v 190 km/h at 195 km/h, the car 75–110 m
+  below the 20 m ground grid for the last 20 s. The default model (connector walls since entry 26) still had them on
+  the box parts of edges (a car 165 m off, delta-v 92 km/h at 100 km/h).
+- **Decision:** `box_barrier` (default on, both backends; `SimOpts::js()` / `GpuOptions::js_model()` off): on the box
+  parts of an edge, the edge barrier acts too, with its lines widened by `BOX_MARGIN` = 3.5 m for the corners and the
+  cross street's mouth. Same impulse, kerb scrape, soft push and events as the edge barrier.
+- **Second class (hops):** at a strict diverge where a lane continues onto no out-edge (129 (edge, lane, out-edge)
+  hops map-wide, e.g. a 6-lane motorway into a 4-lane mainline + a 1-lane ramp), the JS keeps the planned edge and
+  the strict lat: a car in the far-left lane routed to the right-hand ramp lands 16.6 m past the ramp's barrier line
+  (a 57 km/h barrier crash in one rollout). `lane_drop_hop` (default on, both backends) sends it to the strict out-edge
+  its lane overshoots least (a missed exit), about one lane out, where the barrier squeezes it in.
+- **Numbers:** noisy-policy rollout (600 commuters in and around the box, 40 min, default model): box-part excursions
+  past the kerb line by > 20 m 72 → 0, worst 162 m → 6.8 m, deep (> 2 m) high-delta-v contacts 1 → 0. Lane-keeping
+  driver (2,000 commuters, 10 min): barrier crashes 56 → 57, arrivals 112 → 111 (no effect on normal driving).
+- **Not changed:** the JS oracle (`SimOpts::js()` is bit-exact as before). The world data: road heights are within
+  3.3 m of the ground grid everywhere in the box; the only larger misfits map-wide are tunnels and cuttings.
+- **On camera:** "The invisible walls weren't in the city. Our cars were leaving the road inside intersections, where
+  nothing stopped them, driving off into the hills, and the first wall they met afterwards was back on the road."

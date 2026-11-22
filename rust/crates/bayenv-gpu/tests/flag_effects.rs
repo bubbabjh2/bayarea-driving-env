@@ -73,6 +73,9 @@ const FLIPS: &[Flip] = &[
     ("wreck_end_stop", |o| o.wreck_end_stop = false, |s| s.wreck_end_stop = false),
     ("contact_episodes", |o| o.contact_episodes = false, |s| s.contact_episodes = false),
     ("connector_barrier", |o| o.connector_barrier = false, |s| s.connector_barrier = false),
+    ("box_barrier", |o| o.box_barrier = false, |s| s.box_barrier = false),
+    // lane_drop_hop (DECISIONS.md 39) is not here: a car left in a lane dropped at a freeway diverge is too rare for this
+    // run (no effect on either backend); bayenv-sim physics_fixes.rs `lane_drop_hop_*` (CPU) and tests/lane_drop.rs (GPU vs CPU) check it
     ("brake_hold", |o| o.brake_hold = true, |s| s.brake_hold = true),
     ("static_hold", |o| o.static_hold = false, |s| s.static_hold = false),
     ("idle_creep", |o| o.idle_creep = false, |s| s.idle_creep = false),
