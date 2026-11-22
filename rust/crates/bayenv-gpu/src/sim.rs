@@ -181,10 +181,10 @@ pub struct GpuOptions {
     /// (default ON; kernels/model_sense.wgsl MF_LIST_BEHIND; DECISIONS.md 48).
     pub sense_list_behind: bool,
     /// Guidance (inputs 20..32) and guidance lane ends (12 / 16) at the route odometer's position, as bayenv-sim's
-    /// encoder (default ON, obs v2 only: the CPU v3 rows use the position, obs_v3.rs gpu_guidance; kernels/model_sense.wgsl MF_GUIDE_ODO; DECISIONS.md 49).
+    /// encoder (default ON, obs v2 only: the CPU v3 rows use the position, obs_v3.rs gpu_guidance; kernels/model_sense.wgsl MF_GUIDE_ODO; DECISIONS.md 50).
     pub guide_odometer: bool,
     /// v3 bodies: a lateral offset under 1 cm counts as 0 when filing a body by sector (straight ahead / behind sit on
-    /// a sector boundary), as bayenv-sim SimOpts::v3_sector_snap (default ON; kernels/model_perceive.wgsl; DECISIONS.md 49).
+    /// a sector boundary), as bayenv-sim SimOpts::v3_sector_snap (default ON; kernels/model_perceive.wgsl; DECISIONS.md 50).
     pub sector_snap: bool,
     /// MODEL fix (default 0.15 s; negative = the JS; kernels/model_integrate.wgsl): steering leaves the control ring after
     /// round(steer_delay / dt) steps when that is shorter than the reaction delay; the pedals keep it. SimOpts::steer_delay

@@ -1094,7 +1094,30 @@ Each entry: date, decision, why, alternatives, numbers, and one line to say it o
   against the CPU after each import (rows on edges where either backend spawned a car in the step are skipped: the
   spawn queue is not imported); the flag-off variants must differ.
 
-## 49. Input-parity sweep (CPU state imported into the GPU): guidance at the route odometer, body sectors, control / scene / history import, storage-buffer limit (`guide_odometer` obs v2, `sector_snap` obs v3, default on)
+## 49. A car that falls into the water ploughs in (`barrier_breach` water entry)
+
+- **Date:** 2026-11-22
+- **Bug:** in the first bridge-fall demo (entry 46), a box truck hit the bay at 26.6 m/s and then skimmed on across
+  the surface at about 25 m/s. A water landing used a constant 3 m/s² slowdown, as if the car were sliding on ice.
+- **Decision:** after a water landing the horizontal speed decays under quadratic drag ½ ρ Cd A v²:
+  - ρ = 1025 kg/m³ (sea water) and Cd = 1.0 (a bluff body, end-on or broadside; Hoerner's box and flat-plate values
+    are 1.0–1.2);
+  - A = body width × body height (sedan 1.45 m, SUV 1.75 m, truck and bus 3.2 m), the frontal area once it is under;
+  - a constant 0.5 m/s² ends the creep at the end.
+  The sub-step integrates v ← v / (1 + c v h) exactly, with c = ½ ρ Cd A / m. The distance to slow from v0 to v1 is
+  ln(v0 / v1) / c: about 4 m for an SUV and 11 m for a 15 t truck. The car still sinks to its resting depth (1.2 m
+  at 0.4 m/s). Land landings and everything before water contact are unchanged.
+- **Numbers:** on the test road over water 30 m down, an SUV enters the water at 23.9 m/s horizontal and stops 4.0 m on;
+  the box truck enters at 28.8 m/s and stops 11.0 m on. The demo truck (Bay Bridge east span) used to slide on at
+  about 25 m/s; it now stops within metres of the splash. Its frames up to water contact are unchanged.
+- **Tests:** `tests/barrier_breach.rs` `water_landing_ploughs_in_and_stops_within_20_m` (SUV and truck at rest
+  within 20 m of water entry, truck further than SUV, sunk to resting depth). The Bay Bridge test also checks the
+  20 m bound.
+- **Alternatives:** a bigger constant slowdown (wrong at both ends: too soft at 25 m/s, too abrupt at 2 m/s); a full
+  buoyancy and splash model (more work, and the camera can't tell the difference).
+- **On camera:** "Our first truck hit the bay and water-skied. Water is about eight hundred times denser than air, so now it stops dead."
+
+## 50. Input-parity sweep (CPU state imported into the GPU): guidance at the route odometer, body sectors, control / scene / history import, storage-buffer limit (`guide_odometer` obs v2, `sector_snap` obs v3, default on)
 
 - **Date:** 2026-11-22
 - **Tool:** `examples/obs_sweep.rs`: a CPU closed loop (examples/snap_obs.rs driver) to each check time; the CPU's
