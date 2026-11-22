@@ -11,6 +11,9 @@
 // with that command already in its pending window; to predict the same horizon, the replay appends the command act
 // writes this step (actions[i] when the car is due a decision, else the held ring entry t - 1). Position mode only
 // (rate mode keeps the JS window). With steer_delay -1 nothing changes (JS-exact).
+// MF_OBS_AFTER (GpuOptions::obs_after_step): sense runs after act + integrate of the step (as bayenv-sim observes after
+// Sim::step); the pending commands are then ring t - d + 1 .. t (the newest one written by act this step), so the window
+// shifts by one and nothing is appended.
 //#orig bindings
 @group(1) @binding(3) var<storage, read> ring: array<f32>;
 //#end
@@ -31,13 +34,15 @@
     let sr = clamp(ring[(i * CTRL_RING + (step + CTRL_RING - k) % CTRL_RING) * CTRL_STRIDE], -1.0, 1.0);
 //#end
 //#patch compensation-loop
-  // steer_delay (position mode): k = 0 is the command act writes this step
-  let kLo = select(1, 0, sdOn && posM && !netRate);
+  // steer_delay (position mode, sense before act): k = 0 is the command act writes this step; MF_OBS_AFTER: the
+  // window is ring t - d + 1 .. t (k = d - 1 .. 0)
+  let kHi = select(i32(d), i32(d) - 1, MF_OBS_AFTER);
+  let kLo = select(select(1, 0, sdOn && posM && !netRate), 0, MF_OBS_AFTER);
   let due = v.state == DRIVING && (v.flags & F_POLICY) != 0u && hasFeat(FEAT_POLICY) && (P.decideEvery <= 1u || (step + i) % P.decideEvery == 0u);
-  for (var kk = i32(d); kk >= kLo; kk = kk - 1) {
+  for (var kk = kHi; kk >= kLo; kk = kk - 1) {
     let k = u32(kk);
-    var sr = clamp(ring[(i * CTRL_RING + (step + CTRL_RING - max(k, 1u)) % CTRL_RING) * CTRL_STRIDE], -1.0, 1.0);
-    if (k == 0u && due) { sr = clamp(actions[i * 3u], -1.0, 1.0); }
+    var sr = clamp(ring[(i * CTRL_RING + (step + CTRL_RING - select(max(k, 1u), k, MF_OBS_AFTER)) % CTRL_RING) * CTRL_STRIDE], -1.0, 1.0);
+    if (!MF_OBS_AFTER && k == 0u && due) { sr = clamp(actions[i * 3u], -1.0, 1.0); }
 //#end
 // v3 own commands (perceive.js senseCommands, 87..92): with steer_delay the steer applied now (87) comes from S - sds
 // (S - 1 when sds = 0), as bayenv-sim obs.rs sense_commands; the pedals (88, 89) and "last" (90..92) are unchanged.
