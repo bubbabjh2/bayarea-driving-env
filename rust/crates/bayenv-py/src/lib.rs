@@ -189,7 +189,7 @@ impl Env {
     /// cores; 0 = serial A* at departure). Every value gives the same routes and the same spawn steps.
     /// wreck_real_mass, curvature_dynamics, wreck_end_stop, contact_episodes, connector_barrier, brake_hold (the first hold, default False: superseded by static_hold), heavy_brakes,
     /// barrier_soft_push, impact_reverse, static_hold, idle_creep, steer_delay (s; negative = the JS: steering delayed by the
-    /// reaction time) (cpu and gpu (static_hold / idle_creep / steer_delay: cpu only until the GPU mirror lands), default True except curvature_dynamics=False): the physics-audit model fixes
+    /// reaction time) (cpu and gpu, default True except curvature_dynamics=False): the physics-audit model fixes
     /// smooth_geometry (cpu and gpu, default False; needs curvature_dynamics=True): load the world with the smoothed frame
     /// geometry (lane and connector polylines filleted to realistic minimum radii, rust/DECISIONS.md 33)
     /// junction_radii (cpu and gpu, default False; needs smooth_geometry=True): turning junction connectors re-fitted to
@@ -833,6 +833,7 @@ impl PhysFixes {
         o.wreck_real_mass = self.wreck_real_mass; o.curvature_dynamics = self.curvature_dynamics; o.smooth_geometry = self.smooth_geometry; o.junction_radii = self.junction_radii; o.wreck_end_stop = self.wreck_end_stop; o.contact_episodes = self.contact_episodes;
         o.connector_barrier = self.connector_barrier; o.brake_hold = self.brake_hold; o.heavy_brakes = self.heavy_brakes; o.barrier_soft_push = self.barrier_soft_push; o.impact_reverse = self.impact_reverse;
         o.spawn_clearance = self.spawn_clearance;
+        o.static_hold = self.static_hold; o.idle_creep = self.idle_creep; o.steer_delay = self.steer_delay;
     }
 }
 fn check_dt(dt: f64) -> PyResult<()> { if dt.is_finite() && dt > 0.0 { Ok(()) } else { Err(PyValueError::new_err(format!("dt must be finite and > 0 (got {dt})"))) } }

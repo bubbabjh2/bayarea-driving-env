@@ -668,7 +668,10 @@ Each entry: date, decision, why, alternatives, numbers, and one line to say it o
     force. Rolling resistance holds it only when there is no drive and no brake at all.
   - `idle_creep` gives the drive force a floor at an automatic's idle creep: 4 × the rolling resistance at rest,
     fading to 0 at 2 m/s. With no pedals on the flat a car settles at about 1.5 m/s, and about 7 % brake holds it.
-  - Both are on by default, on the CPU and (once mirrored) the GPU; `SimOpts::js()` turns them off.
+  - Both are on by default on both backends; `SimOpts::js()` and `GpuOptions::js_model()` turn them off. GPU:
+    `GpuOptions::static_hold` / `idle_creep` (`kernels/model_integrate.wgsl`, same sub-step as the CPU, so power and
+    fuel see the creep force). `tests/pedals.rs` (300 scattered cars, medians): 2 % gas 20.8 m in 20 s, creep
+    1.42 m/s, 10 % brake 0.000 m, JS model 0.00 m.
 - **Why:** reported by the training side (ENV-REQUESTS #17). With 1,000 commuters, `brake_hold` alone cut arrivals
   from 81.9 % to 69.1 %; 226 of the 264 unfinished cars were still on the road at the end.
 - **Numbers:** 20 s from rest with 2 % gas: 0.00 m with the first hold, 23 m now. No pedals: 1.48 m/s creep. 10 %
@@ -687,6 +690,9 @@ Each entry: date, decision, why, alternatives, numbers, and one line to say it o
   (`curvature_dynamics`, entry 23). Reported by the training side (ENV-REQUESTS #16).
 - **Numbers:** driver with a 1 s reaction time: the first steering response after 0.20 s (dt 0.05; JS 1.05 s), the
   first brake response still after 1.05 s.
+- **GPU:** `GpuOptions::steer_delay` (seconds, default 0.15, negative = the JS): the integrate ring read takes the steer
+  word round(steer_delay / dt) steps back when that is below the car's delay steps (`kernels/model_integrate.wgsl`).
+  `tests/pedals.rs` (median over scattered cars): steer 0.20 s, brake 1.05 s; JS model steer 0.95 s.
 - **On camera:** "Our drivers needed a full second to turn the wheel, as if every bend in the road was a surprise."
 
 ## 37. The lane-heading preview on the GPU (`heading_preview`, default off)
