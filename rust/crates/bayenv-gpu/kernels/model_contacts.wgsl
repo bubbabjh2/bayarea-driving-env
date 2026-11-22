@@ -13,6 +13,8 @@
 //                       epBase() + slot (barrier, f32), epBase() + cap + 2 pairSlot (pair, f32 i / j); the host sizes the
 //                       contacts buffer for them when the flag is on.
 //   MF_CONN_BARRIER     connector_barrier: cars on a junction connector get the in-edge's kerbs as lateral walls.
+//   MF_BOX_BARRIER      box_barrier (bayenv-sim contacts.rs, DECISIONS.md 39): the junction-box parts of an edge (before
+//                       sExit + 1, past sStop) get the edge barrier too, its lines widened by BOX_MARGIN (JS: no walls there).
 //   MF_MOUNTABLE_KERBS  mountable_kerbs (bayenv-sim contacts.rs, DECISIONS.md 38): a barrier contact on a non-rigid edge (not
 //                       the freeway system, edge flag 64, nor a bridge, edge flag 2) closing at under 2 m/s is a kerb scrape:
 //                       restitution 0, friction 0.6, correction min(max(0, depth - 0.3), 0.25), the episode total is not
@@ -32,6 +34,7 @@ fn isMoving(v: Veh) -> bool { return v.state == DRIVING || v.speed > 0.01 || abs
 //#patch moving
 fn isMoving(v: Veh) -> bool { return v.state == DRIVING || select(v.speed, abs(v.speed), MF_IMPACT_REVERSE) > 0.01 || abs(v.vLat) > 0.01; }
 const BARRIER_PUSH_MAX: f32 = 0.25;
+const BOX_MARGIN: f32 = 3.5;
 fn barrierCorr(d: f32) -> f32 { return select(d, min(d, BARRIER_PUSH_MAX), MF_SOFT_PUSH); }
 const KERB_MOUNT_SPEED: f32 = 2.0; const KERB_MOUNT_DEPTH: f32 = 0.3; const KERB_FRICTION: f32 = 0.6;
 const KERB_SCRAPE_MAX_DV: f32 = (DISABLE_KMH - 0.5) / 3.6;
@@ -137,6 +140,24 @@ fn connBarrier(i: u32, v0: Veh, prev: bool) {
 //#patch conn-skip
   revN = 0u;
   if (vConn(v0) >= 0) { if (MF_CONN_BARRIER && P.hasJ != 0u) { connBarrier(i, v0, prev); } return; }   // JS: no barriers inside a junction box
+//#end
+//#orig box-skip
+  if (P.hasJ != 0u && (v0.s < eSExit(v0.edge) + 1.0 || v0.s > eSStop(v0.edge))) { return; }   // v9: nor at the box ends of an edge
+//#end
+//#patch box-skip
+  let inBox = P.hasJ != 0u && (v0.s < eSExit(v0.edge) + 1.0 || v0.s > eSStop(v0.edge));
+  if (inBox && !MF_BOX_BARRIER) { return; }   // v9: nor at the box ends of an edge (box_barrier: widened walls there)
+//#end
+//#orig box-limits
+  let right = padR - select(P.shoulder, P.freewayShoulder, (eFlags(e) & 64u) != 0u);   // sim.js: 3 m outside shoulder on freeway-class roads
+  var left = padL + P.shoulder;
+  if (eRev(e) >= 0) { left = padL + f32(eLanes(u32(eRev(e)))) * W + P.oppositeMargin; }
+//#end
+//#patch box-limits
+  var right = padR - select(P.shoulder, P.freewayShoulder, (eFlags(e) & 64u) != 0u);   // sim.js: 3 m outside shoulder on freeway-class roads
+  var left = padL + P.shoulder;
+  if (eRev(e) >= 0) { left = padL + f32(eLanes(u32(eRev(e)))) * W + P.oppositeMargin; }
+  if (inBox) { right = right - BOX_MARGIN; left = left + BOX_MARGIN; }
 //#end
 //#orig barrier-push
   veh[i].lat = veh[i].lat - side * depth;

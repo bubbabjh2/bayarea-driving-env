@@ -159,9 +159,12 @@ pub struct ModelFlags {
     pub wreck_end_stop: bool,
     /// SimOpts::steer_delay in steps (-1: the JS, steering delayed by the reaction time like the pedals)
     pub steer_delay_steps: i32,
+    /// SimOpts::lane_drop_hop: a strict hop from a lane that continues onto no out-edge takes the strict out-edge it
+    /// lands nearest to (a missed exit if that is not the planned one)
+    pub lane_drop_hop: bool,
 }
 impl Default for ModelFlags {
-    fn default() -> Self { ModelFlags { fixes: Default::default(), curvature: false, wreck_end_stop: false, steer_delay_steps: -1 } }
+    fn default() -> Self { ModelFlags { fixes: Default::default(), curvature: false, wreck_end_stop: false, steer_delay_steps: -1, lane_drop_hop: false } }
 }
 pub struct DynCall { pub st: DynState, pub sr: f64, pub gas: f64, pub brake: f64, pub p: &'static physics::VehicleParams, pub grade: f64, pub sf: Option<physics::Surf>, pub u0: f64, pub s0: f64, pub e: usize, pub hr0: f64 }
 /// Side effects of integrate_car beyond the slot fields.
@@ -687,6 +690,7 @@ impl VehicleStore {
                 let ml = g.map_lane(e, en, lane);
                 if ml < 0 || ml >= g.e_lanes[en] {
                     let to = g.e_to[e] as usize;
+                    let mut found = false;
                     for q in g.out_start[to]..g.out_start[to + 1] {
                         let o = g.out_edges[q as usize] as usize;
                         if o == en || o as i32 == g.e_rev[e] || !g.hop(e, o).strict { continue; }
@@ -696,7 +700,27 @@ impl VehicleStore {
                             let goal = g.e_to[route_at(route, out, route.len() - 1) as usize];
                             out.missed = Some(Missed { from: e as i32, planned: en as i32, took: o as i32, goal, replanned: false });
                             out.route_set.push((next, o as i32)); out.route_reset = true;
-                            en = o; break;
+                            en = o; found = true; break;
+                        }
+                    }
+                    // lane_drop_hop: my lane continues nowhere (a lane dropped at a diverge, e.g. 6 lanes -> 4 + 1). The JS
+                    // kept the planned edge and its strict lat, which can put the car 16 m past the ramp's barrier line.
+                    // Physically the car is beside the out-edge its lane overshoots least: it goes there (the barrier
+                    // then squeezes it in from about one lane out).
+                    if !found && mf.lane_drop_hop {
+                        let over = |o: usize| { let l = g.map_lane(e, o, lane); if l < 0 { -l } else if l >= g.e_lanes[o] { l - g.e_lanes[o] + 1 } else { 0 } };
+                        let mut best = en; let mut bo = over(en);
+                        for q in g.out_start[to]..g.out_start[to + 1] {
+                            let o = g.out_edges[q as usize] as usize;
+                            if o == en || o as i32 == g.e_rev[e] || !g.hop(e, o).strict { continue; }
+                            let ov = over(o);
+                            if ov < bo { bo = ov; best = o; }
+                        }
+                        if best != en {
+                            let goal = g.e_to[route_at(route, out, route.len() - 1) as usize];
+                            out.missed = Some(Missed { from: e as i32, planned: en as i32, took: best as i32, goal, replanned: false });
+                            out.route_set.push((next, best as i32)); out.route_reset = true;
+                            en = best;
                         }
                     }
                 }

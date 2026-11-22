@@ -543,3 +543,86 @@ fn mountable_kerbs_scrape_not_crash() {
     // residential road 1 is not rigid; the motorway (edge 0) is
     assert!(!g.rigid_edge(1) && g.rigid_edge(0));
 }
+
+#[test]
+fn box_barrier_walls_the_junction_box_part_of_an_edge() {
+    // the "phantom wall" (DECISIONS.md 39): a car crossing the junction-box part of an edge (s < sExit + 1) at a large
+    // heading error, as after a spin or with an untrained policy. The JS has no walls there: the car drives sideways off
+    // the road, then the first barrier check past the box meets it tens of metres deep, with a delta-v near its speed.
+    // With box_barrier it meets a wall at the box's edge (the edge's barrier lines + BOX_MARGIN), still in the box.
+    let Some(g) = scenario_world("junction-s1") else { return bayenv_world::oracle::skip("physics_fixes", "no data dir") };
+    let e = (0..g.edge_count).filter(|&e| g.e_s_exit[e] >= 4.0 && g.e_length[e] >= 60.0 && g.e_rev[e] < 0)
+        .chain((0..g.edge_count).filter(|&e| g.e_s_exit[e] >= 4.0 && g.e_length[e] >= 60.0)).next().expect("an edge with a start box");
+    let run = |opts: SimOpts| {
+        let mut sim = sim_with(&g, opts);
+        sim.barrier_dbg = Some(Vec::new());
+        let i = place(&mut sim, SEDAN, &[e as i32], 0.5, 0, 20.0);
+        sim.vs.heading_rel[i] = 1.45; // nearly across the road, toward the left
+        sim.vs.update_lanes(i, &g, e); sim.vs.update_pose(i, &g); sim.vs.save_pose(i);
+        let (mut max_lat, mut box_touch, mut first_depth) = (0.0f64, false, None);
+        for _ in 0..200 {
+            if sim.vs.state[i] != STATE_DRIVING { break; }
+            hold(&mut sim, i, 0.0, 0.3, 0.0);
+            sim.step();
+            max_lat = max_lat.max(sim.vs.lat[i] as f64);
+            for d in sim.barrier_dbg.as_mut().unwrap().drain(..) { if d.slot == i { if d.in_box { box_touch = true; } if first_depth.is_none() { first_depth = Some(d.depth); } } }
+            if first_depth.is_some() { break; }
+        }
+        (max_lat, box_touch, first_depth.unwrap_or(0.0))
+    };
+    let (lat, touch, depth) = run(SimOpts::default());
+    let (jlat, jtouch, jdepth) = run(SimOpts::js());
+    let lanes_w = g.e_lanes[e] as f64 * g.lane_w(e, 0.0);
+    eprintln!("edge {e} (sExit {:.1}, {lanes_w:.1} m of lanes): box_barrier max lat {lat:.1} m, wall in the box {touch}, first depth {depth:.2} m; js max lat {jlat:.1} m, wall in the box {jtouch}, first depth {jdepth:.2} m", g.e_s_exit[e]);
+    assert!(touch, "the box part has walls");
+    assert!(depth < 3.0 && lat < lanes_w + 15.0, "the wall stops the car near the box: lat {lat}, depth {depth}");
+    assert!(!jtouch, "the JS: no walls in the box");
+    assert!(jlat > lanes_w + 20.0 && jdepth > 10.0, "the JS: the car runs far off the road and meets a phantom wall: lat {jlat}, depth {jdepth}");
+}
+
+#[test]
+fn lane_drop_hop_takes_the_edge_the_lane_lands_nearest() {
+    // DECISIONS.md 39: a 6-lane motorway diverging into a 4-lane mainline and a 1-lane ramp drops its far-left lane at
+    // the node. A car still in that lane, routed onto the ramp: the JS kept the ramp and the strict lat (lane 5 of 6),
+    // 16.6 m past the ramp's barrier line. With lane_drop_hop it stays on the mainline (a missed exit), about one lane out.
+    let d = bayenv_sim::population_gen::default_data_dir();
+    if !d.join("roads.meta.json").exists() { return bayenv_world::oracle::skip("physics_fixes", "no data dir"); }
+    let g = bayenv_sim::env::Env::load_world(&d).expect("world");
+    // the first (edge, lane, ramp) whose lane maps onto no strict out-edge
+    let mut case = None;
+    'f: for e in 0..g.edge_count {
+        if !g.is_shoulder_road(e) || g.e_length[e] < 200.0 || (g.j.is_some() && g.e_s_stop[e] < g.e_length[e]) { continue; }
+        let to = g.e_to[e] as usize;
+        let outs: Vec<usize> = (g.out_start[to]..g.out_start[to + 1]).map(|q| g.out_edges[q as usize] as usize).filter(|&o| o as i32 != g.e_rev[e] && g.hop(e, o).strict).collect();
+        if outs.len() < 2 { continue; }
+        for k in 0..g.e_lanes[e] {
+            if outs.iter().all(|&o| { let l = g.map_lane(e, o, k); l < 0 || l >= g.e_lanes[o] }) {
+                // the out-edge it lands furthest from (the ramp)
+                let far = *outs.iter().max_by_key(|&&o| { let l = g.map_lane(e, o, k); if l < 0 { -l } else { l - g.e_lanes[o] + 1 } }).unwrap();
+                case = Some((e, k, far)); break 'f;
+            }
+        }
+    }
+    let (e, lane, ramp) = case.expect("a lane dropped at a diverge");
+    let run = |opts: SimOpts| {
+        let mut sim = sim_dt(&g, opts, 0.1);
+        sim.barrier_dbg = Some(Vec::new());
+        let i = place(&mut sim, SEDAN, &[e as i32, ramp as i32], g.e_length[e] - 60.0, lane, 25.0);
+        let mut first: Option<(i32, f64)> = None;
+        for _ in 0..60 {
+            if sim.vs.state[i] != STATE_DRIVING { break; }
+            let gas = ((25.0 - sim.vs.speed[i] as f64) * 0.5).clamp(0.0, 1.0); hold(&mut sim, i, 0.0, gas, 0.0);
+            sim.step();
+            for b in sim.barrier_dbg.as_mut().unwrap().drain(..) { if b.slot == i && first.is_none() { first = Some((b.edge, b.depth)); } }
+            if sim.vs.edge[i] as usize != e && sim.vs.s[i] > 20.0 { break; }
+        }
+        (sim.vs.edge[i] as usize, first)
+    };
+    let (fe, fb) = run(SimOpts::default());
+    let (je, jb) = run(SimOpts::js());
+    eprintln!("e{e} lane {lane} -> planned ramp e{ramp}: fix on e{fe}, first barrier {fb:?}; js on e{je}, first barrier {jb:?}");
+    assert_eq!(je, ramp, "the JS takes the planned ramp");
+    assert!(jb.map(|b| b.1 > 10.0).unwrap_or(false), "the JS lands far past the ramp's barrier: {jb:?}");
+    assert_ne!(fe, ramp, "lane_drop_hop: the car goes where its lane physically is");
+    assert!(fb.map(|b| b.1 < 3.0).unwrap_or(true), "about one lane out at most: {fb:?}");
+}
