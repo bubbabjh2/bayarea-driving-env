@@ -91,6 +91,11 @@ pub struct SimOpts {
     /// 0.05 m/s the brake holds the car at 0 when the brake force alone beats the drive force minus the grade force;
     /// with no drive and no brake, rolling resistance holds it unless the grade force exceeds it.
     pub static_hold: bool,
+    /// Model fix (default ON; false = the JS): kerbs are mountable. A barrier contact on a road that is not a rigid
+    /// barrier (World::rigid_edge: the freeway system and bridges) with a closing speed under 2 m/s is a kerb scrape:
+    /// no rebound, kerb friction 0.6, up to 0.3 m of mounting, one minor contact event that never disables. Faster
+    /// strikes, and every strike on a rigid barrier, behave as before (audit finding 10).
+    pub mountable_kerbs: bool,
     /// Model fix (default ON; false = the JS): automatic idle creep. The drive force never drops below an idle force
     /// of 4 x the rolling resistance at rest, fading to 0 at 2 m/s, so a car with no pedals on the flat creeps at about
     /// 1.5 m/s and a small brake (about 7 %) holds it.
@@ -125,7 +130,7 @@ impl SimOpts {
         steer_delay_steps: if self.steer_delay < 0.0 { -1 } else { jm::round(self.steer_delay / self.dt) as i32 } } }
     /// The JS sim's model (oracle checks, trace_check / v2_check, JS-port tests): Default with the model fixes off
     /// (replan_at_missed_event = false). Checkpoints trained on the JS CPU sim saw this model.
-    pub fn js() -> SimOpts { SimOpts { replan_at_missed_event: false, lane_index_snapshot: false, wreck_real_mass: false, curvature_dynamics: false, smooth_geometry: false, junction_radii: false, spawn_clearance: false, wreck_end_stop: false, contact_episodes: false, connector_barrier: false, brake_hold: false, static_hold: false, idle_creep: false, steer_delay: -1.0, heavy_brakes: false, barrier_soft_push: false, impact_reverse: false, ..SimOpts::default() } }
+    pub fn js() -> SimOpts { SimOpts { replan_at_missed_event: false, lane_index_snapshot: false, wreck_real_mass: false, curvature_dynamics: false, smooth_geometry: false, junction_radii: false, spawn_clearance: false, wreck_end_stop: false, contact_episodes: false, connector_barrier: false, brake_hold: false, static_hold: false, mountable_kerbs: false, idle_creep: false, steer_delay: -1.0, heavy_brakes: false, barrier_soft_push: false, impact_reverse: false, ..SimOpts::default() } }
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -138,7 +143,7 @@ impl Default for SimOpts {
             cell_size: 25.0, table_bits: 18, leader_lookahead: 250.0, merge_lookahead: 80.0, lane_end_lookahead: 450.0, control_lookahead: 250.0,
             reroute: true, reroute_sight: 2000.0, squeeze_delay: 900.0, squeeze_speed: 3.0, density_interval: 60.0, path_sight: 0.0,
             deadlock_break: 0.0, spawn_lane_route: 0.0, junction_sight: 0.0, position_mode: true, traffic_mode: TrafficMode::Full, fuel: true,
-            seed: 1.0, wrecks: 0, default_action: Action { steer: Some(0.0), steer_rate: None, gas: 0.0, brake: 0.3 }, fuel_cfg: Default::default(), slot_pool: 0, parallel: false, replan_at_missed_event: true, batch_dynamics: true, lane_index_snapshot: true, wreck_real_mass: true, curvature_dynamics: false, smooth_geometry: false, junction_radii: false, spawn_clearance: false, spawn_clearance_m: 18.0, wreck_end_stop: true, contact_episodes: true, connector_barrier: true, brake_hold: false, static_hold: true, idle_creep: true, steer_delay: STEER_DELAY, heavy_brakes: true, barrier_soft_push: true, impact_reverse: true }
+            seed: 1.0, wrecks: 0, default_action: Action { steer: Some(0.0), steer_rate: None, gas: 0.0, brake: 0.3 }, fuel_cfg: Default::default(), slot_pool: 0, parallel: false, replan_at_missed_event: true, batch_dynamics: true, lane_index_snapshot: true, wreck_real_mass: true, curvature_dynamics: false, smooth_geometry: false, junction_radii: false, spawn_clearance: false, spawn_clearance_m: 18.0, wreck_end_stop: true, contact_episodes: true, connector_barrier: true, brake_hold: false, static_hold: true, mountable_kerbs: true, idle_creep: true, steer_delay: STEER_DELAY, heavy_brakes: true, barrier_soft_push: true, impact_reverse: true }
     }
 }
 

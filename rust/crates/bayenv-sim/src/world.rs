@@ -338,6 +338,8 @@ pub struct World {
     pub e_from: Vec<i32>, pub e_to: Vec<i32>, pub e_rev: Vec<i32>, pub e_lanes: Vec<i32>, pub e_opp: Vec<i32>,
     pub e_speed: Vec<f64>, pub e_length: Vec<f64>, pub e_rank: Vec<i32>, pub e_class: Vec<u8>, pub e_hw: Vec<u8>,
     pub e_is_link: Vec<bool>, pub e_has_ys: Vec<bool>,
+    /// edge is a bridge (OSM bridge=*; world graph flag): its kerbs are rails (SimOpts::mountable_kerbs). Empty = unknown (none)
+    pub e_is_bridge: Vec<bool>,
     pub e_head_start: Vec<f64>, pub e_head_end: Vec<f64>, pub e_y: Vec<f64>, pub e_right: Vec<f64>,
     pub e_s_exit: Vec<f64>, pub e_s_stop: Vec<f64>, pub e_gore: Vec<f64>,
     pub e_surf: Vec<u8>, pub e_gnd_r: Vec<u8>, pub e_gnd_l: Vec<u8>,
@@ -433,7 +435,7 @@ impl World {
             e_from: p.i32s("eFrom"), e_to: p.i32s("eTo"), e_rev: p.i32s("eRev"), e_lanes: p.i32s("eLanes"), e_opp: p.i32s("eOpp"),
             e_speed: p.f64s("eSpeed"), e_length: p.f64s("eLength"), e_rank: p.i32s("eRank"),
             e_hw: e_class.iter().map(|&c| hwbits[c as usize]).collect(), e_class,
-            e_is_link: flags.iter().map(|f| f & 1 != 0).collect(), e_has_ys: flags.iter().map(|f| f & 16 != 0).collect(),
+            e_is_link: flags.iter().map(|f| f & 1 != 0).collect(), e_has_ys: flags.iter().map(|f| f & 16 != 0).collect(), e_is_bridge: Vec::new(),
             e_head_start: p.f64s("eHeadStart"), e_head_end: p.f64s("eHeadEnd"), e_y: p.f64s("eY"), e_right: p.f64s("eRight"),
             e_s_exit: p.f64s("eSExit"), e_s_stop: p.f64s("eSStop"), e_gore: p.f64s("eGore"),
             e_surf: p.u8s("eSurf"), e_gnd_r: p.u8s("eGndR"), e_gnd_l: p.u8s("eGndL"),
@@ -491,7 +493,7 @@ impl World {
             e_from: i32v(&g.from), e_to: i32v(&g.to), e_rev: g.reverse.clone(), e_lanes: g.lanes.iter().map(|&x| x as i32).collect(), e_opp: g.opp_lanes.iter().map(|&x| x as i32).collect(),
             e_speed: g.speed_limit.clone(), e_length: g.length.clone(), e_rank: g.rank.iter().map(|&x| x as i32).collect(),
             e_hw: g.class.iter().map(|&c| hwbits[c as usize]).collect(), e_class: g.class.clone(),
-            e_is_link: g.eflags.iter().map(|&f| f & ef::LINK != 0).collect(), e_has_ys: g.eflags.iter().map(|&f| f & ef::HAS_YS != 0).collect(),
+            e_is_link: g.eflags.iter().map(|&f| f & ef::LINK != 0).collect(), e_has_ys: g.eflags.iter().map(|&f| f & ef::HAS_YS != 0).collect(), e_is_bridge: g.eflags.iter().map(|&f| f & ef::BRIDGE != 0).collect(),
             e_head_start: g.heading_start.clone(), e_head_end: g.heading_end.clone(), e_y: f64v(&g.y), e_right: g.right_edge.clone(),
             e_s_exit: nan(&g.s_exit), e_s_stop: nan(&g.s_stop), e_gore: nan(&g.gore),
             e_surf: g.surf.clone(), e_gnd_r: g.gnd_r.clone(), e_gnd_l: g.gnd_l.clone(),
@@ -521,7 +523,7 @@ impl World {
             node_count: g.node_count, nx: g.nx.clone(), nz: g.nz.clone(), node_y: Vec::new(), edge_count: g.edge_count,
             e_from: i32v(&g.from), e_to: i32v(&g.to), e_rev: g.reverse.clone(), e_lanes: g.lanes.iter().map(|&x| x as i32).collect(), e_opp: Vec::new(),
             e_speed: g.speed_limit.clone(), e_length: g.length.clone(), e_rank: g.rank.iter().map(|&x| x as i32).collect(), e_class: g.class.clone(), e_hw: Vec::new(),
-            e_is_link: Vec::new(), e_has_ys: Vec::new(), e_head_start: g.heading_start.clone(), e_head_end: g.heading_end.clone(), e_y: Vec::new(), e_right: Vec::new(),
+            e_is_link: Vec::new(), e_has_ys: Vec::new(), e_is_bridge: Vec::new(), e_head_start: g.heading_start.clone(), e_head_end: g.heading_end.clone(), e_y: Vec::new(), e_right: Vec::new(),
             e_s_exit: Vec::new(), e_s_stop: Vec::new(), e_gore: Vec::new(), e_surf: Vec::new(), e_gnd_r: Vec::new(), e_gnd_l: Vec::new(),
             v_start: Vec::new(), px: Vec::new(), pz: Vec::new(), cum: Vec::new(), ys: Vec::new(), l_start: Vec::new(), lane_off: Vec::new(),
             out_start: i32v(&g.out_start), out_edges: i32v(&g.out_edges), in_start: i32v(&g.in_start), in_edges: i32v(&g.in_edges),
@@ -732,6 +734,10 @@ impl World {
         if gr > MAX_GRADE { MAX_GRADE } else if gr < -MAX_GRADE { -MAX_GRADE } else { gr }
     }
     #[inline] pub fn is_shoulder_road(&self, e: usize) -> bool { self.e_hw[e] & HW_SHOULDER != 0 }
+    /// SimOpts::mountable_kerbs: edge e's lateral limit is a rigid barrier (the freeway system: motorway / trunk and
+    /// their links, which have barriers or guard rails, and bridges, which have rails), not a mountable kerb. The world
+    /// data has no barrier tags, so road class and the bridge flag stand in for them.
+    #[inline] pub fn rigid_edge(&self, e: usize) -> bool { self.is_shoulder_road(e) || self.e_is_bridge.get(e).copied().unwrap_or(false) }
     #[inline] pub fn highway(&self, e: usize) -> &str { &self.highway_names[self.e_class[e] as usize] }
     #[inline] pub fn contact_pair_key(a: i64, b: i64) -> i64 { if a < b { a * 4194304 + b } else { b * 4194304 + a } }
 }

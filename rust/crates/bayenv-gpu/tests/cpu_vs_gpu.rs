@@ -83,8 +83,8 @@ fn near(cc: &[usize; 10], gc: &[usize; 10], k: usize, rel: f64, abs: f64) {
     let (c, g) = (cc[k] as f64, gc[k] as f64); assert!((c - g).abs() <= abs.max(rel * c), "{}: cpu {c} gpu {g}", NAME[k]);
 }
 
-/// The default model (curvature_dynamics off; static_hold, idle_creep, steer_delay 0.15 s). Measured: arrived 4 / 4,
-/// crashed 32 / 32, contacts 14 / 15 (barrier 8 / 9), missed exits 116 / 124, violations 1,632 / 1,629.
+/// The default model (curvature_dynamics off; static_hold, idle_creep, steer_delay 0.15 s, mountable_kerbs). Measured:
+/// arrived 4 / 4, crashed 32 / 32, contacts 11 / 11 (barrier 5 / 5), missed exits 116 / 124, violations 1,632 / 1,629.
 #[test]
 fn cpu_and_gpu_agree_in_aggregate() {
     let Some((cc, gc, cb, gb)) = run(false, false, false) else { return };
@@ -98,8 +98,8 @@ fn cpu_and_gpu_agree_in_aggregate() {
 
 /// curvature_dynamics on (both backends) with smooth_geometry, junction_radii and spawn_clearance: a car held at steer 0
 /// no longer follows the road, so most cars of this policy hit a kerb. Measured (with static_hold, idle_creep,
-/// steer_delay): arrived 0 / 0, crashed 745 / 745, contacts 1,759 / 1,771 (barrier 1,754 / 1,766), missed exits 14 / 18,
-/// violations 375 / 376; spawns: all 834 start on the same route position and edge (127 past route edge 0 on both).
+/// steer_delay, mountable_kerbs): arrived 0 / 0, crashed 679 / 680, contacts 1,326 / 1,328 (barrier 1,175 / 1,168),
+/// missed exits 15 / 19, violations 399 / 399; spawns: all 834 start on the same route position and edge (127 past route edge 0 on both).
 #[test]
 fn cpu_and_gpu_agree_with_curvature_dynamics() {
     let Some(((cc, gc, cb, gb), sa)) = run_sc(true, true, true, true) else { return };
