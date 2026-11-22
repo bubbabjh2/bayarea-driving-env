@@ -76,20 +76,25 @@ fn junction_obstacle_in_own_ahead_slot_matches_cpu() {
     };
     let cap = 4096;
     let mut gpus = Vec::new();
-    for (on, wp, bs, le, lb) in [(true, true, true, true, true), (false, true, true, true, true), (true, false, true, true, true), (true, true, false, true, true), (true, true, true, false, true), (true, true, true, true, false), (true, true, true, true, true)] {
+    for (on, wp, bs, le, lb) in [(true, true, true, true, true), (false, true, true, true, true), (true, false, true, true, true), (true, true, false, true, true), (true, true, true, false, true), (true, true, true, true, false), (true, true, true, true, true), (true, true, true, true, true)] {
         let mut o = GpuOptions { capacity: cap, start_time: start, seed: 777, obs: ObsMode::V2, refuel_budget_ms: f64::INFINITY, dt, ..Default::default() };
-        o.features.accidents = false; o.junction_obstacle = on; o.waits_prev_step = wp; o.box_standstill = bs; o.lane_end_into = le; o.sense_list_behind = lb; if gpus.len() == 6 { o.guide_odometer = false; }
+        o.features.accidents = false; o.junction_obstacle = on; o.waits_prev_step = wp; o.box_standstill = bs; o.lane_end_into = le; o.sense_list_behind = lb; if gpus.len() == 6 { o.guide_odometer = false; } if gpus.len() == 7 { o.guide_stop_spawn = false; }
         let mut gpu = match bayenv_gpu::env::create(w.clone(), o) { Ok(s) => s, Err(e) => { eprintln!("junction_obstacle: no GPU ({e}): not run"); return } };
         gpu.set_population(Arc::new(GpuPopulation::generate(&w, N, 777.0, true).unwrap()), true);
         gpus.push(gpu);
     }
-    let mut res = vec![(0usize, 0usize, 0usize); 7]; let mut extra = [0usize; 7]; let mut follows = [0usize; 7]; let mut box_below = [0usize; 7];
-    let mut lane_end = [0usize; 7]; let mut lane_end_mis = [0usize; 7]; let mut behind_mis = [0usize; 7]; let mut guide_rows = [0usize; 7]; let mut guide_mis = [0usize; 7]; let mut box_led = 0usize;
+    let mut res = vec![(0usize, 0usize, 0usize); 8]; let mut extra = [0usize; 8]; let mut follows = [0usize; 8]; let mut box_below = [0usize; 8];
+    let mut lane_end = [0usize; 8]; let mut lane_end_mis = [0usize; 8]; let mut behind_mis = [0usize; 8]; let mut guide_rows = [0usize; 8]; let mut guide_mis = [0usize; 8]; let mut man_mis = [0usize; 8]; let mut box_led = 0usize;
     let per = (2.0 * 60.0 / dt) as usize;
     for k in 0..(30.0 * 60.0 / dt) as usize {
         let rows = rows_for(&cpu, &cobs);
         let check = k >= 5 * per && k % per == 0;
-        let snap = if check { Some(snapshot(&cpu.sim)) } else { None };
+        let snap = if check { let mut sn = snapshot(&cpu.sim);
+            // guide_stop_spawn: GUIDE_STOP where the CPU v2 guidance has a pending refuel stop
+            if let Some(fl) = sn.arrays.get_mut("flags") { for (i, t) in enc.slots.iter().enumerate() {
+                let Some(t) = t.as_ref() else { continue }; if i >= fl.len() || cpu.sim.vs.state[i] != 1 || t.key.2 != cpu.sim.vs.spawn_time[i].to_bits() { continue; }
+                if t.guide.maneuvers.iter().any(|m| m.stop && !m.done) { fl[i] = (fl[i] as u32 | bayenv_gpu::layout::flag::GUIDE_STOP) as f64; } } }
+            Some(sn) } else { None };
         cpu.act_rows(&rows, 0); enc.record_actions(&cpu.sim); cpu.sim.step(); let _ = cpu.take_records();
         for x in cpu.sim.actions.iter_mut() { *x = None; }
         encode(&mut cpu, &mut enc, &mut cobs);
@@ -124,7 +129,7 @@ fn junction_obstacle_in_own_ahead_slot_matches_cpu() {
                 if vs.leader[i] == -2 { lane_end[gk] += 1; if st.u(i, 20) as i32 != -2 || (st.f(i, 21) - vs.gap[i]).abs() > 0.05 { lane_end_mis[gk] += 1; } }
                 // sense_list_behind: own-behind gap (input 10)
                 // guide_odometer: maneuver distance (20) and the side lane ends (12 / 16) at the CPU's (odometer) position
-                if !new_edges.contains(&vs.edge[i]) { guide_rows[gk] += 1; if [12usize, 16, 20].iter().any(|&k| (c[k] - g[k]).abs() > 1e-3) { guide_mis[gk] += 1; } }
+                if !new_edges.contains(&vs.edge[i]) { guide_rows[gk] += 1; if [12usize, 16, 20].iter().any(|&k| (c[k] - g[k]).abs() > 1e-3) { guide_mis[gk] += 1; } if (21..33).any(|k| (c[k] - g[k]).abs() > 1e-3) { man_mis[gk] += 1; } }
                 if !new_edges.contains(&vs.edge[i]) && (c[10] - g[10]).abs() > 1e-3 { behind_mis[gk] += 1; if gk == 0 && behind_mis[0] <= 12 { eprintln!("  behind: slot {i} edge {} conn {} s {:.2} lane {} lo/hi {}/{} (gpu {:08x}) cpu 10/11 {:.3}/{:.3} gpu {:.3}/{:.3}", vs.edge[i], vs.conn[i], vs.s[i], vs.lane[i], vs.lane_lo[i], vs.lane_hi[i], st.u(i, 14), c[10], c[11], g[10], g[11]); } }
                 if c[65] >= 1.0 || (c[65] - g[65]).abs() > 1e-3 || (c[67] - g[67]).abs() > 1e-3 { continue; }
                 res[gk].0 += 1;
@@ -133,7 +138,7 @@ fn junction_obstacle_in_own_ahead_slot_matches_cpu() {
             }
         }
     }
-    for gk in 0..7 { eprintln!("variant {gk}: lane-end rows {} (GPU leader / gap differs in {}), own-behind (input 10) differs in {} rows, inputs 12 / 16 / 20 differ in {} of {} rows", lane_end[gk], lane_end_mis[gk], behind_mis[gk], guide_mis[gk], guide_rows[gk]); }
+    for gk in 0..8 { eprintln!("variant {gk}: lane-end rows {} (GPU leader / gap differs in {}), own-behind (input 10) differs in {} rows, inputs 12 / 16 / 20 differ in {} of {} rows, maneuver type / hint (21..32) in {}", lane_end[gk], lane_end_mis[gk], behind_mis[gk], guide_mis[gk], guide_rows[gk], man_mis[gk]); }
     for (gk, r) in res.iter().enumerate().take(4) { eprintln!("variant {gk} (junction_obstacle {}, waits_prev_step {}, box_standstill {}): {} cars with a junction conflict ahead, {} with it as the CPU's own-ahead obstacle, GPU missed {}; rows with a GPU own-ahead gap below the CPU's: {}; box cars following a stopped car that waits for them: {} (of {box_led} box cars with a car leader); box rows with a GPU own-ahead gap below the CPU's: {}", gk != 1, gk != 2, gk != 3, r.0, r.1, r.2, extra[gk], follows[gk], box_below[gk]); }
     let ((c1, o1, m1), (_, _, m0)) = (res[0], res[1]);
     assert!(follows[0] == 0, "waits_prev_step on: {} box cars follow a stopped car that waits for them", follows[0]);
@@ -145,6 +150,7 @@ fn junction_obstacle_in_own_ahead_slot_matches_cpu() {
     assert!(behind_mis[5] > 0, "sense_list_behind off shows no own-behind difference: the test does not exercise the flag");
     assert!(guide_mis[0] * 200 <= guide_rows[0], "all on: inputs 12 / 16 / 20 differ in {} of {} rows (> 0.5 %)", guide_mis[0], guide_rows[0]);
     assert!(guide_mis[6] > 10 * guide_mis[0].max(1), "guide_odometer off: inputs 12 / 16 / 20 differ in only {} rows", guide_mis[6]);
+    assert!(man_mis[0] <= man_mis[7], "guide_stop_spawn: maneuver rows differ more with the flag ({}) than without ({})", man_mis[0], man_mis[7]);
     assert!(box_below[3] > 0, "box_standstill off shows no box row below the CPU's gap: the test does not exercise the flag");
     assert!(c1 >= 20 && o1 >= 5, "too few cases: {c1} conflicts, {o1} obstacles");
     assert!(m1 == 0, "junction_obstacle on: {m1} of {o1} rows where the GPU misses the CPU's junction obstacle");

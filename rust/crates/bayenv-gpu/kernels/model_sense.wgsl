@@ -148,3 +148,26 @@ fn laneEndAhead(i: u32, v0: Veh, pi: VPar, lane: i32) -> f32 {
   var k = v.routePos;
   if (MF_GUIDE_ODO) { let o = odoPos(v, pi, false); k = o.k; d = o.cum + eLength(routeEdge(pi, o.k)) - v.routeDist; }
 //#end
+// MF_GUIDE_STOP (GpuOptions::guide_stop_spawn): bayenv-sim's v2 guidance (sim.js / brainAdapter) has the refuel stop
+// only when the refuel detour was set after the encoder first saw the trip: the plan made at spawn (sim.js
+// _checkFuel(i, atSpawn)) is in the route before the driver's guidance is built, and the guidance factory ignores the
+// stop. The JS GPU showed the stop (maneuver 8, the lookahead end) whenever a refuel was planned. With the flag it
+// needs veh flag 16384 (the host sets it with the refuel route of a plan requested while driving).
+//#orig guide-stop-scan
+    if (v.refuelState == 1u && v.stopPos == i32(k)) { typ = 8u; sd = 2u; found = true; break; }
+//#end
+//#patch guide-stop-scan
+    if (v.refuelState == 1u && v.stopPos == i32(k) && (!MF_GUIDE_STOP || (v.flags & 16384u) != 0u)) { typ = 8u; sd = 2u; found = true; break; }
+//#end
+//#orig guide-stop-lane-end0
+  if (v.refuelState == 1u && v.stopPos == i32(v.routePos)) { return 1e9; }
+//#end
+//#patch guide-stop-lane-end0
+  if (v.refuelState == 1u && v.stopPos == i32(v.routePos) && (!MF_GUIDE_STOP || (v.flags & 16384u) != 0u)) { return 1e9; }
+//#end
+//#orig guide-stop-lane-end
+    if (v.refuelState == 1u && v.stopPos == i32(v.routePos + k)) { break; }
+//#end
+//#patch guide-stop-lane-end
+    if (v.refuelState == 1u && v.stopPos == i32(v.routePos + k) && (!MF_GUIDE_STOP || (v.flags & 16384u) != 0u)) { break; }
+//#end

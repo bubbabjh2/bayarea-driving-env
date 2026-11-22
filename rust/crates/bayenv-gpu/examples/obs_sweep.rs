@@ -85,7 +85,11 @@ fn main() {
     for &m in &mins {
         let target = (m * 60.0 / dt) as usize;
         while t < target { let rows = rows_for(&cpu, &cobs); step_cpu(&mut cpu, &mut cobs, &rows, &mut e2, &mut e3); t += 1; }
-        let snap = snapshot(&cpu.sim);
+        let mut snap = snapshot(&cpu.sim);
+        // guide_stop_spawn: the GPU flag GUIDE_STOP where the CPU v2 guidance has a pending refuel stop
+        if !v3 { if let Some(fl) = snap.arrays.get_mut("flags") { for (i, t) in e2.slots.iter().enumerate() {
+            let Some(t) = t.as_ref() else { continue }; if i >= fl.len() || cpu.sim.vs.state[i] != 1 || t.key.2 != cpu.sim.vs.spawn_time[i].to_bits() { continue; }
+            if t.guide.maneuvers.iter().any(|m| m.stop && !m.done) { fl[i] = (fl[i] as u32 | bayenv_gpu::layout::flag::GUIDE_STOP) as f64; } } } }
         assert!(cpu.sim.vs.high <= cap);
         gpu.import_snapshot(&snap).unwrap();
         // the CPU's active crash / breakdown scenes (their edge blocks are scene obstacles for the leaders pass)

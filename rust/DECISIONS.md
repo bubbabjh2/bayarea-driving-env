@@ -1158,3 +1158,22 @@ Each entry: date, decision, why, alternatives, numbers, and one line to say it o
   naming the patches (kernels.rs `check_storage_limit`, unit test `sense_storage_buffers_checked_against_the_limit`).
 - **Tests:** `tests/junction_obstacle.rs` also checks inputs 12 / 16 / 20 after each import: all on, 13 of 4565 rows
   differ (refuel guidance); guide_odometer off, 1340. kernels.rs `sector_snap_files_aligned_bodies_alike`.
+
+## 50. v2 guidance refuel stop only for a refuel planned while driving (`guide_stop_spawn`, default on, obs v2)
+
+- **Date:** 2026-11-22
+- **Cause:** bayenv-sim's v2 encoder (sim.js / brainAdapter) builds a trip's guidance when it first sees the car,
+  without the refuel stop (the guidance factory ignores it), and rebuilds it with the stop only when the sim sets a
+  new route afterwards (the refuel detour of a plan requested while driving). A plan made at spawn (sim.js
+  `_checkFuel(i, atSpawn)`) is already in the route when the guidance is built, so the CPU never shows its stop. The JS
+  GPU kernel showed the stop (maneuver 8 / its distance, the end of the guidance lane-end lookahead) whenever a refuel
+  was planned (refuelState 1): inputs 20..32 in 0.1..0.2 % of the rows (entry 49).
+- **Fix:** the GPU's LOWFUEL event already says whether the request came at spawn (b = 1); the host remembers the
+  slots that asked while driving and sets veh flag GUIDE_STOP (16384, GPU only) with their refuel route;
+  `kernels/model_sense.wgsl` MF_GUIDE_STOP shows the stop (and ends the lane-end lookahead there) only with that
+  flag. js_model off. The sweep / tests set the flag on import where the CPU guidance has a pending stop.
+- **Numbers (examples/obs_sweep.rs, v2, 10,000 commuters, 10 / 30 / 60 min):** inputs 20..32 now differ in 1 / 1 / 2
+  rows of 1085 / 1240 / 1474 (before: 2 / 2 / 3). Left: the CPU places its stop where the route first reaches the
+  station's node (Guidance.build), the sim's stop index can be a different entry (2 cars, 0.07..0.14 %).
+- **Test:** `tests/junction_obstacle.rs` variant without the flag: maneuver rows 12 vs 11 with it (3,000 commuters
+  rarely refuel in 30 min); the sweep is the measurement.

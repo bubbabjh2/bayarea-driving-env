@@ -36,6 +36,8 @@ pub mod flag {
     pub const LEARNER: u32 = 1; pub const COLLIDED: u32 = 2; pub const POLICY: u32 = 4; pub const SHOULDER: u32 = 8; pub const SPEEDING: u32 = 16;
     pub const FUELREQ: u32 = 32; pub const STRANDED: u32 = 64; pub const REFUEL: u32 = 128; pub const ZIPLEAD: u32 = 256; pub const SCORED: u32 = 512;
     pub const DISABLED: u32 = 1024; pub const WALL: u32 = 2048; pub const WALL_PREV: u32 = 4096; pub const NEW: u32 = 8192;
+    /// GPU only (GpuOptions::guide_stop_spawn): the refuel route came from a plan requested while driving, so the v2 guidance shows its stop
+    pub const GUIDE_STOP: u32 = 16384;
 }
 pub mod feat { pub const LANECHANGE: u32 = 1; pub const ACCIDENTS: u32 = 2; pub const FUEL: u32 = 4; pub const COLLISIONS: u32 = 8; pub const YIELD: u32 = 16; pub const POLICY: u32 = 32; pub const ZIPFIX: u32 = 64; pub const EMPTY: u32 = 128; }
 pub mod ev {
