@@ -803,3 +803,30 @@ Each entry: date, decision, why, alternatives, numbers, and one line to say it o
   3.3 m of the ground grid everywhere in the box; the only larger misfits map-wide are tunnels and cuttings.
 - **On camera:** "The invisible walls weren't in the city. Our cars were leaving the road inside intersections, where
   nothing stopped them, driving off into the hills, and the first wall they met afterwards was back on the road."
+
+## 40. Cars roll back on hills (`hill_rollback`)
+
+- **Date:** 2026-11-22
+- **Decision:** a driving car's speed was clamped at ≥ 0 (there is no reverse gear), so a car that couldn't hold a
+  grade simply stopped dead. Now, when the grade force beats drive + brake + rolling resistance, a driving car rolls
+  backwards under gravity:
+  - brakes and rolling resistance oppose the backward motion;
+  - the brake (with `static_hold`) can still hold the car;
+  - a backward-rolling car that the forces bring to a stop stays stopped, with no reverse drive;
+  - a car rolling back into the one behind is an ordinary contact, and contacts keep a driving car's backward speed.
+
+  Default on, CPU and GPU; `SimOpts::js()` turns it off.
+- **Why:** the training side's GPU stranding trace. Cars held 0.44–0.55 gas on 20–23 % streets and sat at 0 m/s for
+  hours: drive 0.546 × 5.6 kN = 3.06 kN against 3.17 kN of grade plus rolling resistance. That's a real stall, but
+  with the clamp the policy never saw the consequence (lost ground), so it had no reason to press more gas. The
+  project rule is "physics, not rules".
+- **Numbers:** on trip 818's hill (edge 124811, 17–23 %), from rest:
+  - gas 0.45 at s 20 (20 %): rolls back 3.4 m, peaking at 0.45 m/s, to where the grade eases. The JS stops dead.
+  - gas 0.546: stalls at the balance point, held by rolling resistance.
+  - gas 0.65: climbs.
+  - stopped at s 25, gas 0: brake 0.6 holds it (3 mm); with no brake it rolls back to 6.3 m/s.
+  - full gas from rest climbs the steepest sustained 30 m on the map, 35.0 % (edge 78271). SF's steepest streets
+    (Filbert, 22nd St) are about 31 %, so the drive-force model (f0 = 5.6 kN for a sedan, about 0.38 g) is
+    sufficient.
+- **On camera:** "Our cars used to freeze on San Francisco's hills like they had a handbrake made of magic. Now if
+  you don't give it enough gas, it rolls back down."
