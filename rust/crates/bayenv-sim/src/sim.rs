@@ -141,6 +141,13 @@ pub struct SimOpts {
     pub impact_reverse: bool,
     /// single-threaded integrate: two cars at a time with interleaved vehicle dynamics (identical results; A/B switch)
     pub batch_dynamics: bool,
+    /// Bridge-rail breach (default OFF, CPU only, no JS counterpart; DECISIONS.md 46, breach.rs): a driving car that
+    /// strikes the outer (right-hand) barrier of a bridge edge with an impact severity 1/2 m v_normal^2 above
+    /// `breach_is_kj` goes through the rail: it is disabled, its trip fails as a crash, it leaves the vehicle store
+    /// and falls (`Sim::falls`) to the ground or water below (`Sim::ground`).
+    pub barrier_breach: bool,
+    /// rail capacity for barrier_breach (kJ of impact severity); default MASH TL-3, test 3-11 (2270 kg, 100 km/h, 25 deg)
+    pub breach_is_kj: f64,
 }
 
 /// one car's phase-A result (integrate_all)
@@ -169,7 +176,7 @@ impl Default for SimOpts {
             cell_size: 25.0, table_bits: 18, leader_lookahead: 250.0, merge_lookahead: 80.0, lane_end_lookahead: 450.0, control_lookahead: 250.0,
             reroute: true, reroute_sight: 2000.0, squeeze_delay: 900.0, squeeze_speed: 3.0, density_interval: 60.0, path_sight: 0.0,
             deadlock_break: 0.0, spawn_lane_route: 0.0, junction_sight: 0.0, position_mode: true, traffic_mode: TrafficMode::Full, fuel: true,
-            seed: 1.0, wrecks: 0, default_action: Action { steer: Some(0.0), steer_rate: None, gas: 0.0, brake: 0.3 }, fuel_cfg: Default::default(), slot_pool: 0, parallel: false, replan_at_missed_event: true, batch_dynamics: true, lane_index_snapshot: true, wreck_real_mass: true, curvature_dynamics: false, smooth_geometry: false, junction_radii: false, spawn_clearance: false, spawn_clearance_m: 18.0, wreck_end_stop: true, contact_episodes: true, connector_barrier: true, box_barrier: true, lane_drop_hop: true, brake_hold: false, static_hold: true, mountable_kerbs: true, idle_creep: true, hill_rollback: true, v3_guide_in_box: true, v3_junction_obstacle: true, steer_delay: STEER_DELAY, heavy_brakes: true, barrier_soft_push: true, impact_reverse: true }
+            seed: 1.0, wrecks: 0, default_action: Action { steer: Some(0.0), steer_rate: None, gas: 0.0, brake: 0.3 }, fuel_cfg: Default::default(), slot_pool: 0, parallel: false, replan_at_missed_event: true, batch_dynamics: true, lane_index_snapshot: true, wreck_real_mass: true, curvature_dynamics: false, smooth_geometry: false, junction_radii: false, spawn_clearance: false, spawn_clearance_m: 18.0, wreck_end_stop: true, contact_episodes: true, connector_barrier: true, box_barrier: true, lane_drop_hop: true, brake_hold: false, static_hold: true, mountable_kerbs: true, idle_creep: true, hill_rollback: true, v3_guide_in_box: true, v3_junction_obstacle: true, steer_delay: STEER_DELAY, heavy_brakes: true, barrier_soft_push: true, impact_reverse: true, barrier_breach: false, breach_is_kj: crate::breach::MASH_TL3_IS_KJ }
     }
 }
 
@@ -345,6 +352,10 @@ pub struct Sim {
     pub phase_ns: [u64; 10],
     /// sub-phase timers (profile): 0 leaders phase 1, 1 integrate phase A, 2 reroute, 3 traffic sample, 4 spawn pre-eval
     pub sub_ns: [u64; 12],
+    /// SimOpts::barrier_breach: every car that went through a bridge rail, falling or at rest below (breach.rs)
+    pub falls: Vec<crate::breach::Fall>,
+    /// the surface the falls land on (None: sea level 0); e.g. `breach::DemGround::load(data_dir)`
+    pub ground: Option<Arc<dyn crate::breach::Ground>>,
 }
 
 #[inline(always)] pub(crate) fn f(x: f32) -> f64 { x as f64 }
@@ -401,7 +412,7 @@ impl Sim {
             passers: Default::default(), conflict_with: HashMap::default(), off_lane: Default::default(), touch: HashSet::default(), barrier_touch: HashSet::default(), barrier_now: HashSet::default(), barrier_dbg: None, barrier_ep: HashMap::default(), barrier_ep_now: HashMap::default(), touch_ep: HashMap::default(), touch_ep_now: HashMap::default(), reverse_stash: HashMap::default(),
             yield_by: None, creep_until: Vec::new(), creep_ignore: Vec::new(), edge_speed: HashMap::default(), traffic_penalty: None,
             last_reroute: HashMap::default(), next_traffic: 0.0, next_reroute: 0.0, next_density: start, edge_count_scratch: vec![0; ne], fwy, fwy_lane_km,
-            near_buf: Vec::new(), static_obstacles: Vec::new(), obstacles: Vec::new(), profile: std::env::var("BAYENV_PROFILE").is_ok(), phase_ns: [0; 10], sub_ns: [0; 12], events: StepEvents::default(), event_log: Vec::new(), p2_reruns: 0, collided_last: Vec::new(), batch_policy: None,
+            near_buf: Vec::new(), static_obstacles: Vec::new(), obstacles: Vec::new(), profile: std::env::var("BAYENV_PROFILE").is_ok(), phase_ns: [0; 10], sub_ns: [0; 12], events: StepEvents::default(), event_log: Vec::new(), p2_reruns: 0, collided_last: Vec::new(), batch_policy: None, falls: Vec::new(), ground: None,
             empty: opts.traffic_mode == TrafficMode::Empty, time: start, dt: opts.dt, step_count: 0, vs, rng, router, g, pop, opts,
         };
         if sim.opts.traffic_mode == TrafficMode::Sparse && sim.opts.wrecks > 0 { sim.place_wrecks(sim.opts.wrecks); }
@@ -445,6 +456,7 @@ impl Sim {
         if let Some(yb) = &mut self.yield_by { yb.iter_mut().for_each(|x| *x = -1); }
         self.drive(dt); lap!(6);
         self.integrate_all(dt); lap!(7);
+        if !self.falls.is_empty() { self.step_falls(dt); }
         if !self.vs.missed.is_empty() { self.missed_exits(); }
         self.scenes(); lap!(8);
         let tq = std::time::Instant::now();

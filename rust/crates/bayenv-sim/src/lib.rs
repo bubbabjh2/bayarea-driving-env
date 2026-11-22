@@ -15,6 +15,7 @@ pub mod sim;
 pub mod leaders;
 pub mod junction;
 pub mod contacts;
+pub mod breach;
 pub mod extra;
 pub mod route_stub;
 pub mod env;

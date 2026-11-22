@@ -45,7 +45,7 @@ fn run(w: &Arc<bayenv_world::World>, n: usize, steer_delay: f64, checks: &[usize
     let cap = (n + 1023) / 1024 * 1024;
     let mut o = GpuOptions { capacity: cap, start_time: START, seed: 42, obs: ObsMode::V3, refuel_budget_ms: f64::INFINITY, ..Default::default() };
     o.steer_delay = steer_delay;
-    // diagnostics: OBS_V3_BASE=1 = both backends without the v3 junction fixes (the rows before DECISIONS.md 46)
+    // diagnostics: OBS_V3_BASE=1 = both backends without the v3 junction fixes (the rows before DECISIONS.md 47)
     let base = std::env::var("OBS_V3_BASE").is_ok();
     if base { o.guide_in_box = false; o.junction_obstacle = false; }
     assert!(o.obs_after_step);

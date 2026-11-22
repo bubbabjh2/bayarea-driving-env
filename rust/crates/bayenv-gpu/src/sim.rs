@@ -158,12 +158,12 @@ pub struct GpuOptions {
     /// Guidance inside junction boxes as on the CPU (default ON; kernels/model_sense.wgsl MF_GUIDE_BOX): once the car is
     /// past the in-edge's end in a box, obs input 20..32 show the next maneuver (distance >= 0), not the junction being
     /// crossed with a negative distance (the JS GPU kernel).
-    /// obs v2 and v3 (v3 since DECISIONS.md 46; bayenv-sim's V3Encoder mirrors it with SimOpts::v3_guide_in_box).
+    /// obs v2 and v3 (v3 since DECISIONS.md 47; bayenv-sim's V3Encoder mirrors it with SimOpts::v3_guide_in_box).
     pub guide_in_box: bool,
     /// obs v3 command-ring index without u32 wrap in the first steps (default ON; kernels/model_sense.wgsl MF_RING_FIX)
     pub obs_ring_fix: bool,
     /// The junction-conflict obstacle in the own-ahead obs slot (inputs 8 / 9) as bayenv-sim's encoder (default ON;
-    /// kernels/model_jyield.wgsl + model_sense.wgsl; the JS GPU never put it, DECISIONS.md 45). obs v2 and v3 (v3 since DECISIONS.md 46; CPU mirror SimOpts::v3_junction_obstacle).
+    /// kernels/model_jyield.wgsl + model_sense.wgsl; the JS GPU never put it, DECISIONS.md 45). obs v2 and v3 (v3 since DECISIONS.md 47; CPU mirror SimOpts::v3_junction_obstacle).
     pub junction_obstacle: bool,
     /// Junction perception's "waits for me" reads the other car's leader / conflict partner of the previous step's end,
     /// as bayenv-sim's slot-order pass (default ON; kernels/model_leaders.wgsl, with deterministic_leaders; DECISIONS.md 45).
