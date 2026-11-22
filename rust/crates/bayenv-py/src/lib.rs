@@ -170,6 +170,8 @@ impl Env {
     ///     curvature_dynamics=False, wreck_end_stop=True, contact_episodes=True, connector_barrier=True, box_barrier=True, lane_drop_hop=True, brake_hold=False, static_hold=True, mountable_kerbs=True, hill_rollback=True, idle_creep=True, steer_delay=0.15,
     ///     heavy_brakes=True, barrier_soft_push=True, impact_reverse=True, route_threads=None, heading_preview=False)
     /// heading_preview (gpu, default False): compute the heading_preview() buffer after every step (the cpu computes it on demand).
+    /// obs: "v2" (70), "v3" (358: the GPU's input-version-3 row; on the cpu bayenv_sim::obs_v3::V3Encoder), "none";
+    /// cpu only: "v3_perception" (358, the JS env.observe({v3: true}) vector, 0..69 and 94..101 zero), "flat" (77).
     /// obs_after_step (gpu, default True): observe the state after the step, as the cpu does (False = the JS GPU order: the
     /// observation is one step older; legacy GPU checkpoints).
     /// Loads the world (~0.1 s warm), builds the GPU buffers and scatters `n_cars` cars at rest on random routes
@@ -211,7 +213,7 @@ impl Env {
         check_dt(dt)?;
         let fx = PhysFixes { wreck_real_mass, curvature_dynamics, smooth_geometry, junction_radii, spawn_clearance, wreck_end_stop, contact_episodes, connector_barrier, box_barrier, lane_drop_hop, brake_hold, static_hold, mountable_kerbs, hill_rollback, idle_creep, steer_delay, heavy_brakes, barrier_soft_push, impact_reverse };
         if backend == "cpu" {
-            let cobs = match obs { "v2" => CpuObs::V2, "v3" => CpuObs::V3, "flat" => CpuObs::Flat, "none" => CpuObs::None, _ => return Err(PyValueError::new_err("obs must be 'v2', 'v3', 'flat' or 'none'")) };
+            let cobs = match obs { "v2" => CpuObs::V2, "v3" => CpuObs::V3, "v3_perception" => CpuObs::V3Perception, "flat" => CpuObs::Flat, "none" => CpuObs::None, _ => return Err(PyValueError::new_err("obs must be 'v2', 'v3', 'v3_perception', 'flat' or 'none'")) };
             // CPU reference sim (crate bayenv-sim): commuter population (population.js, n_cars commuters, seed),
             // cars spawn on their trip schedule; slots = sim vehicle slots (0..high)
             let data = data_dir.to_string(); let fuel_on = fuel;
@@ -676,7 +678,7 @@ impl VecEnv {
         check_dt(dt)?;
         let fx = PhysFixes { wreck_real_mass, curvature_dynamics, smooth_geometry, junction_radii, spawn_clearance, wreck_end_stop, contact_episodes, connector_barrier, box_barrier, lane_drop_hop, brake_hold, static_hold, mountable_kerbs, hill_rollback, idle_creep, steer_delay, heavy_brakes, barrier_soft_push, impact_reverse };
         if backend == "cpu" {
-            let cobs = match obs { "v2" => CpuObs::V2, "v3" => CpuObs::V3, "flat" => CpuObs::Flat, "none" => CpuObs::None, _ => return Err(PyValueError::new_err("obs must be 'v2', 'v3', 'flat' or 'none'")) };
+            let cobs = match obs { "v2" => CpuObs::V2, "v3" => CpuObs::V3, "v3_perception" => CpuObs::V3Perception, "flat" => CpuObs::Flat, "none" => CpuObs::None, _ => return Err(PyValueError::new_err("obs must be 'v2', 'v3', 'v3_perception', 'flat' or 'none'")) };
             let data = data_dir.to_string();
             let res: Result<Vec<bayenv_sim::env::Env>, String> = py.detach(move || {
                 let world = World::load_with(&data, &fx.load()).map_err(|e| format!("world: {e}"))?;

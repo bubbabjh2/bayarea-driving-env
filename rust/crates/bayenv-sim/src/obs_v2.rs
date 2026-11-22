@@ -433,6 +433,10 @@ pub struct TripState {
     /// vs.routeOff / RouteStore.compactions at the last sync (setRoute detection)
     pub route_off: i32,
     pub compactions: u64,
+    /// input version 3 only (obs_v3.rs V3Encoder): the leader history of inputs 94..100
+    pub lhist: crate::obs::LeaderHistory,
+    /// input version 3 only: the guidance of the sim's current route when `guide` is not (obs_v3.rs gpu_guidance)
+    pub v3_guide: Option<Guidance>,
 }
 
 /// v2 encoder: per-slot trip state + the per-edge guidance facts.
@@ -480,7 +484,7 @@ impl V2Encoder {
                 }
                 s.compactions = comp;
             }
-            _ => { *st = Some(TripState { key, guide: Guidance::new(g, &self.nav, route, None), pend: [0.0; MAX_PENDING + 1], pend_n: 0, route_off: off, compactions: comp }); }
+            _ => { *st = Some(TripState { key, guide: Guidance::new(g, &self.nav, route, None), pend: [0.0; MAX_PENDING + 1], pend_n: 0, route_off: off, compactions: comp, lhist: Default::default(), v3_guide: None }); }
         }
         st.as_mut().unwrap()
     }
@@ -512,18 +516,20 @@ impl V2Encoder {
     }
 
     /// Driver.sense for `slot` (a driving car): writes the 70 floats into out[..70]. Call once per step per driving slot.
-    pub fn encode_v2(&mut self, sim: &mut Sim, slot: usize, out: &mut [f32]) { self.encode_v2_impl(sim, slot, out, None, None) }
+    pub fn encode_v2(&mut self, sim: &mut Sim, slot: usize, out: &mut [f32]) { self.encode_v2_impl(sim, slot, out, None, None, false) }
     /// encode_v2 that also writes the driver's `eyes.near` after the sense into `near`.
-    pub fn encode_v2_near(&mut self, sim: &mut Sim, slot: usize, out: &mut [f32], near: &mut Near) { self.encode_v2_impl(sim, slot, out, Some(near), None) }
+    pub fn encode_v2_near(&mut self, sim: &mut Sim, slot: usize, out: &mut [f32], near: &mut Near) { self.encode_v2_impl(sim, slot, out, Some(near), None, false) }
     /// encode_v2 that also writes `eyes.near` and the teacher's view ([`TeacherObs`]: adjusted obs, guide, lateness).
-    pub fn encode_v2_teacher(&mut self, sim: &mut Sim, slot: usize, out: &mut [f32], near: &mut Near, teacher: &mut TeacherObs) { self.encode_v2_impl(sim, slot, out, Some(near), Some(teacher)) }
-    fn encode_v2_impl(&mut self, sim: &mut Sim, slot: usize, out: &mut [f32], near: Option<&mut Near>, teacher: Option<&mut TeacherObs>) {
+    pub fn encode_v2_teacher(&mut self, sim: &mut Sim, slot: usize, out: &mut [f32], near: &mut Near, teacher: &mut TeacherObs) { self.encode_v2_impl(sim, slot, out, Some(near), Some(teacher), false) }
+    pub(crate) fn encode_v2_impl(&mut self, sim: &mut Sim, slot: usize, out: &mut [f32], near: Option<&mut Near>, teacher: Option<&mut TeacherObs>, v3: bool) {
         let i = slot;
         let mut o = std::mem::take(&mut self.obs);
         observe_one(sim, i, &mut o, None);
         let sim: &Sim = sim;
-        let st = self.sync(sim, i);
+        self.sync(sim, i);
+        let st = self.slots[i].as_mut().unwrap();
         encode_core(st, sim, i, &o, out, near, teacher);
+        if out.len() >= crate::obs::OBS3 && v3 { crate::obs_v3::v3_tail(st, &self.nav, sim, i, &o, out); }
         self.obs = o;
     }
 
@@ -535,7 +541,13 @@ impl V2Encoder {
     pub fn encode_batch_near(&mut self, sim: &mut Sim, slots: &[usize], out: &mut [f32], near: Option<&mut [Near]>) { self.encode_batch_teacher(sim, slots, out, near, None) }
     /// encode_batch that also writes `near[k]` and / or `teacher[k]` ([`TeacherObs`]) per slot when given.
     pub fn encode_batch_teacher(&mut self, sim: &mut Sim, slots: &[usize], out: &mut [f32], near: Option<&mut [Near]>, teacher: Option<&mut [TeacherObs]>) {
-        assert!(out.len() >= slots.len() * OBS2);
+        self.encode_rows(sim, slots, out, OBS2, near, teacher)
+    }
+    /// encode_batch_teacher with rows of `width` floats: OBS2 (the v2 vector) or obs::OBS3 (input version 3, the v2
+    /// vector in 0..69 then crate::obs_v3::v3_tail; see obs_v3.rs).
+    pub(crate) fn encode_rows(&mut self, sim: &mut Sim, slots: &[usize], out: &mut [f32], width: usize, near: Option<&mut [Near]>, teacher: Option<&mut [TeacherObs]>) {
+        assert!(width == OBS2 || width == crate::obs::OBS3);
+        assert!(out.len() >= slots.len() * width);
         let mut scratch: Vec<Near> = Vec::new();
         let (near, want): (&mut [Near], bool) = match near {
             Some(n) => { assert!(n.len() >= slots.len(), "encode_batch_near: near too short"); (&mut n[..slots.len()], true) }
@@ -548,6 +560,7 @@ impl V2Encoder {
         };
         for &i in slots { self.sync(sim, i); }
         let me: &Sim = sim;
+        let nav = &self.nav;
         let mut states: Vec<&mut TripState> = Vec::with_capacity(slots.len());
         {
             let mut it = self.slots.iter_mut().enumerate();
@@ -557,14 +570,15 @@ impl V2Encoder {
             let mut o = Obs::default();
             observe_one_ro(me, i, &mut o, None);
             encode_core(st, me, i, &o, row, if want { Some(nr) } else { None }, if want_t { Some(tr) } else { None });
+            if width != OBS2 { crate::obs_v3::v3_tail(st, nav, me, i, &o, row); }
             o.yield_write
         };
         let writes: Vec<Option<i32>> = if me.opts.parallel && slots.len() >= 128 {
             use rayon::prelude::*;
-            states.into_par_iter().zip(slots.par_iter()).zip(out[..slots.len() * OBS2].par_chunks_mut(OBS2)).zip(near.par_iter_mut()).zip(teacher.par_iter_mut()).with_min_len(16)
+            states.into_par_iter().zip(slots.par_iter()).zip(out[..slots.len() * width].par_chunks_mut(width)).zip(near.par_iter_mut()).zip(teacher.par_iter_mut()).with_min_len(16)
                 .map(|((((st, &i), row), nr), tr)| job(st, i, row, nr, tr)).collect()
         } else {
-            states.into_iter().zip(slots.iter()).zip(out[..slots.len() * OBS2].chunks_mut(OBS2)).zip(near.iter_mut()).zip(teacher.iter_mut())
+            states.into_iter().zip(slots.iter()).zip(out[..slots.len() * width].chunks_mut(width)).zip(near.iter_mut()).zip(teacher.iter_mut())
                 .map(|((((st, &i), row), nr), tr)| job(st, i, row, nr, tr)).collect()
         };
         for (k, w) in writes.into_iter().enumerate() { if let Some(v) = w { sim.set_yield_by(slots[k], v); } }

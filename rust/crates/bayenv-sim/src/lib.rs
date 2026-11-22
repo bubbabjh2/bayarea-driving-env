@@ -21,5 +21,6 @@ pub mod env;
 pub mod harness;
 pub mod obs;
 pub mod obs_v2;
+pub mod obs_v3;
 pub mod vec_env;
 pub mod fx;
