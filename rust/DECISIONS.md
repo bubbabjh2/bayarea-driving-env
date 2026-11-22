@@ -830,3 +830,10 @@ Each entry: date, decision, why, alternatives, numbers, and one line to say it o
     sufficient.
 - **On camera:** "Our cars used to freeze on San Francisco's hills like they had a handbrake made of magic. Now if
   you don't give it enough gas, it rolls back down."
+- **GPU:** `GpuOptions::hill_rollback` (default on; `js_model()` off), in `kernels/model_integrate.wgsl` (brakes forwards
+  while rolling back and the backward hold at rest, rolling resistance against backward rolling, the rollback clamp, the
+  static_hold window |u|, |un| <= 0.05, speed 0 at s < 0) and `kernels/model_contacts.wgsl` (write_back keeps a driving
+  car's backward speed). `tests/hill.rs` runs trip 818's hill on both backends (one sedan, one step of reaction delay):
+  gas 0.546 from s 14.72 stalls at s 26.19 on both (peak 27.48); gas 0.45 from s 20 rolls back to 16.65 (CPU) / 16.75
+  (GPU), min speed −0.45 m/s on both (JS clamp: stops dead at 20.00 on both); gas 0.65 climbs to 168 m in 40 s; at
+  s 25 brake 0.6 holds (25.00), no pedals rolls back to 7.22 on both.
