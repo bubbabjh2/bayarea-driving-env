@@ -1,8 +1,8 @@
 //! Every model flag reaches the kernels and changes behaviour (GpuOptions -> model_fixes() -> mf_consts -> WGSL, the
 //! fused resolve and the sorted variants included), on both backends: a population run with a varied external policy
 //! (every slot cycles through gas / brake / steer / coasting phases, so cars pull away, creep, brake, scrape kerbs and
-//! crash), once with the default model and once with one flag flipped. Per flag: the run's state hash must change on
-//! the GPU and on the CPU (the same flag in SimOpts), and the event counts of the two backends must move the same way.
+//! crash), once with the default model and once with one flag flipped. Per flag: the run's state hash or its event
+//! counts must change on the GPU and on the CPU (the same flag in SimOpts); the deltas of the two backends are printed.
 //! Skips without the world data or a GPU.
 use bayenv_gpu::{defines::ObsMode, sim::{GpuOptions, GpuPopulation}};
 use std::{path::Path, sync::Arc};
@@ -107,9 +107,10 @@ fn every_model_flag_changes_behaviour_on_both_backends() {
         let (g0, gc0, c0, cc0) = if k > 0 { (gw0, gwc0, cw0, cwc0) } else { (g0, gc0, c0, cc0) };
         let d = |a: &[usize; 10], b: &[usize; 10], k: usize| b[k] as i64 - a[k] as i64;
         eprintln!("{name:18} gpu changed {:5} cpu changed {:5} | delta crashed gpu {:+} cpu {:+}, contacts gpu {:+} cpu {:+}, arrived gpu {:+} cpu {:+}, missed gpu {:+} cpu {:+}",
-            g != g0, c != c0, d(&gc0, &gc, 2), d(&cc0, &cc, 2), d(&gc0, &gc, 3), d(&cc0, &cc, 3), d(&gc0, &gc, 1), d(&cc0, &cc, 1), d(&gc0, &gc, 7), d(&cc0, &cc, 7));
-        if g == g0 { fails.push(format!("{name}: no effect on the GPU")); }
-        if c == c0 { fails.push(format!("{name}: no effect on the CPU")); }
+            g != g0 || gc != gc0, c != c0 || cc != cc0, d(&gc0, &gc, 2), d(&cc0, &cc, 2), d(&gc0, &gc, 3), d(&cc0, &cc, 3), d(&gc0, &gc, 1), d(&cc0, &cc, 1), d(&gc0, &gc, 7), d(&cc0, &cc, 7));
+        // an effect = a different final state or different event rows (contact_episodes can change only the events)
+        if g == g0 && gc == gc0 { fails.push(format!("{name}: no effect on the GPU")); }
+        if c == c0 && cc == cc0 { fails.push(format!("{name}: no effect on the CPU")); }
     }
     eprintln!("default: gpu crashed {} contacts {} arrived {}; cpu crashed {} contacts {} arrived {}", gc0[2], gc0[3], gc0[1], cc0[2], cc0[3], cc0[1]);
     assert!(fails.is_empty(), "{fails:?}");
