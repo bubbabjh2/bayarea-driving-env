@@ -626,3 +626,4 @@ fn lane_drop_hop_takes_the_edge_the_lane_lands_nearest() {
     assert_ne!(fe, ramp, "lane_drop_hop: the car goes where its lane physically is");
     assert!(fb.map(|b| b.1 < 3.0).unwrap_or(true), "about one lane out at most: {fb:?}");
 }
+

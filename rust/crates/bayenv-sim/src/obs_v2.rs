@@ -489,6 +489,10 @@ impl V2Encoder {
     pub fn push_command(&mut self, sim: &Sim, i: usize, cmd: f64) {
         let rt = sim.pop.deltas[sim.vs.commuter[i] as usize * 64 + 2] as f64;
         let keep = jm::min(MAX_PENDING as f64, jm::max(0.0, jm::round(rt / sim.dt))) as usize;
+        // steer_delay (SimOpts): steering lands after its own, shorter delay, so only that many commands are pending
+        // (the JS: the reaction delay)
+        let sds = sim.vs.model.steer_delay_steps;
+        let keep = if sds >= 0 { keep.min(sds as usize) } else { keep };
         let s = self.sync(sim, i);
         if s.pend_n >= keep {
             if keep > 0 { s.pend.copy_within(s.pend_n - keep + 1..s.pend_n, 0); s.pend_n = keep - 1; } else { s.pend_n = 0; }
