@@ -1116,3 +1116,45 @@ Each entry: date, decision, why, alternatives, numbers, and one line to say it o
 - **Alternatives:** a bigger constant slowdown (wrong at both ends: too soft at 25 m/s, too abrupt at 2 m/s); a full
   buoyancy and splash model (more work, and the camera can't tell the difference).
 - **On camera:** "Our first truck hit the bay and water-skied. Water is about eight hundred times denser than air, so now it stops dead."
+
+## 50. Input-parity sweep (CPU state imported into the GPU): guidance at the route odometer, body sectors, control / scene / history import, storage-buffer limit (`guide_odometer` obs v2, `sector_snap` obs v3, default on)
+
+- **Date:** 2026-11-22
+- **Tool:** `examples/obs_sweep.rs`: a CPU closed loop (examples/snap_obs.rs driver) to each check time; the CPU's
+  vehicle store, control records and active scenes imported into the GPU; one step on both with the same actions;
+  every input index compared over the driving cars present at the import whose edge / s / speed agree after the step
+  (rows near a car spawned in the step on either backend are skipped: the spawn queue is not imported). Printed: every
+  index over 1e-3 in more than 0.1 % of the rows.
+- **guide_odometer (model, obs v2 only):** bayenv-sim's v2 encoder (sim.js / driver.js: `guidance.at(obs.routeDistance)`)
+  places the car on its route by the route odometer (routeDist: 0 at spawn, + ds), the JS GPU kernel by route
+  position + s. The odometer lags the position by the spawn s (about 4 m; 7.6 m after some spawns), so the CPU's
+  maneuver distance (input 20) was that much longer in 23..33 % of the rows, its guidance lane ends (inputs 12 / 16)
+  in 2..3 %, and for the first metres of an edge it still saw the previous edge's maneuver.
+  `kernels/model_sense.wgsl` MF_GUIDE_ODO evaluates the guidance scan and laneEndAhead at the odometer's route
+  position (Guidance.edge_pos_at / at). The CPU's v3 rows use the position (obs_v3.rs gpu_guidance), so the flag is
+  off for ObsMode::V3.
+- **Import (harness):** `import_snapshot` now also writes each slot's control record (ctl words: approach, type,
+  state, times, distance, movement | stopped, inside cluster, merge cap, leader2, pass-wreck) from the snapshot's
+  bayenv-sim `ctl*` fields when present; before, every imported car was a new occupant of its slot (the control obs
+  46..62 lost the CPU's approach / stopped state: 0.1..0.8 % of rows). `GpuSim::import_scenes` replaces the active
+  crash / breakdown scenes with the CPU's (their edge blocks: the leaders pass follows a scene at r.s - 3 m; without
+  them the gap behind an imported wreck was the body's, ~0.7 m longer: input 8 in ~1 % of rows).
+- **sector_snap (model, obs v3, both backends):** a body straight ahead or behind in my lane sits on a sector
+  boundary (atan2(left, fwd) = 0 or +-pi); the sign of a ~1e-3 m lateral offset (f32 world coordinates on the GPU,
+  f64 on the CPU) filed the same car in different body slots (inputs 102..357 in 3..4.5 % of the rows at 10,000
+  commuters) and its mirror clearance (77 / 78) on different sides. Both now count |left| < 1 cm as +0: bayenv-gpu
+  `GpuOptions::sector_snap` (kernels/model_perceive.wgsl), bayenv-sim `SimOpts::v3_sector_snap` (obs.rs
+  `snap_left`, sense_bodies); js_model / SimOpts::js() off. v3 nets see a car directly ahead / behind in sector 4 / 7
+  now (it was either neighbour, by rounding).
+- **Import (harness, obs v3):** `GpuSim::import_leader_history` sets the leader-history records (inputs 94..100;
+  the CPU encoder's LeaderHistory per trip); without it they started empty after an import (94..99 in ~2 % of rows).
+- **Not fixed (rare):** the refuel stop in the guidance. The CPU's v2 guidance has the refuel maneuver only when the
+  refuel detour was set after the encoder first saw the trip (brainAdapter's factory ignores the spawn-time stop) and
+  drops it once the car stood within 10 m of it; the GPU shows it whenever the car's refuel state is planned. Inputs
+  20..32 in 0.1..0.2 % of the rows.
+- **Device limit:** with steer_delay >= 0 and obs_after_step the patched sense kernel binds 12 storage buffers
+  (`actions`, `jobst`) where the device check required 10. `Gpu::kernel_with` now checks each kernel's storage
+  bindings against the adapter's maxStorageBuffersPerShaderStage before pipeline creation and fails with a message
+  naming the patches (kernels.rs `check_storage_limit`, unit test `sense_storage_buffers_checked_against_the_limit`).
+- **Tests:** `tests/junction_obstacle.rs` also checks inputs 12 / 16 / 20 after each import: all on, 13 of 4565 rows
+  differ (refuel guidance); guide_odometer off, 1340. kernels.rs `sector_snap_files_aligned_bodies_alike`.

@@ -122,6 +122,10 @@ pub struct SimOpts {
     /// maneuver being crossed (car > 1 m past the in-edge end) and clamps the distance at 0, as obs v2 and
     /// bayenv-gpu `guide_in_box` (DECISIONS.md 43 / 46). CPU mirror of GpuOptions::guide_in_box for ObsMode::V3.
     pub v3_guide_in_box: bool,
+    /// v3 bodies (obs.rs sense_bodies): a lateral offset under 1 cm counts as 0 when filing a body by sector (straight
+    /// ahead / behind sit on a sector boundary; f32 vs f64 noise filed them differently on the GPU; bayenv-gpu
+    /// GpuOptions::sector_snap, DECISIONS.md 50). Default on; js() off.
+    pub v3_sector_snap: bool,
     /// Model fix (default ON; false = the JS GPU's input version 3): obs v3 own-ahead slot (inputs 8 / 9) gets the
     /// junction-conflict obstacle as obs v2 has it (adjust.js junctionObs; DECISIONS.md 45 / 46). CPU mirror of
     /// GpuOptions::junction_obstacle for ObsMode::V3.
@@ -163,7 +167,7 @@ impl SimOpts {
         steer_delay_steps: if self.steer_delay < 0.0 { -1 } else { jm::round(self.steer_delay / self.dt) as i32 } } }
     /// The JS sim's model (oracle checks, trace_check / v2_check, JS-port tests): Default with the model fixes off
     /// (replan_at_missed_event = false). Checkpoints trained on the JS CPU sim saw this model.
-    pub fn js() -> SimOpts { SimOpts { replan_at_missed_event: false, lane_index_snapshot: false, wreck_real_mass: false, curvature_dynamics: false, smooth_geometry: false, junction_radii: false, spawn_clearance: false, wreck_end_stop: false, contact_episodes: false, connector_barrier: false, box_barrier: false, lane_drop_hop: false, brake_hold: false, static_hold: false, mountable_kerbs: false, idle_creep: false, hill_rollback: false, v3_guide_in_box: false, v3_junction_obstacle: false, steer_delay: -1.0, heavy_brakes: false, barrier_soft_push: false, impact_reverse: false, ..SimOpts::default() } }
+    pub fn js() -> SimOpts { SimOpts { replan_at_missed_event: false, lane_index_snapshot: false, wreck_real_mass: false, curvature_dynamics: false, smooth_geometry: false, junction_radii: false, spawn_clearance: false, wreck_end_stop: false, contact_episodes: false, connector_barrier: false, box_barrier: false, lane_drop_hop: false, brake_hold: false, static_hold: false, mountable_kerbs: false, idle_creep: false, hill_rollback: false, v3_guide_in_box: false, v3_junction_obstacle: false, v3_sector_snap: false, steer_delay: -1.0, heavy_brakes: false, barrier_soft_push: false, impact_reverse: false, ..SimOpts::default() } }
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -176,7 +180,7 @@ impl Default for SimOpts {
             cell_size: 25.0, table_bits: 18, leader_lookahead: 250.0, merge_lookahead: 80.0, lane_end_lookahead: 450.0, control_lookahead: 250.0,
             reroute: true, reroute_sight: 2000.0, squeeze_delay: 900.0, squeeze_speed: 3.0, density_interval: 60.0, path_sight: 0.0,
             deadlock_break: 0.0, spawn_lane_route: 0.0, junction_sight: 0.0, position_mode: true, traffic_mode: TrafficMode::Full, fuel: true,
-            seed: 1.0, wrecks: 0, default_action: Action { steer: Some(0.0), steer_rate: None, gas: 0.0, brake: 0.3 }, fuel_cfg: Default::default(), slot_pool: 0, parallel: false, replan_at_missed_event: true, batch_dynamics: true, lane_index_snapshot: true, wreck_real_mass: true, curvature_dynamics: false, smooth_geometry: false, junction_radii: false, spawn_clearance: false, spawn_clearance_m: 18.0, wreck_end_stop: true, contact_episodes: true, connector_barrier: true, box_barrier: true, lane_drop_hop: true, brake_hold: false, static_hold: true, mountable_kerbs: true, idle_creep: true, hill_rollback: true, v3_guide_in_box: true, v3_junction_obstacle: true, steer_delay: STEER_DELAY, heavy_brakes: true, barrier_soft_push: true, impact_reverse: true, barrier_breach: false, breach_is_kj: crate::breach::MASH_TL3_IS_KJ }
+            seed: 1.0, wrecks: 0, default_action: Action { steer: Some(0.0), steer_rate: None, gas: 0.0, brake: 0.3 }, fuel_cfg: Default::default(), slot_pool: 0, parallel: false, replan_at_missed_event: true, batch_dynamics: true, lane_index_snapshot: true, wreck_real_mass: true, curvature_dynamics: false, smooth_geometry: false, junction_radii: false, spawn_clearance: false, spawn_clearance_m: 18.0, wreck_end_stop: true, contact_episodes: true, connector_barrier: true, box_barrier: true, lane_drop_hop: true, brake_hold: false, static_hold: true, mountable_kerbs: true, idle_creep: true, hill_rollback: true, v3_guide_in_box: true, v3_junction_obstacle: true, v3_sector_snap: true, steer_delay: STEER_DELAY, heavy_brakes: true, barrier_soft_push: true, impact_reverse: true, barrier_breach: false, breach_is_kj: crate::breach::MASH_TL3_IS_KJ }
     }
 }
 

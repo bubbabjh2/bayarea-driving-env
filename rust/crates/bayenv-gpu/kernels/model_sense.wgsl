@@ -114,3 +114,37 @@
     for (var q = 0u; q < 4u; q = q + 1u) { let p = vidx[i][q]; if (p >= a && p < z && order[p] == i) { if (p > a) { B = i32(order[p - 1u]); } break; } }
   }
 //#end
+// MF_GUIDE_ODO (GpuOptions::guide_odometer): bayenv-sim's encoder (sim.js / driver.js: guidance.at(obs.routeDistance))
+// places the car on its route by the route odometer (routeDist: 0 at spawn, + ds), the JS GPU by route position + s.
+// The odometer lags the position by the spawn s (about 4 m, more after spawn_clearance), so the CPU's maneuver
+// distance (input 20) and guidance lane ends (inputs 12 / 16) were that much longer, and for the first metres of
+// an edge it still saw the previous edge's maneuver. The patch evaluates guidance and lane ends at the odometer's
+// route position, as Guidance.edge_pos_at / at do.
+//#orig guide-odo-fns
+fn laneEndAhead(i: u32, v: Veh, pi: VPar, lane: i32) -> f32 {
+//#end
+//#patch guide-odo-fns
+struct OdoPos { k: u32, cum: f32 }
+// the route index whose start (cumulative edge length) is at or before the odometer; `fwd`: also past the current
+// edge (Guidance.edge_pos_at), else only back from routePos (the maneuver scan starts there)
+fn odoPos(v: Veh, pi: VPar, fwd: bool) -> OdoPos {
+  var cum = 0.0;
+  for (var q = 0u; q < v.routePos; q = q + 1u) { cum = cum + eLength(routeEdge(pi, q)); }
+  var kk = v.routePos;
+  loop { if (kk == 0u || cum <= v.routeDist) { break; } kk = kk - 1u; cum = cum - eLength(routeEdge(pi, kk)); }
+  if (fwd) { loop { if (kk + 1u >= pi.routeLen || cum + eLength(routeEdge(pi, kk)) > v.routeDist) { break; } cum = cum + eLength(routeEdge(pi, kk)); kk = kk + 1u; } }
+  var r: OdoPos; r.k = kk; r.cum = cum; return r;
+}
+fn laneEndAhead(i: u32, v0: Veh, pi: VPar, lane: i32) -> f32 {
+  var v = v0;
+  if (MF_GUIDE_ODO) { let o = odoPos(v0, pi, true); v.edge = routeEdge(pi, o.k); v.s = v0.routeDist - o.cum; v.routePos = o.k; }
+//#end
+//#orig guide-odo-start
+  var d = e.length - v.s;
+  var k = v.routePos;
+//#end
+//#patch guide-odo-start
+  var d = e.length - v.s;
+  var k = v.routePos;
+  if (MF_GUIDE_ODO) { let o = odoPos(v, pi, false); k = o.k; d = o.cum + eLength(routeEdge(pi, o.k)) - v.routeDist; }
+//#end

@@ -1005,6 +1005,26 @@ impl GpuSim {
         for i in 0..cap { if i >= high || st[i] == 0.0 { pose[i * 4 + 1] = -1000.0; continue; } pose[i * 4] = x[i] as f32; pose[i * 4 + 1] = y[i] as f32; pose[i * 4 + 2] = z[i] as f32; pose[i * 4 + 3] = h[i] as f32; }
         self.gpu.write("pose", bytemuck::cast_slice(&pose), 0);
         let mut iow = vec![0u32; L::io::EVDATA]; iow[0] = self.step as u32; self.gpu.write("io", bytemuck::cast_slice(&iow), 0);
+        // per-slot control / leader2 / pass-wreck records (ctl words, controls.wgsl / leaders.wgsl) from the CPU's store
+        // when the snapshot has them (bayenv-sim VehicleStore ctl_*): else every slot starts as a new occupant (the
+        // leaders pass resets its record) and the control obs (inputs 46..62) of the first steps lose the CPU's
+        // approach / stopped / inside-cluster state
+        if snap.arrays.contains_key("ctlApproach") {
+            let cw = L::CTL_WORDS; let mut ctl = vec![0u32; cap * cw];
+            for i in 0..cap {
+                let r = &mut ctl[i * cw..(i + 1) * cw];
+                r[0] = NONE; r[1] = NONE; r[5] = fw(1e9); r[7] = fw(1e9); r[9] = NONE; r[16] = NONE; r[20] = NONE; r[28] = NONE; r[31] = fw(-1e9);
+                if i >= high || st[i] == 0.0 { continue; }
+                let f = |k: &str| get(k, i);
+                let ord = |x: f64| if x.is_nan() { NONE } else { iw(x) };
+                r[8] = fw(f("spawnTime"));
+                r[0] = ord(f("ctlApproach")); r[1] = ord(f("ctlType")); r[2] = iw(f("ctlState")); r[3] = fw(f("ctlTimeIn")); r[4] = fw(f("ctlTimeLeft"));
+                r[5] = fw(f("ctlDist")); r[6] = (f("ctlMove") as i32 as u32 & 255) | ((f("ctlStopped") as u32 & 1) << 8);
+                r[16] = ord(f("ctlInside")); r[17] = fw(f("ctlInsideT")); r[7] = fw(f("mergeCap"));
+                r[9] = ord(f("leader2")); r[10] = fw(f("gap2")); r[20] = ord(f("passWreck"));
+            }
+            self.gpu.write("ctl", bytemuck::cast_slice(&ctl), 0);
+        }
         self.free = (0..cap as u32).rev().filter(|&i| i as usize >= high || st[i as usize] == 0.0).collect();
         Ok(())
     }
