@@ -82,6 +82,7 @@ impl Gpu {
     /// As `kernel`; `zero_init = false` skips the workgroup-memory zero fill (for kernels that write their
     /// workgroup arrays before reading them).
     pub fn kernel_with(&self, label: &str, code: &str, entry: &str, zero_init: bool) -> Result<Kernel, String> {
+        crate::kernels::check_storage_limit(label, code, self.limits.max_storage_buffers_per_shader_stage)?;
         let decls = parse_bindings(code);
         let ng = decls.iter().map(|d| d.group + 1).max().unwrap_or(0) as usize;
         let mut groups: Vec<Vec<Decl>> = vec![Vec::new(); ng];

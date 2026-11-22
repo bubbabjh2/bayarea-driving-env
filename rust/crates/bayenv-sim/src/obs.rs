@@ -67,6 +67,9 @@ pub const VEHICLE_TYPE_NAMES: [&str; 4] = ["sedan", "suv", "truck", "bus"];
 
 /// ego-frame sector 0..7 of a point (fwd, left)
 #[inline]
+/// SimOpts::v3_sector_snap: |left| < 1 cm counts as +0 (a body straight ahead / behind is on a sector boundary)
+#[inline]
+pub fn snap_left(left: f64, snap: bool) -> f64 { if snap && jm::abs(left) < 0.01 { 0.0 } else { left } }
 pub fn sector_of(fwd: f64, left: f64) -> usize {
     let a = jm::atan2(left, fwd);
     let s = jm::floor((a + jm::PI) / (jm::PI / 4.0));
@@ -413,6 +416,7 @@ pub fn indicator_of(sim: &Sim, j: usize) -> (bool, bool) {
 /// senseBodies: NB block + mirror inputs 70..78 for slot i into out (an OBS3 vector).
 pub fn sense_bodies(sim: &Sim, i: usize, out: &mut [f32], lane_w: f64, lane_off: f64) {
     let r = NB_RANGE;
+    let snap = sim.opts.v3_sector_snap;
     let mut sel = Selection::default();
     let me;
     {
@@ -429,7 +433,7 @@ pub fn sense_bodies(sim: &Sim, i: usize, out: &mut [f32], lane_w: f64, lane_off:
             if jm::abs(f(vs.y[j]) - y) >= LAYER_GAP { return true; }
             let dx = f(vs.x[j]) - x; let dz = f(vs.z[j]) - z;
             let d2 = dx * dx + dz * dz;
-            let fwd = dx * c + dz * s; let left = dx * s - dz * c;
+            let fwd = dx * c + dz * s; let left = snap_left(dx * s - dz * c, snap);
             sel.offer(sector_of(fwd, left), d2, j as i32);
             let hl_j = f(vs.hl[j]); let hw_j = f(vs.hw[j]); let lat = left + lane_off; let lo = lat - hw_j; let hi = lat + hw_j;
             let vj = if st == STATE_DRIVING { f(vs.speed[j]) } else { 0.0 };
@@ -459,7 +463,7 @@ pub fn sense_bodies(sim: &Sim, i: usize, out: &mut [f32], lane_w: f64, lane_off:
             let lu = l as usize;
             if (vs.state[lu] == STATE_DRIVING || vs.state[lu] == STATE_CRASHED) && jm::abs(f(vs.y[lu]) - y) < LAYER_GAP {
                 let dx = f(vs.x[lu]) - x; let dz = f(vs.z[lu]) - z; let d2 = dx * dx + dz * dz;
-                if d2 <= r * r { sel.force(sector_of(dx * c + dz * s, dx * s - dz * c), d2, l); }
+                if d2 <= r * r { sel.force(sector_of(dx * c + dz * s, snap_left(dx * s - dz * c, snap)), d2, l); }
             }
         }
         let t1 = |t: f64| if t == INF { 1.0 } else { jm::min(1.0, t / 6.0) };
