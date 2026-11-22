@@ -834,6 +834,7 @@ impl PhysFixes {
         o.connector_barrier = self.connector_barrier; o.box_barrier = self.box_barrier; o.lane_drop_hop = self.lane_drop_hop; o.brake_hold = self.brake_hold; o.heavy_brakes = self.heavy_brakes; o.barrier_soft_push = self.barrier_soft_push; o.impact_reverse = self.impact_reverse;
         o.spawn_clearance = self.spawn_clearance;
         o.static_hold = self.static_hold; o.idle_creep = self.idle_creep; o.steer_delay = self.steer_delay; o.mountable_kerbs = self.mountable_kerbs;
+        o.hill_rollback = self.hill_rollback;
     }
 }
 fn check_dt(dt: f64) -> PyResult<()> { if dt.is_finite() && dt > 0.0 { Ok(()) } else { Err(PyValueError::new_err(format!("dt must be finite and > 0 (got {dt})"))) } }

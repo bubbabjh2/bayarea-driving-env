@@ -18,6 +18,9 @@
 //                       when that is shorter than the car's reaction delay; the pedals keep the reaction delay
 //   MF_LANE_DROP_HOP    lane_drop_hop: a strict hop from a lane that continues onto no out-edge takes the strict out-edge
 //                       its lane overshoots least (EV_MISSED if not the planned one; JS: the planned edge, strict lat)
+//   MF_ROLLBACK         hill_rollback: a driving car that drive + brake + rolling resistance can't hold on the grade rolls
+//                       backwards (brakes push forwards while rolling back, hold it at rest against the grade; rolling
+//                       resistance opposes it); clamped at s 0 of its edge with speed 0
 //   MF_CURVATURE        curvature_dynamics: the world heading changes by the car's own yaw only (headingRel takes up the
 //                       road frame's rotation between the start and the end pose, connector / edge transitions included)
 //#orig brake-fb
@@ -55,12 +58,18 @@
     var ur = u; var vr = v;
     if (exactRot) { let cr = cos(r * h); let sr2 = sin(r * h); ur = u * cr + v * sr2; vr = -u * sr2 + v * cr; }
     var un = select(u + (FxBody / m + v * r) * h, ur + FxBody / m * h, exactRot);
-    if (un < 0.0 && !(MF_IMPACT_REVERSE && locked)) { un = 0.0; }
+    if (MF_ROLLBACK && !locked) {
+      // hill_rollback: a driving car rolls back only when gravity beats drive + brake + rolling resistance at rest;
+      // a backward-rolling car that the forces bring to a stop stops (no reverse drive)
+      let roll0 = PT_CRR[t] * sf.z * m * G_ACC * cosG;
+      if (u >= -0.02 && un < 0.0 && Wg <= Fd + Fb + roll0) { un = 0.0; }
+      if (u < -0.02 && un > 0.0) { un = 0.0; }
+    } else if (un < 0.0 && !(MF_IMPACT_REVERSE && locked)) { un = 0.0; }
     if (MF_BRAKE_HOLD && !locked && u <= 0.05) {
       let roll = PT_CRR[t] * sf.z * m * G_ACC * cosG;
       if (Fb + roll >= abs(Fd - Wg) && un <= 0.05) { un = 0.0; }
     }
-    if (MF_STATIC_HOLD && !locked && u <= 0.05 && un <= 0.05) {
+    if (MF_STATIC_HOLD && !locked && u <= 0.05 && u >= -0.05 && un <= 0.05 && un >= -0.05) {
       let roll = PT_CRR[t] * sf.z * m * G_ACC * cosG;
       if ((b_ > 0.0 && Fb >= abs(Fd - Wg)) || (Fd == 0.0 && b_ == 0.0 && abs(Wg) <= roll)) { un = 0.0; }
     }
@@ -152,4 +161,31 @@
               }
               if (best != en) { routes[pi.routeOff + nxt] = best; emit(EV_MISSED, i, best, pi.trip); en = best; }
             }
+//#end
+//#orig rollback-brakes
+    if (moving) { Fxf = Fxf - bf; Fxr = Fxr - br; }
+    else { let hold = min(Fb, max(0.0, Fd - Wg)); let hf = min(bf, hold * shareF); Fxf = Fxf - hf; Fxr = Fxr - min(br, hold - hf); }
+//#end
+//#patch rollback-brakes
+    let back = MF_ROLLBACK && !locked && u < -0.02;
+    if (back) { Fxf = Fxf + bf; Fxr = Fxr + br; }
+    else if (moving) { Fxf = Fxf - bf; Fxr = Fxr - br; }
+    else {
+      let hold = min(Fb, max(0.0, Fd - Wg)); let hf = min(bf, hold * shareF); Fxf = Fxf - hf; Fxr = Fxr - min(br, hold - hf);
+      if (MF_ROLLBACK && !locked) { let hb = min(Fb, max(0.0, Wg - Fd)); let hf2 = min(bf, hb * shareF); Fxf = Fxf + hf2; Fxr = Fxr + min(br, hb - hf2); }
+    }
+//#end
+//#orig rollback-res
+    let res = resistanceS(t, u, grade, sf.z);
+//#end
+//#patch rollback-res
+    var res = resistanceS(t, u, grade, sf.z);
+    if (back && u < -0.05) { res = res - PT_CRR[t] * sf.z * m * G_ACC; }   // hill_rollback: rolling resistance opposes rolling back
+//#end
+//#orig rollback-s0
+      var s = max(0.0, st.s);
+//#end
+//#patch rollback-s0
+      var s = max(0.0, st.s);
+      if (MF_ROLLBACK && st.s < 0.0 && v.speed < 0.0) { v.speed = 0.0; }   // hill_rollback: rolled back to the edge start
 //#end
