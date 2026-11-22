@@ -748,5 +748,13 @@ Each entry: date, decision, why, alternatives, numbers, and one line to say it o
   exactly. At 0.45 rad, rigid gives 2 minor contacts and no disable on both (this edge's geometry stops the grind
   sooner than the road3 fixture); at 0.7 rad, rigid disables after 3 minor contacts on both. Mountable gives 1 minor
   contact, still driving, on both.
+- **Follow-up (grinding):** the scrape test first used the body-centre velocity, and every kerb step that wasn't
+  a scrape added its Δv to the episode. A car swinging in and out of a kerb could then sum steps of 1–2 km/h, each
+  with a centre speed just over 2 m/s, past 10 km/h. Now the closing speed is taken at the contact point (velocity
+  plus yaw rate × lever arm, as the impulse solver sees it). On a kerb, a step adds to the episode only when its own
+  Δv is at least 2 m/s, and an event fires only on the first touch or on such a strike. In a rollout with a
+  deliberately over-steering controller (1,000 commuters, 2,400 steps): 31 barrier crashes before, 3 of them sums of
+  small steps; 30 after, none of them sums. All 30 are single impacts at more than 2.5 m/s, 5 of them on rigid roads.
+  Contact events dropped from 145 to 58.
 - **On camera:** "Touching a kerb at walking pace used to write the car off. Now it just scrapes, like it does in real
   life, unless you hit a freeway barrier."

@@ -205,7 +205,8 @@ impl Sim {
         // mountable_kerbs: a kerb (not a rigid barrier: freeway system, bridges) met at a low closing speed is mounted
         // and scraped: no rebound, kerb friction, the car may ride up to KERB_MOUNT_DEPTH past the kerb line, a minor
         // contact that never disables; faster strikes hit it like the wall it was before
-        let into = a.vx * nx + a.vz * nz;
+        // closing speed at the contact point (body velocity + yaw rate x lever arm), as resolve_contact sees it
+        let into = (a.vx - a.w * (c.pz - a.z)) * nx + (a.vz + a.w * (c.px - a.x)) * nz;
         let vs_edge_i = self.vs.edge[i] as usize;
         let scrape = self.opts.mountable_kerbs && !g.rigid_edge(vs_edge_i) && into < KERB_MOUNT_SPEED;
         let res = if scrape { physics::resolve_contact(&mut a, &mut wb, &c, 0.0, KERB_FRICTION) } else { physics::resolve_contact(&mut a, &mut wb, &c, physics::WALL_RESTITUTION, physics::WALL_FRICTION) };
@@ -227,9 +228,12 @@ impl Sim {
                 self.barrier_ep_now.insert(i, prev);
                 if res.jn > 0.0 && !was { self.crash_event_ep(&[i], &[jm::min(res.dva, KERB_SCRAPE_MAX_DV)], &c, res.closing, "barrier", Some(pre), false); }
             } else {
-                let tot = prev + if impact { res.dva } else { 0.0 };
+                // on a kerb (not rigid), only real strikes (own delta-v >= KERB_MOUNT_SPEED) add to the episode: a grind of
+                // small pushes never sums to a crash
+                let counts = impact && (!self.opts.mountable_kerbs || g.rigid_edge(vs_edge_i) || res.dva >= KERB_MOUNT_SPEED);
+                let tot = prev + if counts { res.dva } else { 0.0 };
                 self.barrier_ep_now.insert(i, tot);
-                if res.jn > 0.0 && impact { self.crash_event_ep(&[i], &[tot], &c, res.closing, "barrier", Some(pre), was); }
+                if res.jn > 0.0 && (counts || !was) { self.crash_event_ep(&[i], &[tot], &c, res.closing, "barrier", Some(pre), was); }
             }
         } else if !was && res.jn > 0.0 { self.crash_event(&[i], &[if scrape { jm::min(res.dva, KERB_SCRAPE_MAX_DV) } else { res.dva }], &c, res.closing, "barrier", Some(pre)); }
         Some(())
@@ -340,7 +344,8 @@ impl Sim {
         // mountable_kerbs: a kerb (not a rigid barrier: freeway system, bridges) met at a low closing speed is mounted
         // and scraped: no rebound, kerb friction, the car may ride up to KERB_MOUNT_DEPTH past the kerb line, a minor
         // contact that never disables; faster strikes hit it like the wall it was before
-        let into = a.vx * nx + a.vz * nz;
+        // closing speed at the contact point (body velocity + yaw rate x lever arm), as resolve_contact sees it
+        let into = (a.vx - a.w * (c.pz - a.z)) * nx + (a.vz + a.w * (c.px - a.x)) * nz;
         let vs_edge_i = self.vs.edge[i] as usize;
         let scrape = self.opts.mountable_kerbs && !g.rigid_edge(vs_edge_i) && into < KERB_MOUNT_SPEED;
         let res = if scrape { physics::resolve_contact(&mut a, &mut wb, &c, 0.0, KERB_FRICTION) } else { physics::resolve_contact(&mut a, &mut wb, &c, physics::WALL_RESTITUTION, physics::WALL_FRICTION) };
@@ -361,9 +366,12 @@ impl Sim {
                 self.barrier_ep_now.insert(i, prev);
                 if res.jn > 0.0 && !was { self.crash_event_ep(&[i], &[jm::min(res.dva, KERB_SCRAPE_MAX_DV)], &c, res.closing, "barrier", Some(pre), false); }
             } else {
-                let tot = prev + if impact { res.dva } else { 0.0 };
+                // on a kerb (not rigid), only real strikes (own delta-v >= KERB_MOUNT_SPEED) add to the episode: a grind of
+                // small pushes never sums to a crash
+                let counts = impact && (!self.opts.mountable_kerbs || g.rigid_edge(vs_edge_i) || res.dva >= KERB_MOUNT_SPEED);
+                let tot = prev + if counts { res.dva } else { 0.0 };
                 self.barrier_ep_now.insert(i, tot);
-                if res.jn > 0.0 && impact { self.crash_event_ep(&[i], &[tot], &c, res.closing, "barrier", Some(pre), was); }
+                if res.jn > 0.0 && (counts || !was) { self.crash_event_ep(&[i], &[tot], &c, res.closing, "barrier", Some(pre), was); }
             }
         } else if !was && res.jn > 0.0 { self.crash_event(&[i], &[if scrape { jm::min(res.dva, KERB_SCRAPE_MAX_DV) } else { res.dva }], &c, res.closing, "barrier", Some(pre)); }
         true
