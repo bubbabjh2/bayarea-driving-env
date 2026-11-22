@@ -54,3 +54,21 @@
   if (MF_STEER_DELAY >= 0 && MF_STEER_DELAY < i32(pi.delaySteps)) { ons = (i * CTRL_RING + select(S - u32(max(MF_STEER_DELAY, 0)), S - 1u, MF_STEER_DELAY == 0) % CTRL_RING) * CTRL_STRIDE; }
   inputs[b + 87u] = ring[ons]; inputs[b + 88u] = ring[on + 1u]; inputs[b + 89u] = ring[on + 2u];
 //#end
+// MF_GUIDE_BOX (GpuOptions::guide_in_box): inside a junction box the car's s (in-edge frame) runs past the in-edge's
+// length, and the JS guidance kept reporting the junction being crossed, with a negative distance (input 20 < 0) and its
+// type / side (21..32). bayenv-sim's guidance (guidance.js at(routeDistance)) counts a maneuver as passed once the car
+// is more than 1 m past it and reports the next one, at a distance >= 0. The patch skips the current entry's maneuver
+// when the car is more than 1 m past the in-edge's end and clamps the distance at 0.
+//#orig guide-passed
+    if ((code & 1u) != 0u) { typ = (code >> 1u) & 15u; sd = (code >> 5u) & 3u; found = true; break; }
+//#end
+//#patch guide-passed
+    if ((code & 1u) != 0u && !(MF_GUIDE_BOX && d < -1.0)) { typ = (code >> 1u) & 15u; sd = (code >> 5u) & 3u; found = true; break; }
+//#end
+//#orig guide-distance
+  inputs[b + OFF_MAN] = min(d / 2000.0, 1.0);
+//#end
+//#patch guide-distance
+  inputs[b + OFF_MAN] = min(select(d, max(d, 0.0), MF_GUIDE_BOX) / 2000.0, 1.0);
+//#end
+

@@ -905,3 +905,25 @@ Each entry: date, decision, why, alternatives, numbers, and one line to say it o
   - `senseV3` (and the steer_delay patch of input 87) index the ring with `S - dl` in u32: while the step counter is below
     the car's delay (the first ≤ 39 steps of a GPU sim) it wraps and 87..89 read the wrong ring entry (the newest
     command instead of 0).
+
+## 43. GPU guidance inside junction boxes (`guide_in_box`, default on)
+
+- **Date:** 2026-11-22
+- **Found by:** the private agent's static_hold trace (88 GPU trips stranded only with the hold on, 1 of them on the
+  CPU). The cars stalled inside junction boxes with a light gas + brake mix. Placing trips 610, 1184, 318, 1438 and
+  1570 at their stall points on both backends (`examples/obs_diff.rs`: same population, the car moved onto its own route
+  and crawled into the box) and diffing the 70 v2 inputs: everything matched except the guidance (inputs 20..32) for
+  the cars past the in-edge's end.
+- **Cause:** inside a box the car's s (in-edge frame) runs past the in-edge's length. The JS GPU guidance
+  (`sense.wgsl`) starts at the current route entry, so it kept reporting the junction being crossed: input 20 negative
+  (−0.016 / −0.019, i.e. −32 / −37 m) and that junction's type and side (turn-left / turn-right, lane hint). The CPU
+  guidance (`guidance.js at(routeDistance)`) counts a maneuver as passed 1 m after it and reports the next one at a
+  distance ≥ 0 (230 m / 459 m away). The policy saw "your turn is behind you" with the wrong side while standing in the
+  box.
+- **Decision:** `GpuOptions::guide_in_box` (default on; `js_model()` off, JS-exact): `kernels/model_sense.wgsl` skips
+  the current entry's maneuver once the car is more than 1 m past the in-edge's end and clamps the distance at 0.
+  After the fix all 70 inputs agree within 1e-3 at the five stall points; `tests/obs_box.rs` checks cars stopped in
+  boxes on both backends.
+- **Residual:** the CPU measures guidance distances from the route odometer (`route_dist`) and the GPU from the route
+  position and s. They agree except after a connector entry that moves s (trip 1570: 5.7 m, input 20 off by 0.003).
+
