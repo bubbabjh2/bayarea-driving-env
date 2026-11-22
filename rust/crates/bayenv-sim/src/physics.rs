@@ -40,7 +40,7 @@ pub const PHYS_DT: f64 = 0.01;
 pub const HEAVY_BRAKE_DECEL: f64 = 4.7;
 /// Model fixes inside step_dynamics (all false = the JS)
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
-pub struct Fixes { pub hold: bool, pub heavy_brakes: bool, pub reverse: bool, pub static_hold: bool, pub idle_creep: bool }
+pub struct Fixes { pub hold: bool, pub heavy_brakes: bool, pub reverse: bool, pub static_hold: bool, pub idle_creep: bool, pub rollback: bool }
 /// idle creep (SimOpts::idle_creep): an automatic's idle drive force, IDLE_CREEP_ROLL x the rolling resistance at rest,
 /// fading linearly to 0 at IDLE_CREEP_U; on the flat a car with no pedals settles at
 /// IDLE_CREEP_U x (1 - 1 / IDLE_CREEP_ROLL) = 1.5 m/s
@@ -114,7 +114,7 @@ pub fn step_dynamics4(c: [(&mut DynState, f64, f64, f64, &VehicleParams, f64, bo
 #[derive(Clone, Copy)]
 struct Dyn<'a> {
     h: f64, m: f64, iz: f64, a: f64, b: f64, l: f64, hcg: f64, cf: f64, cr: f64, mu: f64, k_slide: f64, crr_mul: f64,
-    sr: f64, g_: f64, b_: f64, cos_g: f64, sin_g: f64, wg: f64, tgt: f64, k_lag: f64, slew: f64, locked: bool, position: bool, hold: bool, rev: bool, shold: bool, creep: bool, bd: f64,
+    sr: f64, g_: f64, b_: f64, cos_g: f64, sin_g: f64, wg: f64, tgt: f64, k_lag: f64, slew: f64, locked: bool, position: bool, hold: bool, rev: bool, shold: bool, creep: bool, rollb: bool, bd: f64,
     p: &'a VehicleParams, grade: f64,
     u: f64, v: f64, r: f64, steer: f64, ax: f64, hr: f64, lat: f64, s: f64, sl: f64, fuel: f64, power: f64,
     m_steer: f64, m_cd: f64, m_sd: f64, m_hr: f64, m_ch: f64, m_sh: f64,
@@ -125,7 +125,7 @@ impl<'a> Dyn<'a> {
     #[inline(always)]
     fn new(st: &DynState, steer_rate: f64, gas: f64, brake: f64, p: &'a VehicleParams, dt: f64, grade: f64, locked: bool, position: bool, surf: Option<Surf>, fx: Fixes) -> (Dyn<'a>, i64) {
     let (hold, rev) = (fx.hold, fx.reverse);
-    let (shold, creep) = (fx.static_hold, fx.idle_creep);
+    let (shold, creep, rollb) = (fx.static_hold, fx.idle_creep, fx.rollback);
     // heavy-vehicle brake calibration (SimOpts::heavy_brakes): trucks / buses 100-0 km/h in about 80 m (FMVSS 121)
     let bd = if fx.heavy_brakes && p.m > 5000.0 { HEAVY_BRAKE_DECEL } else { p.brake_decel };
     let n = jm::max(1.0, jm::ceil(dt / PHYS_DT - 1e-9));
@@ -149,13 +149,13 @@ impl<'a> Dyn<'a> {
     // memo of cos/sin(steer): the same input gives the same bits, so reuse while the wheel angle is unchanged
     let (mut m_steer, mut m_cd, mut m_sd) = (f64::NAN, 0.0, 0.0);
     let (mut m_hr, mut m_ch, mut m_sh) = (f64::NAN, 0.0, 0.0);
-        (Dyn { h, m, iz, a, b, l, hcg, cf, cr, mu, k_slide, crr_mul, sr, g_, b_, cos_g, sin_g, wg, tgt, k_lag, slew, locked, position, hold, rev, shold, creep, bd, p, grade, u, v, r, steer, ax, hr, lat, s, sl, fuel, power, m_steer, m_cd, m_sd, m_hr, m_ch, m_sh }, n)
+        (Dyn { h, m, iz, a, b, l, hcg, cf, cr, mu, k_slide, crr_mul, sr, g_, b_, cos_g, sin_g, wg, tgt, k_lag, slew, locked, position, hold, rev, shold, creep, rollb, bd, p, grade, u, v, r, steer, ax, hr, lat, s, sl, fuel, power, m_steer, m_cd, m_sd, m_hr, m_ch, m_sh }, n)
     }
 
     #[inline(always)]
     #[allow(unused_assignments)]
     fn substep(&mut self) {
-        let Dyn { h, m, iz, a, b, l, hcg, cf, cr, mu, k_slide, crr_mul, sr, g_, b_, cos_g, sin_g, wg, tgt, k_lag, slew, locked, position, hold, rev, shold, creep, bd, p, grade, .. } = *self;
+        let Dyn { h, m, iz, a, b, l, hcg, cf, cr, mu, k_slide, crr_mul, sr, g_, b_, cos_g, sin_g, wg, tgt, k_lag, slew, locked, position, hold, rev, shold, creep, rollb, bd, p, grade, .. } = *self;
         let Dyn { mut u, mut v, mut r, mut steer, mut ax, mut hr, mut lat, mut s, mut sl, mut fuel, mut power, mut m_steer, mut m_cd, mut m_sd, mut m_hr, mut m_ch, mut m_sh, .. } = *self;
         if !locked {
             if position { sl += (tgt - sl) * k_lag; let d = sl - steer; steer += if d > slew { slew } else if d < -slew { -slew } else { d }; }
@@ -180,8 +180,15 @@ impl<'a> Dyn<'a> {
         if !locked { let ideal = fzf / (fzf + fzr) + EBD_MARGIN; if ideal > share_f { share_f = if ideal > 0.95 { 0.95 } else { ideal }; } }
         let bf = fb * share_f;
         let br = fb - bf;
-        if moving { fxf -= bf; fxr -= br; }
-        else { let hold = jm::min(fb, jm::max(0.0, fd - wg)); let hf = jm::min(bf, hold * share_f); fxf -= hf; fxr -= jm::min(br, hold - hf); }
+        // hill_rollback: a driving car rolling backwards is braked forwards; at rest the brake also holds it against the
+        // grade (the JS: brakes only ever act against forward motion)
+        let back = rollb && !locked && u < -0.02;
+        if back { fxf += bf; fxr += br; }
+        else if moving { fxf -= bf; fxr -= br; }
+        else {
+            let hold = jm::min(fb, jm::max(0.0, fd - wg)); let hf = jm::min(bf, hold * share_f); fxf -= hf; fxr -= jm::min(br, hold - hf);
+            if rollb && !locked { let hb = jm::min(fb, jm::max(0.0, wg - fd)); let hf = jm::min(bf, hb * share_f); fxf += hf; fxr += jm::min(br, hb - hf); }
+        }
         let ff = mu * fzf;
         let fr = mu * fzr;
         let xf = if locked { 1.0 } else { 0.98 };
@@ -227,6 +234,8 @@ impl<'a> Dyn<'a> {
             }
         }
         let res = resistance(p, u, grade, crr_mul);
+        // hill_rollback: rolling resistance opposes backward rolling too (resistance() has it for u > 0.05 only)
+        let res = if back && u < -0.05 { res - p.crr * crr_mul * m * G } else { res };
         if steer.to_bits() != m_steer.to_bits() { m_steer = steer; m_cd = jm::cos(steer); m_sd = jm::sin(steer); }
         let (cd, sd) = (m_cd, m_sd);
         let fx_body = fxf * cd - fyf * sd + fxr - res;
@@ -239,7 +248,13 @@ impl<'a> Dyn<'a> {
         let du = if exact { 0.0 } else { (fx_body / m + v * r) * h };
         let mut un = if exact { ur + fx_body / m * h } else { u + du };
         // impact_reverse: a wreck (locked wheels) may slide backwards after an impact; else no reverse (the JS)
-        if un < 0.0 && !(rev && locked) { un = 0.0; }
+        if rollb && !locked {
+            // hill_rollback: a driving car rolls back only when gravity beats drive + brake + rolling resistance at
+            // rest; a backward-rolling car that the forces bring to a stop stops (no reverse drive)
+            let roll0 = p.crr * crr_mul * m * G * cos_g;
+            if u >= -0.02 && un < 0.0 && wg <= fd + fb + roll0 { un = 0.0; }
+            if u < -0.02 && un > 0.0 { un = 0.0; }
+        } else if un < 0.0 && !(rev && locked) { un = 0.0; }
         // brake hold (SimOpts::brake_hold): JS brakes only cancel the drive below 0.02 m/s, so a residual speed creeps
         if hold && !locked && u <= 0.05 {
             // the brake plus rolling resistance (which the JS switches off below 0.05 m/s) hold the car at 0 whenever
@@ -249,7 +264,7 @@ impl<'a> Dyn<'a> {
         }
         // static hold (SimOpts::static_hold): below 0.05 m/s the brake holds the car at 0 when the brake force alone
         // beats drive minus grade; with no drive and no brake, rolling resistance holds it against a grade it exceeds
-        if shold && !locked && u <= 0.05 && un <= 0.05 {
+        if shold && !locked && u <= 0.05 && u >= -0.05 && un <= 0.05 && un >= -0.05 {
             let roll = p.crr * crr_mul * m * G * cos_g;
             if (b_ > 0.0 && fb >= jm::abs(fd - wg)) || (fd == 0.0 && b_ == 0.0 && jm::abs(wg) <= roll) { un = 0.0; }
         }
