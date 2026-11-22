@@ -950,3 +950,41 @@ Each entry: date, decision, why, alternatives, numbers, and one line to say it o
   steps 5 / 45 no index is over 1e-3 except one row of 86 at 10,000 commuters; at steps 200 / 600 only 8..11
   (neighbours), 44 / 45 and 94..100 (leader history) of up to 0.5 % of rows, cars near others out of step.
 
+
+## 45. GPU junction perception at density: conflict obstacle in obs, "waits for me", box standstill (`junction_obstacle`, `waits_prev_step`, `box_standstill`, default on)
+
+- **Date:** 2026-11-22
+- **Found by:** the 10,000-commuter density hunt (v2 net: GPU 83.7 % arrived vs CPU 72.6 %; a closed-loop obs-v2
+  driver showed CPU-only queues behind cars stopped in junction boxes), then `examples/snap_obs.rs`: the CPU's
+  vehicle store transplanted into the GPU (`import_snapshot`), one step on both with the same actions, every
+  driving row's 70 inputs diffed. At 20 min, 10,000 commuters, input 8 (own-ahead gap) differed in 32 rows; in the
+  biggest cases the CPU saw a gap of 0..2.5 m and the GPU 1.0 (= none), all at busy junction boxes; once that was
+  fixed, the rest were cars stopped in boxes where the GPU saw a nearer body than the CPU.
+- **junction_obstacle (obs v2 only, like guide_in_box):** bayenv-sim's encoder (obs_v2.rs, adjust.js `junctionObs`)
+  puts the junction conflict into the own-ahead slot as a stopped obstacle: gap max(0, conflict distance − 2), rel
+  −v/20, when the conflicting body is stopped or reaches the conflict point within the car's own time to it + 2 s
+  ((distance + length) / max(v, 1)). The JS GPU wrote only inputs 65..69 (junctionInputs) and never put it, so a
+  GPU-driven car at a busy box saw a free lane where the CPU saw something to stop for.
+  `kernels/model_jyield.wgsl` stores the gap and its step per slot in a new `jobst` buffer (every ctl word is
+  taken); `kernels/model_sense.wgsl` puts it into input 8 / 9 (min with the neighbour) when it is from this step.
+- **waits_prev_step (with deterministic_leaders):** the junction perception skips a stopped body that waits for me
+  (its leader me, or −3 with me as conflict partner). The CPU runs it in slot order, so for a later slot it reads
+  that car's leader as the previous step left it (junction conflicts and path bodies included); the deterministic
+  GPU snapshot (ctl 12 / 13) held the leaders-pass value, before junction perception, so a car stopped in a box for
+  a conflicting car never "waited" on the GPU and both held. `kernels/model_leaders.wgsl` snapshots the values of
+  the start of the pass instead (= the CPU for later slots; for earlier slots the CPU reads this step's final value,
+  the same in a standstill).
+- **box_standstill:** bayenv-sim's junction_p skips, besides the JS kernel's filters, a driving body behind me on
+  my edge and the mutual standstill pair (both on connectors, both stopped > 20 s, the lower slot goes) on the swept
+  path and among the conflicting movements (pathBodies already had it). `kernels/model_junction.wgsl`.
+- **Tests:** `tests/junction_obstacle.rs`: CPU closed loop, 3,000 commuters, transplants every 2 min from 10 to 30
+  min. All on: of 37 rows where the CPU's own-ahead gap is the junction obstacle, the GPU misses none (junction
+  obstacle off: 27), no row has a GPU gap below the CPU's (box_standstill off: 5 box rows), no box car follows a
+  stopped car that waits for it. waits_prev_step does not occur at 3,000 commuters; at 10,000 / 30 min snap_obs
+  shows the pair (slot 440 following 608, which waits for 440). snap_obs at 10,000 / 45 min: input 8 differed in
+  17 rows (8 of the 41 cars stopped in boxes), now 10 (1).
+- **Numbers (closed-loop obs-v2 driver, `density.py`-style, 10,000 commuters, seed 777, 07:00, dt 0.05, 2 h):**
+  arrived / still driving / stuck: CPU 2999 / 2589 / 1776; GPU before 3105 / 2500 / 1684; junction_obstacle +
+  waits_prev_step 2972 / 2670 / 1860; all three 3000 / 2664 / 1830 (30 min: CPU 1014, before 1032, after 1005).
+  Spawned identical (8099). Crash events / minor contacts stay ~25 % lower on the GPU (14504 / 12814 vs 10183 /
+  8559), a separate contact-counting difference not addressed here.
