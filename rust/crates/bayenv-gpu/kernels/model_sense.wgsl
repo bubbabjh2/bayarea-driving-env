@@ -99,3 +99,18 @@
   if (leftEx) { let e = laneEndAhead(i, v, pi, lane + 1); if (e < 1e8) { putEnd(b + OFF_NB + 4u, max(0.0, e - half), rel); } }
 //#end
 
+// MF_LIST_BEHIND (GpuOptions::sense_list_behind): with obs_after_step the row is sensed after integrate, but the
+// footprint lane lists (vidx: the car's position in each lane laneLo..laneHi of the list build) are from before it.
+// behindIn indexes vidx with the car's new laneLo, so after a footprint change (a lane change) it read another lane's
+// slot: own-behind gap 0 (input 10) for a step where bayenv-sim (its lane index snapshot) has none. The patch looks
+// the car up in the list of the lane itself (the vidx entry that points at it there), as the CPU's snapshot does.
+//#orig list-behind
+  let B = behindIn(i, vLane(v));
+//#end
+//#patch list-behind
+  var B = behindIn(i, vLane(v));
+  if (MF_LIST_BEHIND) {
+    B = -1; let k = lkey(v.edge, vLane(v)); let a = starts[k]; let z = starts[k + 1u];
+    for (var q = 0u; q < 4u; q = q + 1u) { let p = vidx[i][q]; if (p >= a && p < z && order[p] == i) { if (p > a) { B = i32(order[p - 1u]); } break; } }
+  }
+//#end

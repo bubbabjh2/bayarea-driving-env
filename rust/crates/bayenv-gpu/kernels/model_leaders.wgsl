@@ -29,3 +29,15 @@
   veh[i].gap = gap;
   if (MF_WAITS_PREV) { ctl[i * CTL_W + 12u] = bitcast<u32>(v.leader); ctl[i * CTL_W + 13u] = prevPartner; }
 //#end
+// MF_LANE_END_INTO (GpuOptions::lane_end_into): sim.js _laneEnd (and bayenv-sim lane_end_pure) put the lane-end
+// obstacle of a merging car whose footprint already reaches into the lane it merges toward 30 m past the node
+// (`into && laneGeom ? dEnd + 30 : atNode`); the JS GPU kernel had only atNode, so such a car braked to a stop at the
+// node of its ending lane (30 m short of where the CPU's car merged on).
+//#orig lane-end-into
+    let gg = select(dEnd - MERGE_ROOM, atNode, merging) - hl - 1.0;
+//#end
+//#patch lane-end-into
+    let intoL = select(vLo(v) < vLane(v), vHi(v) > vLane(v), side > 0);
+    let atM = select(atNode, dEnd + 30.0, MF_LANE_END_INTO && intoL && P.hasLG != 0u);
+    let gg = select(dEnd - MERGE_ROOM, atM, merging) - hl - 1.0;
+//#end
