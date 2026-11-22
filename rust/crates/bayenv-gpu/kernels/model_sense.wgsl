@@ -82,4 +82,20 @@
   var sn = S - 1u; if (dl >= 1u) { sn = S - dl; }
   if (MF_RING_FIX) { sn = S + CTRL_RING - 1u; if (dl >= 1u) { sn = S + CTRL_RING - dl; } }
 //#end
+// MF_JUNC_OBST (GpuOptions::junction_obstacle): the junction-conflict obstacle (kernels/model_jyield.wgsl) into the
+// own-ahead slot (input 8 / 9), as bayenv-sim's encoder puts it, when computed in this step.
+//#orig junction-obstacle-bind
+@group(1) @binding(3) var<storage, read> ring: array<f32>;
+//#end
+//#patch junction-obstacle-bind
+@group(1) @binding(3) var<storage, read> ring: array<f32>;
+@group(1) @binding(5) var<storage, read> jobst: array<u32>;   // junction_obstacle: gap / step per slot (kernels/model_jyield.wgsl)
+//#end
+//#orig junction-obstacle-put
+  if (leftEx) { let e = laneEndAhead(i, v, pi, lane + 1); if (e < 1e8) { putEnd(b + OFF_NB + 4u, max(0.0, e - half), rel); } }
+//#end
+//#patch junction-obstacle-put
+  if (MF_JUNC_OBST && jobst[2u * i + 1u] == step) { let jg = bitcast<f32>(jobst[2u * i]); if (jg < 1e8) { putEnd(b + OFF_NB, jg, rel); } }
+  if (leftEx) { let e = laneEndAhead(i, v, pi, lane + 1); if (e < 1e8) { putEnd(b + OFF_NB + 4u, max(0.0, e - half), rel); } }
+//#end
 
